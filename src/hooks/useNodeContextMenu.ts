@@ -17,7 +17,7 @@ import { copyImage as copyImageToClipboard, copyFile as copyFileToClipboard } fr
 import { hasVideoSource, isEditableMediaNode, openVideoEditorForNodes } from '../services/videoEditorService';
 import type { BaseNodeData, NodeType } from '../types';
 import type { Node as RFNode } from '@xyflow/react';
-import { isEligibleCharacterReferenceNode } from '../store/store.dramaAssets';
+import { isEligibleCharacterReferenceNode, isEligibleCharacterVoiceNode } from '../store/store.dramaAssets';
 import { useT } from '../i18n';
 import { executeNodePluginTool, getAvailableNodePluginTools } from '../services/plugins/pluginRuntime';
 import type { AvailableNodePluginTool } from '../types/plugin';
@@ -198,6 +198,7 @@ export function useNodeContextMenu() {
     || /(?:^|[./\\])[^?#]*\.gif(?:[?#]|$)/i.test(actionMediaIdentity)
     || nodeData?.imageUrl?.startsWith('data:image/gif') === true;
   const showAddToCharacter = isEligibleCharacterReferenceNode(currentNode)
+    || isEligibleCharacterVoiceNode(currentNode)
     || hasCharacterActionMedia;
   const isImageNote = nodeType === 'canvas-note' && nodeData?.note?.kind === 'image';
   const isImageNode = nodeType === 'ai-image' || nodeType === 'source-image';

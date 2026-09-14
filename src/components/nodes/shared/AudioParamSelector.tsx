@@ -134,18 +134,31 @@ function AudioParamSelector({
                   <button type="button" className="ui-btn ui-btn--sm" onClick={addReference}>{t('+ 添加参考')}</button>
                 </div>
                 {hasReference ? (
-                  <div className="flex max-h-32 flex-col gap-2 overflow-y-auto">
+                  <div className="flex max-h-40 flex-col gap-2 overflow-y-auto">
                     {references.map((reference) => (
-                      <div key={reference.key} className="ui-card flex items-center gap-2 p-2">
-                        <Icon icon="mdi:account-voice" width={16} />
-                        <span className="min-w-0 flex-1 truncate" title={reference.label}>{reference.label}{!reference.url ? t('（已失效）') : ''}</span>
-                        <button type="button" className="ui-btn ui-btn--sm" aria-label={t('替换参考 {label}', { label: reference.label })}
-                          onClick={() => { onRemoveReference?.(reference); addReference(); }}>{t('替换')}</button>
-                        <button type="button" className="ui-btn ui-btn--sm" aria-label={t('移除参考 {label}', { label: reference.label })}
-                          onClick={() => onRemoveReference?.(reference)}>{t('移除')}</button>
+                      <div key={reference.key} className="ui-card shrink-0 p-2.5">
+                        <div className="flex min-w-0 items-center gap-2.5 text-left">
+                          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-canvas-hover text-canvas-text-secondary">
+                            <Icon icon="lucide:audio-lines" width={18} aria-hidden="true" />
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <div className="truncate font-medium leading-5" title={reference.label}>{reference.label}</div>
+                            <div className="text-[10px] leading-4 text-canvas-text-muted">
+                              {t(reference.url ? '使用此声音的音色' : '音频已失效，请替换')}
+                            </div>
+                          </div>
+                          <div className="flex shrink-0 items-center gap-1">
+                            <button type="button" className="ui-btn ui-btn--sm" aria-label={t('替换参考 {label}', { label: reference.label })}
+                              onClick={() => { onRemoveReference?.(reference); addReference(); }}>{t('替换')}</button>
+                            <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" title={t('移除参考')}
+                              aria-label={t('移除参考 {label}', { label: reference.label })}
+                              onClick={() => onRemoveReference?.(reference)}>
+                              <Icon icon="lucide:x" width={13} aria-hidden="true" />
+                            </button>
+                          </div>
+                        </div>
                       </div>
                     ))}
-                    <span className="text-canvas-text-secondary">{t('使用参考语音的音色')}</span>
                   </div>
                 ) : (
                   <div>

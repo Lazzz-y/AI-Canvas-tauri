@@ -300,8 +300,13 @@ function AINodeDialog() {
       // Extract workflow IO node assignments from the prompt string
       // Format: @wf{ioNodeId|title|type}(value content)
       // ioNodeId can contain ":" (e.g. "57:27"), fields are pipe-separated to avoid ambiguity
-      const workflowInputs: Record<string, string> = {};
+      const workflowInputs: Record<string, string> = { ...current?.workflowInputs };
       const wfRegex = /@wf\{([^|]+)\|([^|]+)\|([^|}]+)\}\(([\s\S]*?)\)/g;
+      // 芯片赋值随正文重建；下拉等面板直接写入的输入保留。
+      for (const previous of (current?.prompt ?? '').matchAll(wfRegex)) {
+        delete workflowInputs[previous[1]];
+      }
+      wfRegex.lastIndex = 0;
       let match: RegExpExecArray | null;
       while ((match = wfRegex.exec(value)) !== null) {
         const ioNodeId = match[1]; // Full ID (may contain ":")

@@ -433,7 +433,6 @@ function AIAudioNode({ id, data, selected }: { id: string; data: BaseNodeData; s
         kind="ai-audio"
         label={displayLabel}
         displayId={data.displayId as number | undefined}
-        isBeta={!isSource}
         nodeId={id}
         onRename={handleRename}
       />

@@ -27,7 +27,10 @@ import { getRunningHubModel } from '../../../services/ai/providers/runninghubMod
 import QualityRatioSelector from './QualityRatioSelector';
 import VideoParamSelector from './VideoParamSelector';
 import AudioParamSelector from './AudioParamSelector';
+import CharacterVoiceSelector, { type CharacterVoiceChoice } from './CharacterVoiceSelector';
 import { collectAudioSpeechReferences, resolveAudioSpeechWorkflow } from '../../../services/ai/audioSpeechSettings';
+import { resolveDramaVoiceRef } from '../../../services/dramaAssetPrompt';
+import { buildDramaVoiceMentionId } from '../../../types/dramaAssets';
 import StyleSelector from './StyleSelector';
 import MentionEditor, { type MentionEditorHandle } from './MentionEditor';
 import SlashCommandMenu from './SlashCommandMenu';
@@ -663,6 +666,40 @@ export default function PromptPanel({
 
   const selectedAudioWorkflow = nodeType === 'ai-audio' ? workflows.find((item) => item.id === selectedWorkflowId) : undefined;
   const speechControls = resolveAudioSpeechWorkflow(selectedAudioWorkflow);
+  const referenceInputId = speechControls?.referenceInputId;
+  const loadGlobalCharacters = useAppStore((state) => state.loadGlobalCharacters);
+  useEffect(() => {
+    if (referenceInputId) void loadGlobalCharacters();
+  }, [referenceInputId, loadGlobalCharacters]);
+  const voiceChoiceSnapshot = useAppStore((state) => JSON.stringify(referenceInputId ? [
+    ...state.dramaAssets.characters.map((character) => ({ character, scope: 'project' as const })),
+    ...state.globalCharacters.map((character) => ({ character, scope: 'global' as const })),
+  ].flatMap(({ character, scope }) => {
+    if (!character.primaryVoiceClipId) return [];
+    const voice = resolveDramaVoiceRef(character, character.primaryVoiceClipId);
+    if (!voice) return [];
+    return [{
+      id: `${scope}:${character.id}:${voice.id}`, scope, label: voice.label, url: voice.url,
+      // 项目角色沿用声音片段引用；全局声音读取持久化音频快照，不依赖项目节点。
+      value: scope === 'project'
+        ? `@drama{${buildDramaVoiceMentionId(character.id, voice.id)}:${voice.label.replace(/[{}]/g, '')}}`
+        : voice.url,
+    }];
+  }) : []));
+  const voiceChoices = JSON.parse(voiceChoiceSnapshot) as CharacterVoiceChoice[];
+  const selectedReference = referenceInputId ? workflowInputs?.[referenceInputId] ?? '' : '';
+  const selectCharacterVoice = (value: string) => {
+    if (!referenceInputId || !onWorkflowInputsChange) return;
+    const inputs = { ...workflowInputs };
+    if (value) inputs[referenceInputId] = value;
+    else delete inputs[referenceInputId];
+    // 同一输入已有手动 IO 芯片时移除旧赋值，防止编辑正文后重新覆盖下拉选择。
+    const nextPrompt = prompt.replace(/@wf\{([^|]+)\|([^|]+)\|([^|}]+)\}\(([\s\S]*?)\)/g,
+      (token, id: string) => id === referenceInputId ? '' : token);
+    if (nextPrompt !== prompt) onChange(nextPrompt);
+    onWorkflowInputsChange(inputs);
+    onContinuousEditEnd?.();
+  };
   // 返回稳定标量，避免其他节点移动时让弹窗重渲染。
   const audioReferenceSnapshot = useAppStore((state) => speechControls ? JSON.stringify(collectAudioSpeechReferences(
     prompt, nodeId, state.nodes, state.edges, state.dramaAssets, selectedAudioWorkflow, workflowInputs,
@@ -735,6 +772,17 @@ export default function PromptPanel({
           onWorkflowSelect={onWorkflowSelect}
           workflows={workflows}
         />
+
+        {referenceInputId && onWorkflowInputsChange ? (
+          <CharacterVoiceSelector
+            key={`${nodeId}:${selectedWorkflowId}:${isGenerating}`}
+            choices={voiceChoices}
+            value={selectedReference}
+            disabled={isGenerating}
+            onChange={selectCharacterVoice}
+            onPlaybackError={() => showToast(t('声音试听失败，请检查音频文件是否可用'), 'error')}
+          />
+        ) : null}
 
         {nodeType === 'ai-animation' && onAnimationActionChange && (
           <>
