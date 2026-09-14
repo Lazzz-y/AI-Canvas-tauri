@@ -62,6 +62,8 @@ interface ModelSelectorProps {
   onSelect: (model: ModelOption) => void;
   onWorkflowSelect?: (workflowId: string | undefined) => void;
   groups?: ModelGroup[];
+  /** 已由可信宿主按配置筛选的模型分组；用于没有完整配置的独立窗口。 */
+  configuredGroupsOverride?: ModelGroup[];
   workflows?: WorkflowDefinition[];
   generalModelsOverride?: GeneralModelConfig[];
   groupAvailability?: Record<string, boolean>;
@@ -76,6 +78,7 @@ export default function ModelSelector({
   onSelect,
   onWorkflowSelect,
   groups = defaultModelGroups,
+  configuredGroupsOverride,
   workflows = [],
   generalModelsOverride,
   groupAvailability,
@@ -93,10 +96,10 @@ export default function ModelSelector({
   const generalModels = generalModelsOverride ?? configuredGeneralModels;
 
   const configuredGroups = useMemo(
-    () => getConfiguredModelGroups(config, modelNodeType, groups, {
+    () => configuredGroupsOverride ?? getConfiguredModelGroups(config, modelNodeType, groups, {
       filterSelectedModels: groups === defaultModelGroups,
     }),
-    [config, groups, modelNodeType],
+    [config, configuredGroupsOverride, groups, modelNodeType],
   );
 
   /** 通用执行协议保持不变，只把有独立品牌展示的内置连接拆成厂商分组。 */
@@ -128,6 +131,8 @@ export default function ModelSelector({
   /** 判断某个 group 是否可用（该 group 的 provider 已配置 API Key） */
   const isGroupAvailable = useCallback(
     (groupId: string) => {
+      // 独立窗口只接收主窗口已经筛选过的分组，不持有厂商凭据。
+      if (configuredGroupsOverride?.some((group) => group.id === groupId)) return true;
       // 通用模型分组：每个模型自带 API Key，始终可用
       if (groupId === 'general-models' || groupId.startsWith('general-provider-')) return true;
       if (groupAvailability && groupId in groupAvailability) {
@@ -143,7 +148,7 @@ export default function ModelSelector({
       const provider = configProviders[providerKey];
       return !!provider?.apiKey;
     },
-    [configProviders, dreaminaLoggedIn, groupAvailability],
+    [configProviders, configuredGroupsOverride, dreaminaLoggedIn, groupAvailability],
   );
   const ref = useRef<HTMLDivElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);

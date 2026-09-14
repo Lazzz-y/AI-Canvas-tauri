@@ -27,6 +27,7 @@ const EMPTY_SNAPSHOT: ChatStateSnapshot = {
   agentTasks: [],
   projectId: null,
   generalModels: [],
+  assistantModelGroups: [],
   nodes: [],
   dramaAssets: emptyDramaAssetLibrary(),
   skillOptions: [],

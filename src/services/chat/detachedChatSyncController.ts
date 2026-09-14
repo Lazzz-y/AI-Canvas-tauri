@@ -11,6 +11,7 @@ import type {
 import type { AgentTask } from '../../types/agent';
 import type { ChatConversation, ChatMessage } from '../../types/chat';
 import {
+  getConfiguredModelGroups,
   getMediaModelOptions,
   type MediaModelOption,
 } from '../../components/nodes/shared/defaultModels';
@@ -246,6 +247,7 @@ export function buildDetachedChatSnapshot(state: AppState): ChatStateSnapshot {
     projectId: state.currentProjectId,
     projectName: project?.name,
     generalModels: state.config.generalModels ?? [],
+    assistantModelGroups: getConfiguredModelGroups(state.config, 'ai-text'),
     assistantModelId: getAssistantTextModelCandidates(
       project?.settings,
       state.config.assistantModelId,
