@@ -2,6 +2,7 @@
  * settings/providerConnection/ProviderConnectionForm — 连接信息区块。
  * 负责凭证字段、OAuth 登录态、重复地址提示与「验证连接」，模型选择不在这里。
  */
+import Select from '../../shared/Select';
 import { Icon } from '@iconify/react';
 import type { Dispatch, SetStateAction } from 'react';
 import { useT } from '../../../i18n';
@@ -106,15 +107,15 @@ export default function ProviderConnectionForm({
       {definition.id === 'custom-openai' && (
         <label className="provider-field">
           <span>{t('对话协议')}</span>
-          <select
-            className="ui-select__control"
+          <Select fixedMenu
+            className="min-w-0"
             value={chatApiProtocol}
-            onChange={(event) => setChatApiProtocol(event.target.value as ChatApiProtocol)}
+            onChange={(selectedOptionValue) => setChatApiProtocol(selectedOptionValue as ChatApiProtocol)}
           >
             {Object.entries(CHAT_API_PROTOCOL_LABELS).map(([value, label]) => (
               <option key={value} value={value}>{t(label)}</option>
             ))}
-          </select>
+          </Select>
           <small>
             {chatApiProtocol === 'anthropic-compatible'
               ? t('使用 Messages API、x-api-key 和 Anthropic 流式事件')

@@ -1,6 +1,7 @@
 /**
  * PromptPanel 提示词面板 — AI 生成节点的核心输入面板，集成模型选择器、提示词编辑器、质量/比例/视频参数、生成按钮、/ 指令菜单
  */
+import Select from '../../shared/Select';
 import { lazy, Suspense, useState, useRef, useCallback, useEffect } from 'react';
 // 生成中的思考球：仅在生成时按需加载
 const ThinkingOrb = lazy(() => import('thinking-orbs').then((m) => ({ default: m.ThinkingOrb })));
@@ -213,6 +214,7 @@ function CameraSettingsSelector({
   useEffect(() => {
     if (!open) return;
     const closeOnOutside = (event: PointerEvent) => {
+      if (event.target instanceof Element && event.target.closest('[data-ui-select-portal]')) return;
       if (!rootRef.current?.contains(event.target as globalThis.Node)) setOpen(false);
     };
     document.addEventListener('pointerdown', closeOnOutside, true);
@@ -256,31 +258,31 @@ function CameraSettingsSelector({
           <div className="mt-2 grid grid-cols-2 gap-2">
             <label className="min-w-0 text-[10px] text-canvas-text-muted">
               <span className="mb-1 block">{t('焦距')}</span>
-              <select className="h-8 w-full rounded-md border border-canvas-border bg-canvas-card px-2 text-[11px] text-canvas-text outline-none focus:border-indigo-400" value={value.lens ?? ''} onChange={(event) => updateSetting('lens', event.target.value as CameraLens || undefined)}>
+              <Select fixedMenu className="min-w-0 w-full" value={value.lens ?? ''} onChange={(selectedOptionValue) => updateSetting('lens', selectedOptionValue as CameraLens || undefined)}>
                 <option value="">{t('自动')}</option>
                 {CAMERA_LENS_OPTIONS.map((option) => <option key={option.value} value={option.value}>{t(option.label)}</option>)}
-              </select>
+              </Select>
             </label>
             <label className="min-w-0 text-[10px] text-canvas-text-muted">
               <span className="mb-1 block">{t('快门效果')}</span>
-              <select className="h-8 w-full rounded-md border border-canvas-border bg-canvas-card px-2 text-[11px] text-canvas-text outline-none focus:border-indigo-400" value={value.shutterEffect ?? ''} onChange={(event) => updateSetting('shutterEffect', event.target.value as CameraShutterEffect || undefined)}>
+              <Select fixedMenu className="min-w-0 w-full" value={value.shutterEffect ?? ''} onChange={(selectedOptionValue) => updateSetting('shutterEffect', selectedOptionValue as CameraShutterEffect || undefined)}>
                 <option value="">{t('自动')}</option>
                 {CAMERA_SHUTTER_OPTIONS.map((option) => <option key={option.value} value={option.value}>{t(option.label)}</option>)}
-              </select>
+              </Select>
             </label>
             <label className="min-w-0 text-[10px] text-canvas-text-muted">
               <span className="mb-1 block">{t('光圈')}</span>
-              <select className="h-8 w-full rounded-md border border-canvas-border bg-canvas-card px-2 text-[11px] text-canvas-text outline-none focus:border-indigo-400" value={value.aperture ?? ''} onChange={(event) => updateSetting('aperture', event.target.value as CameraAperture || undefined)}>
+              <Select fixedMenu className="min-w-0 w-full" value={value.aperture ?? ''} onChange={(selectedOptionValue) => updateSetting('aperture', selectedOptionValue as CameraAperture || undefined)}>
                 <option value="">{t('自动')}</option>
                 {CAMERA_APERTURE_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
-              </select>
+              </Select>
             </label>
             <label className="min-w-0 text-[10px] text-canvas-text-muted">
               <span className="mb-1 block">{t('曝光时间')}</span>
-              <select className="h-8 w-full rounded-md border border-canvas-border bg-canvas-card px-2 text-[11px] text-canvas-text outline-none focus:border-indigo-400" value={value.exposureTime ?? ''} onChange={(event) => updateSetting('exposureTime', event.target.value as CameraExposureTime || undefined)}>
+              <Select fixedMenu className="min-w-0 w-full" value={value.exposureTime ?? ''} onChange={(selectedOptionValue) => updateSetting('exposureTime', selectedOptionValue as CameraExposureTime || undefined)}>
                 <option value="">{t('自动')}</option>
                 {CAMERA_EXPOSURE_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
-              </select>
+              </Select>
             </label>
           </div>
           <p className="mt-2 px-0.5 text-[9px] text-canvas-text-muted">{t('自动项不会写入提示词；预览仅用于表达景深、明暗、透视与动态趋势。')}</p>
@@ -804,19 +806,19 @@ export default function PromptPanel({
                 </button>
               ))}
             </div>
-            <select
-              className="animation-frames-select"
+            <Select fixedMenu
+              className="min-w-0 shrink-0"
+              size="sm"
               value={animationFrames}
               aria-label={t('生成帧数')}
-              onChange={(event) => {
-                event.stopPropagation();
-                onAnimationFramesChange?.(Number(event.target.value));
+              onChange={(selectedOptionValue) => {
+                onAnimationFramesChange?.(Number(selectedOptionValue));
               }}
             >
               {[6, 8, 10, 12, 16, 20].map((count) => (
                 <option key={count} value={count}>{t('{count} 帧', { count })}</option>
               ))}
-            </select>
+            </Select>
           </>
         )}
 

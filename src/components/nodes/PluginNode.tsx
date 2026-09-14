@@ -1,3 +1,4 @@
+import Select from '../shared/Select';
 import { Icon } from '@iconify/react';
 import { Handle, Position } from '@xyflow/react';
 import { memo, useMemo, useState } from 'react';
@@ -126,14 +127,14 @@ function PluginNode({ id, data, selected }: { id: string; data: BaseNodeData; se
                   onChange={(event) => setValue(field.id, event.currentTarget.value)}
                 />
               ) : field.type === 'select' ? (
-                <select
-                  className={baseClass}
+                <Select fixedMenu
+                  className="min-w-0"
                   value={typeof value === 'string' ? value : ''}
-                  onChange={(event) => setValue(field.id, event.currentTarget.value)}
+                  onChange={(selectedOptionValue) => setValue(field.id, selectedOptionValue)}
                 >
                   <option value="">{field.placeholder || '请选择'}</option>
                   {field.options?.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                </select>
+                </Select>
               ) : field.type === 'boolean' ? (
                 <input
                   className="ml-2 align-middle accent-indigo-500"
@@ -142,16 +143,16 @@ function PluginNode({ id, data, selected }: { id: string; data: BaseNodeData; se
                   onChange={(event) => setValue(field.id, event.currentTarget.checked)}
                 />
               ) : field.type === 'model' ? (
-                <select
-                  className={baseClass}
+                <Select fixedMenu
+                  className="min-w-0"
                   value={typeof value === 'string' ? value : ''}
-                  onChange={(event) => setValue(field.id, event.currentTarget.value)}
+                  onChange={(selectedOptionValue) => setValue(field.id, selectedOptionValue)}
                 >
                   <option value="">{models.length > 0 ? '选择可调用模型' : '暂无可调用模型'}</option>
                   {models
                     .filter((model) => field.modelCategories?.includes(model.category))
                     .map((model) => <option key={model.id} value={model.id}>{model.name} · {model.category}</option>)}
-                </select>
+                </Select>
               ) : (
                 <input
                   className={baseClass}

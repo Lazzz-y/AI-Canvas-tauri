@@ -448,9 +448,9 @@ export default function WorkflowPanel() {
         {/* 左卡片：上传与添加 */}
         <div className="wf-panel-card wf-panel-import">
           <span className="wf-section-title">导入工作流</span>
-          <label className="mt-3 flex flex-col gap-1 text-xs">来源<select className="ui-select__control w-full" value={importSource} onChange={(event) => { setImportSource(event.target.value as typeof importSource); setEditingCloud(undefined); setListFilter('all'); }}>
+          <label className="mt-3 flex flex-col gap-1 text-xs">来源<Select fixedMenu className="min-w-0 w-full" value={importSource} onChange={(selectedOptionValue) => { setImportSource(selectedOptionValue as typeof importSource); setEditingCloud(undefined); setListFilter('all'); }}>
             <option value="comfyui">ComfyUI 工作流</option><option value="workflow">RunningHub 云工作流</option><option value="app">RunningHub AI 应用</option>
-          </select></label>
+          </Select></label>
           <div className="wf-section-rule" />
           {importSource !== 'comfyui' ? <RunningHubWorkflowImport key={`${importSource}:${editingCloud?.id ?? 'new'}`} kind={importSource} editing={editingCloud?.runninghub?.kind === importSource ? editingCloud : undefined} onSaved={() => { setEditingCloud(undefined); showToast('已保存云工作流', 'success'); }} /> : <>
           {/* Name */}

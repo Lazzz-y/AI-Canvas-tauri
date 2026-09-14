@@ -3,6 +3,7 @@
  * 编辑单个 DramaCharacter 的基本信息、参考图（上传/裁剪/分类）与声音素材（音频/时长），
  * 按项目或全局作用域写入 store；项目资产优先二进制落盘，避免先构造 Base64。
  */
+import Select from './shared/Select';
 import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import { Icon } from '@iconify/react';
 import { useShallow } from 'zustand/react/shallow';
@@ -663,11 +664,11 @@ function CharacterNodeCaptureDialog({
             <>
               <label className="character-field character-field-wide">
                 <span>添加到角色</span>
-                <select autoFocus value={effectiveCharacterId} disabled={!characters.length || saving}
-                  onChange={(event) => setSelectedCharacterId(event.target.value)}>
+                <Select fixedMenu autoFocus value={effectiveCharacterId} disabled={!characters.length || saving}
+                  onChange={(selectedOptionValue) => setSelectedCharacterId(selectedOptionValue)}>
                   {!characters.length ? <option value="">当前范围暂无角色，请先在角色库新建</option> : null}
                   {characters.map((character) => <option key={character.id} value={character.id}>{character.name}</option>)}
-                </select>
+                </Select>
               </label>
               <label className="character-field character-field-wide">
                 <span>声音名称</span>
@@ -675,9 +676,9 @@ function CharacterNodeCaptureDialog({
               </label>
               <label className="character-field">
                 <span>声音用途</span>
-                <select value={voiceKind} onChange={(event) => setVoiceKind(event.target.value as CharacterVoiceKind)}>
+                <Select fixedMenu value={voiceKind} onChange={(selectedOptionValue) => setVoiceKind(selectedOptionValue as CharacterVoiceKind)}>
                   {VOICE_KINDS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-                </select>
+                </Select>
               </label>
               <label className="character-field character-field-wide">
                 <span>台词文本</span>
@@ -718,15 +719,15 @@ function CharacterNodeCaptureDialog({
           {targetMode === 'existing' ? (
             <label className="character-field character-field-wide">
               <span>添加到角色</span>
-              <select
+              <Select fixedMenu
                 autoFocus
                 value={effectiveCharacterId}
-                onChange={(event) => setSelectedCharacterId(event.target.value)}
+                onChange={(selectedOptionValue) => setSelectedCharacterId(selectedOptionValue)}
               >
                 {characters.map((character) => (
                   <option key={character.id} value={character.id}>{character.name}</option>
                 ))}
-              </select>
+              </Select>
             </label>
           ) : (
             <div className="character-capture-new-fields">
@@ -762,14 +763,14 @@ function CharacterNodeCaptureDialog({
           <div className="character-capture-reference-fields">
             <label className="character-field">
               <span>图片用途</span>
-              <select
+              <Select fixedMenu
                 value={kind}
-                onChange={(event) => setKind(event.target.value as CharacterReferenceKind)}
+                onChange={(selectedOptionValue) => setKind(selectedOptionValue as CharacterReferenceKind)}
               >
                 {REFERENCE_KINDS.map(([value, label]) => (
                   <option key={value} value={value}>{label}</option>
                 ))}
-              </select>
+              </Select>
             </label>
             <label className="character-field character-field-wide">
               <span>图片提示词</span>
@@ -786,12 +787,12 @@ function CharacterNodeCaptureDialog({
             <>
               <label className="character-field character-field-wide">
                 <span>添加到角色</span>
-                <select
+                <Select fixedMenu
                   autoFocus
                   value={effectiveCharacterId}
                   disabled={characters.length === 0}
-                  onChange={(event) => {
-                    setSelectedCharacterId(event.target.value);
+                  onChange={(selectedOptionValue) => {
+                    setSelectedCharacterId(selectedOptionValue);
                     setSelectedActionId('');
                   }}
                 >
@@ -799,7 +800,7 @@ function CharacterNodeCaptureDialog({
                   {characters.map((character) => (
                     <option key={character.id} value={character.id}>{character.name}</option>
                   ))}
-                </select>
+                </Select>
               </label>
 
               <div className="character-capture-group">
@@ -830,27 +831,27 @@ function CharacterNodeCaptureDialog({
               {actionAttachMode === 'existing' ? (
                 <label className="character-field character-field-wide">
                   <span>已有动作</span>
-                  <select
+                  <Select fixedMenu
                     value={effectiveActionId}
-                    onChange={(event) => setSelectedActionId(event.target.value)}
+                    onChange={(selectedOptionValue) => setSelectedActionId(selectedOptionValue)}
                   >
                     {actions.map((action) => (
                       <option key={action.id} value={action.id}>{action.name}</option>
                     ))}
-                  </select>
+                  </Select>
                 </label>
               ) : (
                 <div className="character-capture-reference-fields">
                   <label className="character-field">
                     <span>动作类别</span>
-                    <select
+                    <Select fixedMenu
                       value={actionCategory}
-                      onChange={(event) => setActionCategory(event.target.value as CharacterActionCategory)}
+                      onChange={(selectedOptionValue) => setActionCategory(selectedOptionValue as CharacterActionCategory)}
                     >
                       {ACTION_CATEGORIES.map(([value, label]) => (
                         <option key={value} value={value}>{label}</option>
                       ))}
-                    </select>
+                    </Select>
                   </label>
                   {actionCategory === 'custom' ? (
                     <label className="character-field">
@@ -1331,16 +1332,16 @@ function CharacterAssetEditorDialog({
                 <div className="character-reference-editor-fields">
                   <label className="character-field">
                     <span>图片用途</span>
-                    <select
+                    <Select fixedMenu
                       value={selectedReference.kind}
-                      onChange={(event) => patchReference({
-                        kind: event.target.value as CharacterReferenceKind,
+                      onChange={(selectedOptionValue) => patchReference({
+                        kind: selectedOptionValue as CharacterReferenceKind,
                       })}
                     >
                       {REFERENCE_KINDS.map(([value, label]) => (
                         <option key={value} value={value}>{label}</option>
                       ))}
-                    </select>
+                    </Select>
                   </label>
                   <label className="character-field">
                     <span>图片提示词</span>
@@ -1475,16 +1476,16 @@ function CharacterAssetEditorDialog({
                   </label>
                   <label className="character-field">
                     <span>用途</span>
-                    <select
+                    <Select fixedMenu
                       value={selectedVoiceClip.kind}
-                      onChange={(event) => patchVoiceClip({
-                        kind: event.target.value as CharacterVoiceKind,
+                      onChange={(selectedOptionValue) => patchVoiceClip({
+                        kind: selectedOptionValue as CharacterVoiceKind,
                       })}
                     >
                       {VOICE_KINDS.map(([value, label]) => (
                         <option key={value} value={value}>{label}</option>
                       ))}
-                    </select>
+                    </Select>
                   </label>
                 </div>
                 <label className="character-field">

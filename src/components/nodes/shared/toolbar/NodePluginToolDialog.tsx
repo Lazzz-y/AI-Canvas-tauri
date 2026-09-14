@@ -1,3 +1,4 @@
+import Select from '../../../shared/Select';
 import { Icon } from '@iconify/react';
 import { getLocale } from '../../../../i18n';
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
@@ -420,27 +421,27 @@ export default function NodePluginToolDialog({ pluginTool, nodeId, onClose }: No
                       }}
                     />
                   ) : field.type === 'select' ? (
-                    <select
+                    <Select fixedMenu
                       value={String(values[field.id] ?? '')}
                       required={field.required}
                       disabled={busy}
-                      className={inputClassName}
-                      onChange={(event) => {
-                        const nextValue = event.currentTarget.value;
+                      className="min-w-0"
+                      onChange={(selectedOptionValue) => {
+                        const nextValue = selectedOptionValue;
                         setValues((current) => ({ ...current, [field.id]: nextValue }));
                       }}
                     >
                       <option value="">{field.placeholder || '请选择'}</option>
                       {field.options?.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                    </select>
+                    </Select>
                   ) : field.type === 'model' ? (
-                    <select
+                    <Select fixedMenu
                       value={String(values[field.id] ?? '')}
                       required={field.required}
                       disabled={busy}
-                      className={inputClassName}
-                      onChange={(event) => {
-                        const nextValue = event.currentTarget.value;
+                      className="min-w-0"
+                      onChange={(selectedOptionValue) => {
+                        const nextValue = selectedOptionValue;
                         setValues((current) => ({ ...current, [field.id]: nextValue }));
                       }}
                     >
@@ -450,7 +451,7 @@ export default function NodePluginToolDialog({ pluginTool, nodeId, onClose }: No
                       {models
                         .filter((model) => !field.modelCategories || field.modelCategories.includes(model.category))
                         .map((model) => <option key={model.id} value={model.id}>{model.name} · {model.category}</option>)}
-                    </select>
+                    </Select>
                   ) : (
                     <input
                       type={field.type === 'number' ? 'number' : 'text'}

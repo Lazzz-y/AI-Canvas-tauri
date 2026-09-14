@@ -1,6 +1,7 @@
 /**
  * MCP 本地控制设置页，管理 bridge 会话、固定端口/令牌、自动开启和外部客户端配置片段。
  */
+import Select from '../shared/Select';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from '@iconify/react';
 import { useShallow } from 'zustand/react/shallow';
@@ -230,17 +231,17 @@ export default function McpControlSettings() {
       <div className="ui-field rounded-md border border-canvas-border bg-canvas-card px-3 py-2.5">
         <label className="ui-label" htmlFor="mcp-tool-exposure">{t('工具发现方式')}</label>
         <div className="ui-select">
-          <select
+          <Select fixedMenu
             id="mcp-tool-exposure"
-            className="ui-select__control"
+            className="min-w-0"
             aria-describedby="mcp-tool-exposure-hint"
             value={getConfiguredMcpToolExposure(config.mcpToolExposure)}
             disabled={loading}
-            onChange={(event) => persistConfig({ mcpToolExposure: getConfiguredMcpToolExposure(event.target.value) })}
+            onChange={(selectedOptionValue) => persistConfig({ mcpToolExposure: getConfiguredMcpToolExposure(selectedOptionValue) })}
           >
             <option value="compact">{t('按需发现（推荐）')}</option>
             <option value="full">{t('完整工具列表')}</option>
-          </select>
+          </Select>
         </div>
         <p className="ui-hint">{t('按需模式减少初始工具说明的上下文占用；完整模式适合已支持工具延迟加载的客户端。')}</p>
         <p id="mcp-tool-exposure-hint" className="ui-hint">{t('切换后请在 MCP 客户端刷新工具列表或重新连接；已有对话的上下文不会自动清除。')}</p>

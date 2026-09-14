@@ -278,6 +278,8 @@ function AINodeDialog() {
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
+        // 先让顶层 UI Kit 下拉处理 Escape，保留当前节点参数弹窗。
+        if (document.querySelector('[data-ui-select-portal]')) return;
         e.stopPropagation();
         if (isExpanded) {
           setIsExpanded(false);

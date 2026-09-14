@@ -1,8 +1,9 @@
-﻿/**
+/**
  * VideoParamSelector 视频参数选择器
  * - Seedance 模型 → Seedance 参数（分辨率、宽高比、时长、有声视频）
  * - 其他 provider → 通用视频参数（像素分辨率、帧率、时长）
  */
+import Select from '../../shared/Select';
 import { useState, useRef, useEffect, useMemo } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import AnimatedButton from '../../shared/AnimatedButton';
@@ -466,6 +467,7 @@ export default function VideoParamSelector({
   // Close popup on outside click
   useEffect(() => {
     const handler = (e: MouseEvent) => {
+      if (e.target instanceof Element && e.target.closest('[data-ui-select-portal]')) return;
       if (ref.current && !ref.current.contains(e.target as Node)) closePopup();
     };
     if (open) document.addEventListener('mousedown', handler, true);
@@ -819,18 +821,18 @@ export default function VideoParamSelector({
                           : '开启后由当前原生视频模型同时生成音频。'}>!</span>
                       </div>
                       {generalModel ? (
-                        <select
-                          className="h-7 rounded-md border border-canvas-border bg-canvas-card px-2 text-[11px] text-canvas-text"
+                        <Select fixedMenu
+                          className="min-w-0" size="sm"
                           aria-label="视频音频策略"
                           value={generateAudio === undefined ? 'default' : generateAudio ? 'on' : 'off'}
-                          onChange={(event) => onChangeGenerateAudio?.(
-                            event.target.value === 'default' ? undefined : event.target.value === 'on',
+                          onChange={(selectedOptionValue) => onChangeGenerateAudio?.(
+                            selectedOptionValue === 'default' ? undefined : selectedOptionValue === 'on',
                           )}
                         >
                           <option value="default">模型默认</option>
                           <option value="on">生成音频</option>
                           <option value="off">不生成音频</option>
-                        </select>
+                        </Select>
                       ) : (
                         <label className="rh-toggle-switch">
                           <input

@@ -85,11 +85,11 @@ describe('MCP control settings helpers', () => {
     settingsState.updateConfig.mockClear();
     settingsState.saveConfig.mockClear();
     const tree = await renderSettings();
-    const select = tree.find((element) => element.type === 'select' && element.props.id === 'mcp-tool-exposure')!;
+    const select = tree.find((element) => element.props.id === 'mcp-tool-exposure')!;
     expect(select.props.value).toBe('compact');
-    expect(select.props.className).toBe('ui-select__control');
+    expect(select.props.fixedMenu).toBe(true);
     expect(tree.find((element) => element.props.id === 'mcp-tool-exposure-hint')?.props.children).toContain('刷新工具列表');
-    (select.props.onChange as (event: { target: { value: string } }) => void)({ target: { value: 'full' } });
+    (select.props.onChange as (value: string) => void)('full');
     expect(settingsState.updateConfig).toHaveBeenCalledExactlyOnceWith({ mcpToolExposure: 'full' });
     expect(settingsState.saveConfig).toHaveBeenCalledOnce();
     settingsState.config = { mcpToolExposure: 'full' };

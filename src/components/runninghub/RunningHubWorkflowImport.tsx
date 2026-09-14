@@ -1,3 +1,4 @@
+import Select from '../shared/Select';
 import { useEffect, useRef, useState } from 'react';
 import { generateId, useAppStore } from '../../store/useAppStore';
 import type { WorkflowCategory, WorkflowDefinition } from '../../types';
@@ -56,12 +57,12 @@ export default function RunningHubWorkflowImport({ kind, editing, onSaved }: {
     <fieldset disabled={busy} className="flex min-w-0 flex-col gap-3">
       <label className="flex flex-col gap-1 text-xs">名称<input className="ui-input w-full" value={name} maxLength={120} onChange={(event) => setName(event.target.value)} /></label>
       <div className="flex flex-wrap gap-2">
-        <label className="flex min-w-0 flex-1 flex-col gap-1 text-xs">输出类型<select className="ui-select__control w-full" value={category} onChange={(event) => setCategory(event.target.value as WorkflowCategory)}>
+        <label className="flex min-w-0 flex-1 flex-col gap-1 text-xs">输出类型<Select fixedMenu className="min-w-0 w-full" value={category} onChange={(selectedOptionValue) => setCategory(selectedOptionValue as WorkflowCategory)}>
           <option value="ai-image">图片</option><option value="ai-video">视频</option><option value="ai-audio">音频</option>
-        </select></label>
-        <label className="flex min-w-0 flex-1 flex-col gap-1 text-xs">使用连接<select className="ui-select__control w-full" value={connectionId} onChange={(event) => setConnectionId(event.target.value as RunningHubConnectionId)}>
+        </Select></label>
+        <label className="flex min-w-0 flex-1 flex-col gap-1 text-xs">使用连接<Select fixedMenu className="min-w-0 w-full" value={connectionId} onChange={(selectedOptionValue) => setConnectionId(selectedOptionValue as RunningHubConnectionId)}>
           <option value="runninghub">工作流 API Key</option><option value="runninghub-model">模型 API Key</option>
-        </select></label>
+        </Select></label>
       </div>
       <label className="flex flex-col gap-1 text-xs">{kind === 'app' ? 'AI 应用' : '工作流'}链接或 ID<input className="ui-input w-full" value={remoteId} placeholder={kind === 'app' ? 'https://www.runninghub.cn/ai-detail/…' : 'https://www.runninghub.cn/workflow/…'} onChange={(event) => { setRemoteId(event.target.value); setManifest(undefined); }} /></label>
       <button type="button" className="ui-btn" disabled={!remoteId.trim()} onClick={() => { void readDefinition(true); }}>从 RunningHub 读取定义</button>
@@ -89,13 +90,13 @@ export default function RunningHubWorkflowImport({ kind, editing, onSaved }: {
                 <label className="min-w-0 flex-1 text-xs">节点 ID<input className="ui-input w-full" value={field.nodeId} onChange={(event) => setField(index, { nodeId: event.target.value })} /></label>
                 <label className="min-w-0 flex-1 text-xs">字段名<input className="ui-input w-full" value={field.fieldName} onChange={(event) => setField(index, { fieldName: event.target.value })} /></label>
               </div>
-              <label className="text-xs">输入来源<select className="ui-select__control w-full" value={field.source} onChange={(event) => setField(index, { source: event.target.value as RunningHubParameter['source'] })}>
+              <label className="text-xs">输入来源<Select fixedMenu className="min-w-0 w-full" value={field.source} onChange={(selectedOptionValue) => setField(index, { source: selectedOptionValue as RunningHubParameter['source'] })}>
                 <option value="value">固定值 / 每次可调整</option>
                 {field.type === 'string' && <><option value="prompt">本次提示词</option><option value="image">图片参考</option><option value="video">视频参考</option><option value="audio">音频参考</option></>}
-              </select></label>
+              </Select></label>
               {['image', 'video', 'audio'].includes(field.source) && <div className="flex flex-wrap gap-2">
                 <label className="min-w-0 flex-1 text-xs">参考序号<input type="number" min={1} max={32} className="ui-input w-full" value={(field.referenceIndex ?? 0) + 1} onChange={(event) => setField(index, { referenceIndex: Number(event.target.value) - 1 })} /></label>
-                <label className="min-w-0 flex-1 text-xs">上传后传入<select className="ui-select__control w-full" value={field.mediaFormat ?? 'filename'} onChange={(event) => setField(index, { mediaFormat: event.target.value as 'filename' | 'url' })}><option value="filename">文件名（LoadImage 等）</option><option value="url">URL（URL 输入节点）</option></select></label>
+                <label className="min-w-0 flex-1 text-xs">上传后传入<Select fixedMenu className="min-w-0 w-full" value={field.mediaFormat ?? 'filename'} onChange={(selectedOptionValue) => setField(index, { mediaFormat: selectedOptionValue as 'filename' | 'url' })}><option value="filename">文件名（LoadImage 等）</option><option value="url">URL（URL 输入节点）</option></Select></label>
               </div>}
               <RunningHubParameterFields parameters={[{ ...field, source: 'value', label: `默认值 · ${field.type}` }]} values={defaultInputs} onChange={setDefaultInputs} />
               <div className="flex flex-wrap items-center justify-between gap-2"><label className="flex gap-2 text-xs"><input type="checkbox" checked={field.required ?? false} onChange={(event) => setField(index, { required: event.target.checked })} />必填</label><button type="button" className="ui-btn ui-btn--sm ui-btn--ghost" onClick={() => setManifest({ ...manifest, parameters: manifest.parameters.filter((_, i) => i !== index) })}>不覆盖此参数</button></div>
@@ -103,7 +104,7 @@ export default function RunningHubWorkflowImport({ kind, editing, onSaved }: {
           </details>)}
         </div>
         <label className="text-xs">限定输出节点（可选，逗号分隔）<input className="ui-input w-full" value={manifest.outputNodeIds?.join(', ') ?? ''} onChange={(event) => setManifest({ ...manifest, outputNodeIds: event.target.value.split(/[,，\s]+/).filter(Boolean) })} /></label>
-        <label className="text-xs">实例<select className="ui-select__control w-full" value={manifest.instanceType ?? 'default'} onChange={(event) => setManifest({ ...manifest, instanceType: event.target.value as 'default' | 'plus' })}><option value="default">默认</option><option value="plus">Plus（可能增加费用）</option></select></label>
+        <label className="text-xs">实例<Select fixedMenu className="min-w-0 w-full" value={manifest.instanceType ?? 'default'} onChange={(selectedOptionValue) => setManifest({ ...manifest, instanceType: selectedOptionValue as 'default' | 'plus' })}><option value="default">默认</option><option value="plus">Plus（可能增加费用）</option></Select></label>
         {kind === 'workflow' && <label className="flex gap-2 text-xs"><input type="checkbox" checked={manifest.usePersonalQueue ?? false} onChange={(event) => setManifest({ ...manifest, usePersonalQueue: event.target.checked })} />使用个人队列</label>}
         <button type="button" className="ui-btn ui-btn--primary" onClick={() => { void save(); }}>{editing ? '保存修改' : '添加云工作流'}</button>
       </>}
