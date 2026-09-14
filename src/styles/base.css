@@ -897,6 +897,7 @@ html[data-performance-mode] body[data-tauri-window] {
 
 body[data-tauri-window] > :is(
   .fixed.inset-0,
+  .assets-panel-backdrop,
   .matting-overlay,
   .point-edit-overlay,
   .text-fullscreen-overlay,

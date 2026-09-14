@@ -17,6 +17,7 @@ import {
   useDeferredValue,
   type DragEvent,
 } from 'react';
+import { createPortal } from 'react-dom';
 import { Icon } from '@iconify/react';
 import { motion, AnimatePresence, MotionConfig, useReducedMotion } from 'framer-motion';
 import { useShallow } from 'zustand/react/shallow';
@@ -888,7 +889,7 @@ export default function AssetsPanel() {
   // 局部覆盖性能模式，仍尊重系统减少动态效果设置。
   return motionMode === 'drawer'
     ? <MotionConfig reducedMotion="user" transition={drawerTransition}>{panel}</MotionConfig>
-    : panel;
+    : createPortal(panel, document.body);
 }
 
 /* ============================================

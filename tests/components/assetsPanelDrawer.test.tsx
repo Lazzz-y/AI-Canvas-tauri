@@ -12,6 +12,7 @@ const driver = vi.hoisted(() => ({
   effects: [] as Array<{ deps?: readonly unknown[]; cleanup?: () => void }>,
   pending: [] as Array<() => void>, stateIndex: 0, refIndex: 0, effectIndex: 1,
   dirty: false, listProject: vi.fn(), listGlobal: vi.fn(), drag: vi.fn(),
+  portal: vi.fn((children: unknown) => children),
   memos: [] as Array<{ value: unknown; deps: readonly unknown[] }>, memoIndex: 0,
   reduceMotion: true,
 }));
@@ -58,6 +59,7 @@ vi.mock('react', async () => {
   };
 });
 vi.mock('zustand/react/shallow', () => ({ useShallow: <T,>(selector: T) => selector }));
+vi.mock('react-dom', () => ({ createPortal: driver.portal }));
 vi.mock('../../src/store/useAppStore', () => ({
   useAppStore: Object.assign((selector: (state: AppState) => unknown) => selector(driver.store!.getState()), {
     getState: () => driver.store!.getState(),
@@ -161,6 +163,7 @@ beforeEach(() => {
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
   driver.listProject.mockReset().mockResolvedValue([file('森林', ['夜景']), file('人物')]);
   driver.listGlobal.mockReset().mockResolvedValue([file('全局参考')]);
+  driver.portal.mockClear();
   driver.store = createStore<AppState>()((set, get, api) => ({
     ...createUISlice(set, get, api), currentProjectId: 'project-1', nodes: [],
     projects: [{ id: 'project-1', name: '项目一' }], config: { assetWaterfallColumns: 6 },
@@ -213,9 +216,11 @@ describe('资产库 Tab 抽屉', () => {
     key(); render();
     expect(find((el) => el.props.role === 'region').props['aria-modal']).toBeUndefined();
     expect(all(tree, (el) => el.props.className === 'assets-panel-backdrop')).toHaveLength(0);
+    expect(driver.portal).not.toHaveBeenCalled();
     driver.store!.getState().setAssetsPanelOpen(true); render();
     expect(find((el) => el.props.role === 'dialog').props['aria-modal']).toBe(true);
     expect(all(tree, (el) => el.props.className === 'assets-panel-backdrop')).toHaveLength(1);
+    expect(driver.portal).toHaveBeenLastCalledWith(expect.anything(), doc.body);
     expect(key().defaultPrevented).toBe(false);
   });
 
