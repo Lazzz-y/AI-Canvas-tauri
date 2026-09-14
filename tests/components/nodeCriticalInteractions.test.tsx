@@ -308,7 +308,10 @@ describe('critical canvas node interactions', () => {
       expect.objectContaining({ status: 'success' }),
     );
     expect(store.showToast).not.toHaveBeenCalledWith('裁切完成，已创建新节点');
-  });
+  },
+  // 该用例要 doMock 十余个模块并驱动 React hook，单跑约 2~3 秒；
+  // 全量并发时会被调度拖慢，默认 5s 超时不够用，这里放宽到 20s 避免偶发失败。
+  20_000);
 
   it('VideoNode does not create a frame node after its derivation becomes stale', async () => {
     let revision = 1;
