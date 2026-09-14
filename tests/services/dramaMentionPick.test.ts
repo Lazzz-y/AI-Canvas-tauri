@@ -3,15 +3,19 @@ import {
   DRAMA_MENTION_MERGE_ALL,
   buildDramaMentionId,
   buildDramaActionMentionId,
+  buildDramaVoiceMentionId,
   emptyDramaAssetLibrary,
   parseDramaMentionId,
 } from '../../src/types/dramaAssets';
-import { resolveDramaActionMediaRef, resolveDramaAssetImageRef } from '../../src/services/dramaAssetPrompt';
+import { resolveDramaActionMediaRef, resolveDramaAssetImageRef, resolveDramaVoiceRef } from '../../src/services/dramaAssetPrompt';
 import type { DramaCharacter } from '../../src/types/dramaAssets';
 import { useAppStore } from '../../src/store/useAppStore';
-import { resolvePromptToChatContent, resolvePromptWithImageRefs, resolvePromptWithMediaRefs } from '../../src/services/ai/promptResolver';
+import { collectPromptNodeMediaUrls, resolvePromptToChatContent, resolvePromptWithImageRefs, resolvePromptWithMediaRefs } from '../../src/services/ai/promptResolver';
 import { resolveNodeReferences } from '../../src/services/nodeReferenceService';
 import { renderPromptToNodes, serializeDOM } from '../../src/components/nodes/shared/mentionEditorDom';
+import { resolveDramaMentionItems } from '../../src/components/nodes/shared/mentionEditorSources';
+import { generateAudio } from '../../src/services/ai/generateAudio';
+import { mediaProviderRegistry } from '../../src/services/ai/mediaProviderRegistry';
 
 function character(): DramaCharacter {
   return {
@@ -163,7 +167,7 @@ describe('动作素材引用', () => {
     expect(resolveNodeReferences('@drama{char_1#ref-side:林小满}')).toBe('side.png');
   });
 
-  it('保存后的图片与视频标签恢复正确类型和缩略图，并保持序列化引用', () => {
+  it('保存后的图片、视频与音频标签恢复正确类型，并保持序列化引用', () => {
     // 仅模拟 DOM 的节点/属性存储，实际标签构造和解析仍运行生产代码。
     class ElementStub {
       nodeType = 1;
@@ -184,7 +188,8 @@ describe('动作素材引用', () => {
       createTextNode: (textContent: string) => ({ nodeType: 3, textContent }),
     });
     try {
-      const prompt = `${actionMention('pose')} ${actionMention('clip')}`;
+      useAppStore.setState({ dramaAssets: { ...emptyDramaAssetLibrary(), characters: [voiceCharacter()] } });
+      const prompt = `${actionMention('pose')} ${actionMention('clip')} ${voiceMention()}`;
       const rendered = renderPromptToNodes(prompt, new Map());
       const chips = rendered.filter((node) => node.nodeType === 1) as unknown as ElementStub[];
       expect(chips[0].getAttribute('data-drama-kind')).toBe('action-image');
@@ -193,6 +198,9 @@ describe('动作素材引用', () => {
       expect(chips[1].getAttribute('data-drama-kind')).toBe('action-video');
       expect(chips[1].className).toContain('chip-video');
       expect(chips[1].hasAttribute('data-image-ref-key')).toBe(false);
+      expect(chips[2].getAttribute('data-drama-kind')).toBe('voice');
+      expect(chips[2].className).toContain('chip-audio');
+      expect(chips[2].hasAttribute('data-image-ref-key')).toBe(false);
       expect(serializeDOM({ childNodes: rendered } as unknown as HTMLElement)).toBe(prompt);
     } finally {
       vi.unstubAllGlobals();
@@ -216,5 +224,140 @@ describe('动作素材引用', () => {
     expect(parsed.actionId).toBeDefined();
     expect(parsed.referenceImageId).toBeUndefined();
     await expect(resolvePromptWithMediaRefs(`@drama{char_1#${pick}:动作}`)).rejects.toThrow('动作素材引用已失效');
+  });
+});
+
+const voiceUrl = 'https://cdn.example/primary.wav';
+const otherVoiceUrl = 'data:audio/wav;base64,b3RoZXI=';
+
+function voiceCharacter(): DramaCharacter {
+  return {
+    ...actionCharacter(),
+    primaryVoiceClipId: 'primary',
+    voiceClips: [
+      { id: 'other', kind: 'line', audioUrl: otherVoiceUrl, transcript: '另一段', createdAt: 0, updatedAt: 0 },
+      { id: 'primary', kind: 'timbre', label: '主音色', audioUrl: voiceUrl, transcript: '', createdAt: 0, updatedAt: 0 },
+    ],
+  };
+}
+
+function voiceMention(clipId = 'primary') {
+  return `@drama{${buildDramaVoiceMentionId('char_1', clipId)}:林小满 · 主音色}`;
+}
+
+describe('音频节点的角色声音引用', () => {
+  beforeEach(() => {
+    useAppStore.setState(useAppStore.getInitialState(), true);
+    useAppStore.setState({ dramaAssets: { ...emptyDramaAssetLibrary(), characters: [voiceCharacter()] } });
+  });
+
+  it('音频候选先过滤再截取，只有图片、声音描述或空音频的角色不出现', () => {
+    const silent = Array.from({ length: 21 }, (_, index) => ({
+      ...character(), id: `silent-${index}`, voiceNotes: '温柔女声',
+      voiceClips: [{ id: 'empty', kind: 'timbre' as const, audioUrl: ' ', transcript: '', createdAt: 0, updatedAt: 0 }],
+    }));
+    const library = { ...emptyDramaAssetLibrary(), characters: [...silent, voiceCharacter()] };
+    const items = resolveDramaMentionItems(library, '', 'ai-audio');
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ id: 'char_1', kind: 'character', voice: { id: 'primary', url: voiceUrl } });
+    expect(resolveDramaMentionItems(library, '林小', 'ai-audio')).toHaveLength(1);
+    expect(resolveDramaMentionItems(library, '不存在', 'ai-audio')).toEqual([]);
+    expect(resolveDramaMentionItems(library, '', 'ai-image')).toHaveLength(20);
+    expect(resolveDramaMentionItems({ ...library, characters: silent }, '', 'ai-audio')).toEqual([]);
+  });
+
+  it('场景和道具只在原来的非音频选择器中出现', () => {
+    const library = {
+      ...emptyDramaAssetLibrary(), characters: [voiceCharacter()],
+      scenes: [{ ...character(), id: 'scene', kind: 'scene' as const }],
+      props: [{ ...character(), id: 'prop', kind: 'prop' as const }],
+    };
+    expect(resolveDramaMentionItems(library, '', 'ai-audio').map((item) => item.id)).toEqual(['char_1']);
+    expect(resolveDramaMentionItems(library, '').map((item) => item.id)).toEqual(['char_1', 'scene', 'prop']);
+  });
+
+  it('默认优先主音色，不可用时选第一段有效音频，指定片段不会回落', () => {
+    const card = voiceCharacter();
+    expect(resolveDramaVoiceRef(card)?.id).toBe('primary');
+    card.voiceClips![1].audioUrl = ' ';
+    expect(resolveDramaVoiceRef(card)?.id).toBe('other');
+    expect(resolveDramaVoiceRef(card, 'primary')).toBeNull();
+    expect(resolveDramaVoiceRef(card, 'missing')).toBeNull();
+  });
+
+  it('带分隔符的片段 ID 保存后仍能精确还原', () => {
+    const id = buildDramaVoiceMentionId('char_1', '声音/#:%}');
+    expect(id).not.toMatch(/[:}]/);
+    expect(parseDramaMentionId(JSON.parse(JSON.stringify(id)))).toEqual({
+      assetId: 'char_1', voiceClipId: '声音/#:%}', mergeAll: false,
+    });
+  });
+
+  it('音频引用固定所选片段，不读取来源节点新输出或新主音色', () => {
+    const card = voiceCharacter();
+    card.voiceClips![1].sourceNodeId = 'source';
+    card.primaryVoiceClipId = 'other';
+    useAppStore.setState({ dramaAssets: { ...emptyDramaAssetLibrary(), characters: [card] }, nodes: [{
+      id: 'source', type: 'ai-audio', position: { x: 0, y: 0 },
+      data: { type: 'ai-audio', label: '已重新生成', audioUrl: 'https://cdn.example/new.wav' },
+    }] });
+    expect(collectPromptNodeMediaUrls(voiceMention()).audioUrls).toEqual([voiceUrl]);
+    useAppStore.setState({ nodes: [] });
+    expect(collectPromptNodeMediaUrls(voiceMention()).audioUrls).toEqual([voiceUrl]);
+  });
+
+  it('混合节点与角色引用保持顺序、去重并进入音频通道', async () => {
+    useAppStore.setState({ nodes: [{
+      id: 'audio', type: 'ai-audio', position: { x: 0, y: 0 },
+      data: { type: 'ai-audio', label: '音频', audioUrl: otherVoiceUrl },
+    }] });
+    const prompt = `@{audio:音频} ${voiceMention()} ${voiceMention()}`;
+    const collected = collectPromptNodeMediaUrls(prompt);
+    expect(collected.audioUrls).toEqual([otherVoiceUrl, voiceUrl]);
+    expect(collected.references).toHaveLength(2);
+    const resolved = await resolvePromptWithMediaRefs(prompt);
+    expect(resolved.audioUrls).toEqual([otherVoiceUrl, voiceUrl]);
+    expect(resolved.imageUrls).toEqual([]);
+    expect(resolved.videoUrls).toEqual([]);
+    expect(resolved.prompt).toBe('音频1 音频2 音频2');
+  });
+
+  it('没有来源节点或连线时，生成入口仍把角色音频交给适配器', async () => {
+    const adapterGenerate = vi.fn().mockResolvedValue({ url: 'https://cdn.example/result.wav' });
+    vi.spyOn(mediaProviderRegistry, 'getAudioAdapter').mockReturnValue({
+      providerId: 'apimart', capabilities: ['audio'], generateAudio: adapterGenerate,
+    });
+    await generateAudio({ prompt: `你好 ${voiceMention()}`, provider: 'apimart', model: 'test-audio' });
+    expect(adapterGenerate).toHaveBeenCalledWith(expect.objectContaining({
+      referenceAudioUrls: [voiceUrl],
+      referenceMedia: [expect.objectContaining({ kind: 'audio', url: voiceUrl, role: 'reference_audio' })],
+    }));
+  });
+
+  it('工作流、文本和图片入口保留音频 URL 语义，不读取角色图片', async () => {
+    expect(resolveNodeReferences(voiceMention())).toBe(voiceUrl);
+    expect(await resolvePromptWithImageRefs(voiceMention())).toEqual({ prompt: voiceUrl, imageUrls: [] });
+    const chat = await resolvePromptToChatContent(voiceMention());
+    expect(typeof chat.content).toBe('string');
+    expect(chat.textContent).toContain(voiceUrl);
+    expect(chat.textContent).not.toContain('front.png');
+  });
+
+  it.each(['clip', 'character', 'url'])('已删除的 %s 明确失败，不替换成图片或另一段音频', async (missing) => {
+    const card = voiceCharacter();
+    if (missing === 'clip') card.voiceClips = card.voiceClips!.slice(0, 1);
+    if (missing === 'url') card.voiceClips![1].audioUrl = '';
+    useAppStore.setState({ dramaAssets: {
+      ...emptyDramaAssetLibrary(), characters: missing === 'character' ? [] : [card],
+    } });
+    expect(() => collectPromptNodeMediaUrls(voiceMention())).toThrow('角色音频引用已失效');
+    expect(() => resolveNodeReferences(voiceMention())).toThrow('角色音频引用已失效');
+    await expect(resolvePromptWithMediaRefs(voiceMention())).rejects.toThrow('角色音频引用已失效');
+    await expect(resolvePromptToChatContent(voiceMention())).rejects.toThrow('角色音频引用已失效');
+  });
+
+  it.each(['voice/', 'voice/%ZZ', 'voice/primary/extra'])('损坏后缀 %s 不回落到主视觉', async (pick) => {
+    expect(parseDramaMentionId(`char_1#${pick}`).voiceClipId).toBe('');
+    await expect(resolvePromptWithMediaRefs(`@drama{char_1#${pick}:音频}`)).rejects.toThrow('角色音频引用已失效');
   });
 });

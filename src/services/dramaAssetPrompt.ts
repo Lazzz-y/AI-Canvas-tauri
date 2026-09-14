@@ -107,6 +107,19 @@ export function resolveDramaActionMediaRef(asset: DramaAsset | undefined, action
   };
 }
 
+/** 声音引用读取库内音频；默认优先主音色，指定片段失效时不替换为其他声音。 */
+export function resolveDramaVoiceRef(asset: DramaAsset | undefined, clipId?: string) {
+  if (asset?.kind !== 'character') return null;
+  const clips = asset.voiceClips ?? [];
+  const clip = clipId !== undefined
+    ? clips.find((item) => item.id === clipId)
+    : clips.find((item) => item.id === asset.primaryVoiceClipId && item.audioUrl?.trim())
+      ?? clips.find((item) => item.audioUrl?.trim());
+  const url = clip?.audioUrl?.trim();
+  if (!clip || !clip.id || !url) return null;
+  return { ...clip, url, label: `${asset.name} · ${clip.label?.trim() || '音频'}` };
+}
+
 /** 已绑图像节点且该节点已有图时，才视为「可引图」；指定 referenceImageId 时引用角色的那一张参考图 */
 export function resolveDramaAssetImageRef(
   asset: DramaAsset,

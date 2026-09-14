@@ -12,6 +12,7 @@ import {
   formatDramaAssetTextBrief,
   resolveDramaAssetImageRef,
   resolveDramaActionMediaRef,
+  resolveDramaVoiceRef,
 } from '../dramaAssetPrompt';
 import type { DramaAsset } from '../../types/dramaAssets';
 import { formatShotRowBrief, isShotRowBlank, readShotFrameSource } from '../../types';
@@ -195,8 +196,15 @@ export async function resolvePromptToChatContent(rawPrompt: string): Promise<{
     if (match[2] !== undefined) {
       const dramaId = match[2];
       const dramaName = match[3] || '';
-      const { assetId, referenceImageId, mergeAll, actionId, actionMediaId } = parseDramaMentionId(dramaId);
+      const { assetId, referenceImageId, mergeAll, actionId, actionMediaId, voiceClipId } = parseDramaMentionId(dramaId);
       const dramaAsset = findDramaAsset(store.dramaAssets, assetId);
+      if (voiceClipId !== undefined) {
+        const voice = resolveDramaVoiceRef(dramaAsset, voiceClipId);
+        if (!voice) throw new Error(`角色音频引用已失效：${dramaName || '未命名角色'}`);
+        parts.push(`${voice.label}（${voice.url}）`);
+        lastIndex = chipRegex.lastIndex;
+        continue;
+      }
       if (actionId !== undefined) {
         const media = resolveDramaActionMediaRef(dramaAsset, actionId, actionMediaId);
         if (!media) throw new Error(`动作素材引用已失效：${dramaName || '未命名动作'}`);
@@ -402,15 +410,23 @@ export interface PromptMediaReferences {
   audioUrls: string[];
 }
 
-/** 收集提示词中直接 @ 的视频/音频节点产物，不改变提示词文本。 */
+/** 收集提示词中直接 @ 的视频/音频节点和角色音频，不改变提示词文本。 */
 export function collectPromptNodeMediaUrls(
   rawPrompt: string,
 ): Pick<PromptMediaReferences, 'references' | 'videoUrls' | 'audioUrls'> {
-  const { nodes } = useAppStore.getState();
+  const { nodes, dramaAssets } = useAppStore.getState();
   const references: MediaReference[] = [];
 
-  for (const match of rawPrompt.matchAll(/@\{([^:]+):[^}]+\}/g)) {
-    const rawNodeId = match[1];
+  for (const match of rawPrompt.matchAll(/@drama\{([^:]+):([^}]+)\}|@\{([^:]+):[^}]+\}/g)) {
+    if (match[1] !== undefined) {
+      const { assetId, voiceClipId } = parseDramaMentionId(match[1]);
+      if (voiceClipId === undefined) continue;
+      const voice = resolveDramaVoiceRef(findDramaAsset(dramaAssets, assetId), voiceClipId);
+      if (!voice) throw new Error(`角色音频引用已失效：${match[2] || '未命名角色'}`);
+      references.push({ kind: 'audio', url: voice.url, filePath: voice.filePath, origin: 'prompt', role: 'reference_audio' });
+      continue;
+    }
+    const rawNodeId = match[3];
     if (rawNodeId.includes('/cell/')) continue;
     const node = nodes.find((item) => item.id === rawNodeId);
     if (!node) continue;
@@ -541,7 +557,20 @@ async function resolvePromptReferences(
     }
 
     if (dramaId !== undefined) {
-      const { assetId, referenceImageId, actionId, actionMediaId } = parseDramaMentionId(dramaId);
+      const { assetId, referenceImageId, actionId, actionMediaId, voiceClipId } = parseDramaMentionId(dramaId);
+      if (voiceClipId !== undefined) {
+        const voice = resolveDramaVoiceRef(findDramaAsset(store.dramaAssets, assetId), voiceClipId);
+        if (!voice) throw new Error(`角色音频引用已失效：${dramaName || '未命名角色'}`);
+        if (!extractMediaReferences) return voice.url;
+        const key = `drama:${dramaId}`;
+        let idx = audioKeyToIndex.get(key);
+        if (idx === undefined) {
+          idx = audioKeyToIndex.size + 1;
+          audioKeyToIndex.set(key, idx);
+          mediaReferences.push({ kind: 'audio', url: voice.url, filePath: voice.filePath, origin: 'prompt', role: 'reference_audio' });
+        }
+        return `音频${idx}`;
+      }
       if (actionId !== undefined) {
         const media = resolveDramaActionMediaRef(findDramaAsset(store.dramaAssets, assetId), actionId, actionMediaId);
         if (!media) throw new Error(`动作素材引用已失效：${dramaName || '未命名动作'}`);
