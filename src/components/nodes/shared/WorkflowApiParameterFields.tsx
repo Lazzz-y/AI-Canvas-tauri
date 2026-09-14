@@ -1,5 +1,6 @@
 import type { DeclarativeWorkflowApiManifest } from '../../../types/workflowApi';
 import { useT } from '../../../i18n';
+import Select from '../../shared/Select';
 
 export default function WorkflowApiParameterFields({ manifest, values = {}, onChange, disabled }: {
   manifest: DeclarativeWorkflowApiManifest; values?: Record<string, string>; onChange: (values: Record<string, string>) => void; disabled?: boolean;
@@ -18,10 +19,12 @@ export default function WorkflowApiParameterFields({ manifest, values = {}, onCh
     }).join(' · ')}</p>
     {Object.entries(manifest.parameters).map(([name, spec]) => <label key={name} className="flex flex-wrap items-center gap-2 text-xs">
       <span>{spec.label || name}{spec.required ? ' *' : ''}</span>
-      {spec.type === 'boolean' || spec.options ? <select className="ui-select__control min-w-0 flex-1" disabled={disabled} value={currentValue(name)} onChange={(event) => change(name, event.target.value)}>
-        <option value="">{spec.default === undefined ? t('未填写') : `${t('默认值')}：${spec.default}`}</option>
-        {(spec.type === 'boolean' ? ['true', 'false'] : spec.options ?? []).map((value) => <option key={String(value)} value={String(value)}>{String(value)}</option>)}
-      </select> : <input className="ui-input min-w-0 flex-1" disabled={disabled} type={spec.type === 'string' ? 'text' : 'number'}
+      {spec.type === 'boolean' || spec.options ? <Select className="min-w-0 flex-1" fixedMenu aria-label={spec.label || name}
+        disabled={disabled} value={currentValue(name)} onChange={(value) => change(name, value)}
+        options={[
+          { value: '', label: spec.default === undefined ? t('未填写') : `${t('默认值')}：${spec.default}` },
+          ...(spec.type === 'boolean' ? ['true', 'false'] : spec.options ?? []).map((value) => ({ value: String(value), label: String(value) })),
+        ]} /> : <input className="ui-input min-w-0 flex-1" disabled={disabled} type={spec.type === 'string' ? 'text' : 'number'}
         step={spec.type === 'integer' ? 1 : 'any'} min={spec.min} max={spec.max} value={currentValue(name)}
         placeholder={spec.default === undefined ? t('未填写') : String(spec.default)} onChange={(event) => change(name, event.target.value)} />}
     </label>)}

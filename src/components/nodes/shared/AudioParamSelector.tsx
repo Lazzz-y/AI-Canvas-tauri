@@ -6,6 +6,7 @@ import { memo, useEffect, useRef, useState } from 'react';
 import type { AudioOutputFormat, AudioSpeechReference, AudioSpeechSettings, AudioSpeechWorkflowControls, AudioTtsVoice } from '../../../types/aiTypes';
 import type { AudioGenerationPurpose } from '../../../types/media';
 import AnimatedButton from '../../shared/AnimatedButton';
+import Select from '../../shared/Select';
 import { AUDIO_SPEECH_PACES, AUDIO_SPEECH_VOICES, audioSpeechModeIssue, normalizeAudioSpeechSettings } from '../../../services/ai/audioSpeechSettings';
 import { useT } from '../../../i18n';
 
@@ -80,6 +81,8 @@ function AudioParamSelector({
   useEffect(() => {
     if (!open) return;
     const closeOnOutsideClick = (event: MouseEvent) => {
+      // UI Kit 下拉菜单挂在 body，选择音色时仍属于当前参数面板。
+      if (event.target instanceof Element && event.target.closest('[data-ui-select-portal]')) return;
       if (ref.current && !ref.current.contains(event.target as Node)) setOpen(false);
     };
     document.addEventListener('mousedown', closeOnOutsideClick, true);
@@ -198,15 +201,14 @@ function AudioParamSelector({
               <div className="rh-v5-meta-panel">
                 <label className="rh-vram-adv-row">
                   <span className="rh-vram-adv-label">{t('音色')}</span>
-                  <select
-                    className="w-full rounded-md border border-canvas-border bg-canvas-bg px-2 py-1.5 text-xs text-canvas-text outline-none focus:border-orange-400"
+                  <Select
+                    className="w-full"
+                    fixedMenu
+                    aria-label={t('音色')}
                     value={voice}
-                    onChange={(event) => onChangeVoice?.(event.target.value as AudioTtsVoice)}
-                  >
-                    {VOICES.map((item) => (
-                      <option key={item.value} value={item.value}>{item.label}</option>
-                    ))}
-                  </select>
+                    onChange={(value) => onChangeVoice?.(value)}
+                    options={VOICES}
+                  />
                 </label>
 
                 <div className="img-rp-quality-area">

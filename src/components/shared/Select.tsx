@@ -9,6 +9,7 @@
  */
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import { calcAnchoredPosition } from '../../utils/popupPosition';
 
 export interface SelectOption<T extends string = string> {
   value: T;
@@ -100,17 +101,29 @@ export default function Select<T extends string = string>({
     const updatePosition = () => {
       const rect = wrapRef.current?.getBoundingClientRect();
       if (!rect || !menu) return;
+      const availableHeight = Math.max(rect.top - 12, window.innerHeight - rect.bottom - 12, 0);
+      const width = Math.min(rect.width, Math.max(0, window.innerWidth - 16));
       menu.style.position = 'fixed';
-      menu.style.top = `${rect.bottom + 4}px`;
-      menu.style.left = `${rect.left}px`;
-      menu.style.minWidth = `${rect.width}px`;
-      menu.style.maxHeight = `calc(100vh - ${rect.bottom + 12}px)`;
+      menu.style.width = `${width}px`;
+      menu.style.minWidth = '0';
+      menu.style.maxHeight = `${Math.min(320, availableHeight)}px`;
       menu.style.zIndex = '300';
+      const position = calcAnchoredPosition(rect, menu.offsetWidth, menu.offsetHeight, 4);
+      menu.style.top = `${position.top}px`;
+      menu.style.left = `${position.left}px`;
     };
     updatePosition();
+    const selectedOption = menu.querySelector<HTMLElement>('[aria-selected="true"]');
+    if (selectedOption) {
+      menu.scrollTop = Math.max(0, selectedOption.offsetTop - (menu.clientHeight - selectedOption.offsetHeight) / 2);
+    }
+    const observer = new ResizeObserver(updatePosition);
+    observer.observe(menu);
+    if (wrapRef.current) observer.observe(wrapRef.current);
     window.addEventListener('resize', updatePosition);
     document.addEventListener('scroll', updatePosition, true);
     return () => {
+      observer.disconnect();
       window.removeEventListener('resize', updatePosition);
       document.removeEventListener('scroll', updatePosition, true);
       menu.removeAttribute('style');
@@ -128,7 +141,7 @@ export default function Select<T extends string = string>({
       role="option"
       aria-selected={value === option.value}
       disabled={option.disabled}
-      className={`ui-menu__item${value === option.value ? ' is-active' : ''}${option.disabled ? ' is-disabled' : ''}`}
+      className={`ui-menu__item break-words${value === option.value ? ' is-active' : ''}${option.disabled ? ' is-disabled' : ''}`}
       onClick={() => {
         onChange(option.value);
         setOpen(false);
@@ -140,7 +153,7 @@ export default function Select<T extends string = string>({
 
   const menu = open ? (
     <div
-      className="ui-menu"
+      className="ui-menu overscroll-contain"
       role="listbox"
       ref={menuRef}
       data-ui-select-portal={fixedMenu ? '' : undefined}
