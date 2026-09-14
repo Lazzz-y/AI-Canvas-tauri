@@ -1056,7 +1056,8 @@ function CanvasInner() {
         (liveNode.data?.type === 'ai-image' && liveNode.data?.imageUrl) ||
         (liveNode.data?.type === 'ai-animation' && liveNode.data?.imageUrl) ||
         (liveNode.data?.type === 'ai-panorama' && liveNode.data?.imageUrl) ||
-        (liveNode.data?.type === 'ai-video' && liveNode.data?.videoUrl);
+        (liveNode.data?.type === 'ai-video' && liveNode.data?.videoUrl) ||
+        (liveNode.data?.type === 'ai-audio' && liveNode.data?.audioUrl);
       if (isSilentOnFirstClick) {
         closeNodeDialog();
         return;

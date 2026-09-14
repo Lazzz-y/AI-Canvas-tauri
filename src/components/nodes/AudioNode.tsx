@@ -189,6 +189,7 @@ function AIAudioNode({ id, data, selected }: { id: string; data: BaseNodeData; s
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const waveformRef = useRef<WaveformData | null>(null);
   const animFrameRef = useRef(0);
+  const waveformPressSelectedRef = useRef<boolean | null>(null);
 
   const { displayLabel, handleRename } = useNodeRename(id, data, t('粘贴音频'));
 
@@ -473,7 +474,19 @@ function AIAudioNode({ id, data, selected }: { id: string; data: BaseNodeData; s
             </button>
           )}
           {data.audioUrl ? (
-            <div className="audio-waveform-wrapper" onClick={togglePlay} onContextMenu={(e) => e.preventDefault()}>
+            <div
+              className="audio-waveform-wrapper"
+              onPointerDownCapture={() => { waveformPressSelectedRef.current = !!selected; }}
+              onPointerCancel={() => { waveformPressSelectedRef.current = null; }}
+              onClick={(e) => {
+                // 画布可能在 mousedown 时选中节点，需使用本次按下前的状态。
+                const wasSelected = waveformPressSelectedRef.current ?? !!selected;
+                waveformPressSelectedRef.current = null;
+                if (!wasSelected || !selected) return;
+                togglePlay(e);
+              }}
+              onContextMenu={(e) => e.preventDefault()}
+            >
               <canvas ref={canvasRef} className="audio-waveform-canvas" width={WAVEFORM_COLUMNS} height={80} />
               <audio
                 ref={audioRef}

@@ -1060,12 +1060,22 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
       .map((item) => {
         const references = (item.referenceImages ?? []).filter((reference) => !!reference.imageUrl);
         const multiRef = references.length > 1;
-        const hasActions = dramaAssets.characters.some((character) => character.id === item.id && !!character.actions?.length);
+        const character = item.kind === 'character'
+          ? dramaAssets.characters.find((candidate) => candidate.id === item.id)
+          : undefined;
+        const hasActions = !!character?.actions?.length;
+        const avatarReference = character?.referenceImages?.find((reference) => reference.id === character.avatarReferenceImageId)
+          ?? character?.referenceImages?.find((reference) => reference.id === character.primaryReferenceImageId)
+          ?? character?.referenceImages?.[0];
+        const avatarCrop = avatarReference?.imageUrl && avatarReference.id === character?.avatarReferenceImageId
+          ? character?.avatarCrop
+          : undefined;
         const thumb = dramaThumbOf(item) || references[0]?.imageUrl;
         return {
           key: `drama:${item.id}`,
           label: item.name,
-          thumbnailUrl: thumb,
+          thumbnailUrl: avatarReference?.imageUrl || thumb,
+          thumbnailCrop: avatarCrop,
           icon: isAudioNode ? MEDIA_ICONS.audio : 'mdi:account-box-outline',
           badge: isAudioNode ? '音频' : multiRef ? `${references.length} 图` : thumb ? undefined : '简介',
           onSelect: () => {
