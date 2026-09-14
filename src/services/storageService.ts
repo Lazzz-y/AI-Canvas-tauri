@@ -30,7 +30,7 @@ import {
   type SkillRecord,
   type CustomStyleRecord,
 } from './indexedDbService';
-import { exists, writeFile } from '@tauri-apps/plugin-fs';
+import { exists, mkdir, writeFile } from '@tauri-apps/plugin-fs';
 import type { BaseNodeData, ProjectSettings } from '../types';
 import {
   getAssetUrlFromPath,
@@ -98,6 +98,7 @@ interface MediaSerializationContext {
   projectId: string;
   projectDir: string;
   cache: Map<string, Promise<MaterializedInlineMedia>>;
+  directoryReady?: Promise<void>;
 }
 
 type InlineMediaKind = keyof typeof MEDIA_DATA_URL_BYTE_LIMITS;
@@ -174,7 +175,11 @@ async function persistTransientMedia(
     const digest = await sha256BytesHex(bytes);
     const fileName = `${inlineMediaPrefix(kind)}-${digest.slice(0, 20)}${inlineMediaExtension(source, kind)}`;
     const filePath = joinPath(context.projectDir, fileName);
-    if (!await exists(filePath).catch(() => false)) {
+    // 使用本次保存捕获的目录，等待初始化完成后再访问媒体文件。
+    // 加载旧项目时的媒体迁移也经过这里，不能依赖 Store 后台创建目录。
+    context.directoryReady ??= mkdir(context.projectDir, { recursive: true });
+    await context.directoryReady;
+    if (!await exists(filePath)) {
       await writeFile(filePath, bytes);
       notifyProjectDiskChanged();
     }

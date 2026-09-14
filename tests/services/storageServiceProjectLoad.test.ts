@@ -6,11 +6,12 @@ const mocks = vi.hoisted(() => ({
   identifyAsset: vi.fn(),
   walkDirectoryFiles: vi.fn(),
   writeFile: vi.fn(),
+  mkdir: vi.fn(),
   notifyProjectDiskChanged: vi.fn(),
   resolveUniqueDestPath: vi.fn(async (dir: string, name: string) => `${dir}/${name}`),
 }));
 
-vi.mock('@tauri-apps/plugin-fs', () => ({ exists: mocks.exists, writeFile: mocks.writeFile }));
+vi.mock('@tauri-apps/plugin-fs', () => ({ exists: mocks.exists, mkdir: mocks.mkdir, writeFile: mocks.writeFile }));
 vi.mock('../../src/services/fs/core', () => ({
   buildNodeFileName: (label: string | undefined, ext: string, fallback: string) => `${label || fallback}${ext}`,
   getAssetUrlFromPath: vi.fn(async (path: string) => `asset://${path}`),
@@ -44,6 +45,7 @@ describe('project loading tolerates asset recovery failures', () => {
     mocks.walkDirectoryFiles.mockRejectedValue(new Error('directory scan unavailable'));
     mocks.resolveUniqueDestPath.mockImplementation(async (dir: string, name: string) => `${dir}/${name}`);
     mocks.writeFile.mockResolvedValue(undefined);
+    mocks.mkdir.mockResolvedValue(undefined);
   });
 
   it('returns the persisted canvas when scanning and indexing an asset fail', async () => {
@@ -346,6 +348,51 @@ describe('project loading tolerates asset recovery failures', () => {
     });
     expect(record.nodes[0].data).not.toHaveProperty('filePath');
     expect(JSON.stringify(record.nodes[0])).not.toContain('data:image');
+  });
+
+  it('creates the project directory before checking or writing inline media', async () => {
+    let directoryReady = false;
+    mocks.mkdir.mockImplementation(async () => {
+      await Promise.resolve();
+      directoryReady = true;
+    });
+    mocks.exists.mockImplementation(async () => {
+      if (!directoryReady) throw new Error('project directory is missing');
+      return false;
+    });
+    mocks.writeFile.mockImplementation(async () => {
+      if (!directoryReady) throw new Error('project directory is missing');
+    });
+    const projectId = `project-create-directory-${Date.now()}`;
+
+    await saveProject({
+      id: projectId, name: '新项目', createdAt: 1, updatedAt: 2,
+      nodes: [{ id: 'inline-node', data: { imageUrl: 'data:image/png;base64,AQID' } }],
+      edges: [],
+    });
+
+    expect(mocks.mkdir).toHaveBeenCalledExactlyOnceWith('/project/data', { recursive: true });
+    expect(mocks.writeFile).toHaveBeenCalledTimes(1);
+    expect(await getProjectById(projectId)).toBeDefined();
+  });
+
+  it.each(['mkdir', 'exists'] as const)('preserves the saved project when %s rejects access', async (operation) => {
+    const projectId = `project-access-denied-${operation}-${Date.now()}`;
+    const original = {
+      id: projectId, name: '已保存项目', createdAt: 1, updatedAt: 2,
+      nodes: [], edges: [],
+    };
+    await saveProjectToDb(original);
+    const denied = new Error('forbidden path');
+    mocks[operation].mockRejectedValue(denied);
+
+    await expect(saveProject({
+      ...original, updatedAt: 3,
+      nodes: [{ id: 'inline-node', data: { imageUrl: 'data:image/png;base64,AQID' } }],
+    })).rejects.toBe(denied);
+
+    expect(mocks.writeFile).not.toHaveBeenCalled();
+    expect(await getProjectById(projectId)).toMatchObject(original);
   });
 
   it('automatically migrates inline media when an existing project is loaded', async () => {
