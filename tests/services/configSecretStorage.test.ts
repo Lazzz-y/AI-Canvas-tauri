@@ -256,6 +256,128 @@ describe('config persistence keeps secrets out of IndexedDB', () => {
     expect(secretStore.entries.has('provider/a')).toBe(false);
   });
 
+  it('persists ComfyUI server removal through a fresh Store load', async () => {
+    const original = {
+      providers: {},
+      comfyServers: [
+        { id: 'image-server', name: '图片服务', url: 'http://image.test' },
+        { id: 'video-server', name: '视频服务', url: 'http://video.test' },
+      ],
+    };
+    await saveConfigToDb(original);
+    const store = configStore();
+    await store.getState().loadConfig();
+
+    store.getState().updateConfig({
+      comfyServers: store.getState().config.comfyServers?.filter(
+        (server) => server.id !== 'video-server',
+      ),
+    });
+    await store.getState().saveConfig();
+
+    const fresh = configStore();
+    await fresh.getState().loadConfig();
+    expect(fresh.getState().config.comfyServers).toEqual([
+      { id: 'image-server', name: '图片服务', url: 'http://image.test' },
+    ]);
+  });
+
+  it('merges ComfyUI server removal with a concurrent edit to the same list', async () => {
+    const original = {
+      providers: {},
+      comfyServers: [
+        { id: 'image-server', name: '图片服务', url: 'http://image.test' },
+        { id: 'video-server', name: '视频服务', url: 'http://video.test' },
+      ],
+    };
+    await saveConfigToDb(original);
+    const deletingStore = configStore();
+    const editingStore = configStore();
+    await deletingStore.getState().loadConfig();
+    await editingStore.getState().loadConfig();
+
+    editingStore.getState().updateConfig({
+      comfyServers: [
+        { id: 'image-server', name: '图片服务', url: 'http://image.test' },
+        { id: 'video-server', name: '视频服务（已编辑）', url: 'http://video-new.test' },
+        { id: 'audio-server', name: '音频服务', url: 'http://audio.test' },
+      ],
+    });
+    await editingStore.getState().saveConfig();
+    deletingStore.getState().updateConfig({
+      comfyServers: deletingStore.getState().config.comfyServers?.filter(
+        (server) => server.id !== 'image-server',
+      ),
+    });
+    await deletingStore.getState().saveConfig();
+
+    expect(await loadConfigFromDb()).toHaveProperty('comfyServers', [
+      { id: 'video-server', name: '视频服务（已编辑）', url: 'http://video-new.test' },
+      { id: 'audio-server', name: '音频服务', url: 'http://audio.test' },
+    ]);
+  });
+
+  it('applies the same pure-removal merge to other identified config lists', async () => {
+    const textModel = {
+      id: 'text-model',
+      name: '文本模型',
+      modelId: 'text-v1',
+      category: 'text' as const,
+      providerConfigId: 'custom',
+    };
+    const imageModel = {
+      id: 'image-model',
+      name: '图片模型',
+      modelId: 'image-v1',
+      category: 'image' as const,
+      providerConfigId: 'custom',
+    };
+    await saveConfigToDb({ providers: {}, generalModels: [textModel, imageModel] });
+    const deletingStore = configStore();
+    const editingStore = configStore();
+    await deletingStore.getState().loadConfig();
+    await editingStore.getState().loadConfig();
+
+    editingStore.getState().updateGeneralModel('image-model', { name: '图片模型（已编辑）' });
+    editingStore.getState().addGeneralModel({
+      name: '视频模型',
+      modelId: 'video-v1',
+      category: 'video',
+      providerConfigId: 'custom',
+    });
+    await editingStore.getState().saveConfig();
+    deletingStore.getState().removeGeneralModel('text-model');
+    await deletingStore.getState().saveConfig();
+
+    const saved = await loadConfigFromDb() as { generalModels: Array<{ id: string; name: string }> };
+    expect(saved.generalModels).toHaveLength(2);
+    expect(saved.generalModels).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'image-model', name: '图片模型（已编辑）' }),
+      expect.objectContaining({ name: '视频模型' }),
+    ]));
+  });
+
+  it('merges removal from a primitive config list without dropping concurrent additions', async () => {
+    const original = { providers: {}, assetFolders: ['D:/assets/one', 'D:/assets/two'] };
+    await saveConfigToDb(original);
+    const deletingStore = configStore();
+    const editingStore = configStore();
+    await deletingStore.getState().loadConfig();
+    await editingStore.getState().loadConfig();
+
+    editingStore.getState().updateConfig({
+      assetFolders: [...(editingStore.getState().config.assetFolders ?? []), 'D:/assets/three'],
+    });
+    await editingStore.getState().saveConfig();
+    deletingStore.getState().updateConfig({ assetFolders: ['D:/assets/two'] });
+    await deletingStore.getState().saveConfig();
+
+    expect(await loadConfigFromDb()).toHaveProperty('assetFolders', [
+      'D:/assets/two',
+      'D:/assets/three',
+    ]);
+  });
+
   it('still rejects provider deletion after its ordinary fields changed elsewhere', async () => {
     const original = {
       providers: {

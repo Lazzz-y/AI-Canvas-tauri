@@ -886,6 +886,81 @@ function rebaseDeletedProviderRevisions(
   return rebased ?? baseline;
 }
 
+function configItemIdentity(item: unknown): string | null {
+  if (typeof item === 'string') return `string:${item}`;
+  if (typeof item === 'number' && Number.isFinite(item)) return `number:${item}`;
+  if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
+  const id = Reflect.get(item, 'id');
+  return typeof id === 'string' && id ? `id:${id}` : null;
+}
+
+function identifiedItems(value: unknown): Map<string, unknown> | null {
+  if (!Array.isArray(value)) return null;
+  const items = new Map<string, unknown>();
+  for (const item of value) {
+    const identity = configItemIdentity(item);
+    if (identity === null || items.has(identity)) return null;
+    items.set(identity, item);
+  }
+  return items;
+}
+
+function configValueAtPath(root: Record<string, unknown>, path: string[]): unknown {
+  let value: unknown = root;
+  for (const key of path) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+    value = Reflect.get(value, key);
+  }
+  return value;
+}
+
+/**
+ * 带稳定身份的配置列表允许合并纯删除：删除目标以调用时基线为准，
+ * 同时发生的其他条目编辑和新增从最新持久化值保留。
+ */
+function rebaseIdentifiedArrayRemovals(
+  baseline: Record<string, unknown>,
+  current: Record<string, unknown>,
+  next: Record<string, unknown>,
+  changes: ConfigChange[],
+): { baseline: Record<string, unknown>; next: Record<string, unknown> } {
+  let rebasedBaseline = baseline;
+  let rebasedNext = next;
+  for (const change of changes) {
+    const beforeItems = identifiedItems(change.before);
+    const afterItems = identifiedItems(change.after);
+    if (!beforeItems || !afterItems || beforeItems.size <= afterItems.size) continue;
+    const beforeOrder = [...beforeItems.keys()];
+    let previousIndex = -1;
+    const pureRemoval = [...afterItems].every(([id, item]) => {
+      const index = beforeOrder.indexOf(id);
+      if (index <= previousIndex || !configValuesEqual(beforeItems.get(id), item)) return false;
+      previousIndex = index;
+      return true;
+    });
+    if (!pureRemoval) continue;
+    const currentValue = configValueAtPath(current, change.path);
+    const currentItems = identifiedItems(currentValue);
+    if (!currentItems) continue;
+    const removedIds = new Set([...beforeItems.keys()].filter((id) => !afterItems.has(id)));
+    const merged = (currentValue as unknown[]).filter((item) => {
+      const identity = configItemIdentity(item);
+      return identity !== null && !removedIds.has(identity);
+    });
+    rebasedBaseline = applyConfigPatch(rebasedBaseline, [{
+      path: change.path,
+      before: configValueAtPath(rebasedBaseline, change.path),
+      after: currentValue,
+    }], false);
+    rebasedNext = applyConfigPatch(rebasedNext, [{
+      path: change.path,
+      before: configValueAtPath(rebasedNext, change.path),
+      after: merged,
+    }], false);
+  }
+  return { baseline: rebasedBaseline, next: rebasedNext };
+}
+
 /** 与连接删除同事务持久化；仅含指纹，重启后仍可完成清理。必须在配置队列内调用。 */
 async function completeSecretCleanup(raw: unknown): Promise<unknown> {
   const config = raw as { providers?: Record<string, unknown>; _pendingSecretCleanup?: Record<string, string> } | null;
@@ -930,9 +1005,16 @@ export async function saveConfig(data: unknown, options?: ConfigSaveOptions): Pr
           changedProviders[id] = provider;
         }
         if (next.providers || Object.keys(changedProviders).length) next.providers = providers;
-        baseline = rebaseDeletedProviderRevisions(baseline, configWithoutSecrets(previous), next);
+        const current = configWithoutSecrets(previous);
+        ({ baseline, next } = rebaseIdentifiedArrayRemovals(
+          baseline,
+          current,
+          next,
+          intent.changes,
+        ));
+        baseline = rebaseDeletedProviderRevisions(baseline, current, next);
         // 先检查普通字段与凭据版本冲突，拒绝后不触碰原生凭据。
-        applyConfigPatch(configWithoutSecrets(previous), createConfigPatch(baseline, next));
+        applyConfigPatch(current, createConfigPatch(baseline, next));
         const deleted = Object.keys((baseline.providers ?? {}) as Record<string, unknown>).filter((id) => !providers[id]);
         const cleanup: Record<string, string> = {};
         for (const id of deleted) {
