@@ -467,7 +467,34 @@ export interface AIVideoGenParams {
   referenceMedia?: MediaReference[];
 }
 
+/** 描述式语音控制，独立于厂商原生音色 ID 和精确速度倍率。 */
+export interface AudioSpeechSettings {
+  voiceStyle?: 'male' | 'female' | 'shota' | 'loli' | 'girl' | 'boy';
+  /** 0 很慢、1 偏慢、2 正常、3 偏快、4 很快。 */
+  pace?: number;
+  duration?: number;
+}
+
+export interface AudioSpeechReference {
+  key: string;
+  label: string;
+  url?: string;
+  token?: string;
+  edgeId?: string;
+  inputId?: string;
+}
+
+export interface AudioSpeechWorkflowControls {
+  encodeId: string;
+  textNodeId: string;
+  textKey: string;
+  generatorId: string;
+  referenceInputId?: string;
+  duration: number;
+}
+
 export interface AIAudioGenParams {
+  audioSpeechSettings?: AudioSpeechSettings;
   workflowApiTaskContext?: import('./workflowApi').CloudWorkflowTaskContext;
   runninghubModelParameters?: Record<string, string>;
   runninghubTaskContext?: import('./runninghub').RunningHubTaskContext;

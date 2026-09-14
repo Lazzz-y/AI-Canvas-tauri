@@ -243,6 +243,7 @@ export async function executeGeneration(
         prompt: effectivePrompt,
         model: nodeModel,
         provider: nodeProvider,
+        audioSpeechSettings: data.audioSpeechSettings,
         audioVoice: data.audioVoice,
         audioFormat: data.audioFormat,
         audioSpeed: data.audioSpeed,
@@ -276,6 +277,7 @@ export async function executeGeneration(
         output: persisted.outputUrl, nodeType: 'ai-audio', model: nodeModel, provider: nodeProvider,
         status: 'success', mediaUrl: persisted.mediaUrl, filePath: persisted.filePath,
         params: {
+          audioSpeechSettings: data.audioSpeechSettings,
           audioVoice: data.audioVoice,
           audioFormat: data.audioFormat,
           audioSpeed: data.audioSpeed,

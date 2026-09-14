@@ -253,6 +253,7 @@ async function executeOneNode(node: Node<BaseNodeData>, ctx: BatchContext): Prom
         prompt,
         model: d.model!,
         provider: d.provider!,
+        audioSpeechSettings: d.audioSpeechSettings,
         audioVoice: d.audioVoice,
         audioFormat: d.audioFormat,
         audioSpeed: d.audioSpeed,
@@ -290,6 +291,7 @@ async function executeOneNode(node: Node<BaseNodeData>, ctx: BatchContext): Prom
         mediaUrl: persisted.mediaUrl,
         filePath: persisted.filePath,
         params: {
+          audioSpeechSettings: d.audioSpeechSettings,
           audioVoice: d.audioVoice,
           audioFormat: d.audioFormat,
           audioSpeed: d.audioSpeed,

@@ -11,8 +11,9 @@ import { derivedNodePlacement } from '../../store/store.utils';
 import type { AnimationAction, BaseNodeData, CameraGenerationSettings, ImagePostProcess, ModelOption } from '../../types';
 import { ANIMATION_FRAME_GRIDS } from '../../types';
 import { generateShotlistRows } from '../../services/shotlistService';
-import { MAX_IMAGE_BATCH_COUNT, type AudioOutputFormat, type AudioTtsVoice, type VideoReferenceItem } from '../../types/aiTypes';
+import { MAX_IMAGE_BATCH_COUNT, type AudioSpeechSettings, type AudioSpeechReference, type AudioOutputFormat, type AudioTtsVoice, type VideoReferenceItem } from '../../types/aiTypes';
 import { generateText, generateImage, generateImagesBatch, generateVideo, generateAudio, buildPanoramaPrompt } from '../../services/aiService';
+import { removeAudioSpeechReference } from '../../services/ai/audioSpeechSettings';
 import { persistAudioGenerationResult } from '../../services/ai/generateAudio';
 import { persistMediaUrlToProjectData } from '../../services/fileService';
 import {
@@ -627,6 +628,7 @@ function AINodeDialog() {
           prompt: effectivePrompt,
           model: nodeModel,
           provider: nodeProvider,
+          audioSpeechSettings: latestData.audioSpeechSettings,
           audioVoice: latestData.audioVoice,
           audioFormat: latestData.audioFormat,
           audioSpeed: latestData.audioSpeed,
@@ -671,6 +673,7 @@ function AINodeDialog() {
           mediaUrl: persisted.mediaUrl,
           filePath: persisted.filePath,
           params: {
+            audioSpeechSettings: latestData.audioSpeechSettings,
             audioVoice: latestData.audioVoice,
             audioFormat: latestData.audioFormat,
             audioSpeed: latestData.audioSpeed,
@@ -904,6 +907,22 @@ function AINodeDialog() {
     (value: VideoReferenceItem[]) => updateNodeData(activeNodeId!, { videoReferences: value }),
     [activeNodeId, updateNodeData]
   );
+
+  const onChangeAudioSpeechSettings = useCallback((value: AudioSpeechSettings) => {
+    updateContinuousNodeData({ audioSpeechSettings: value });
+  }, [updateContinuousNodeData]);
+
+  const onRemoveAudioReference = useCallback((reference: AudioSpeechReference) => {
+    finishContinuousEdit();
+    const state = useAppStore.getState();
+    const current = state.nodes.find((item) => item.id === activeNodeId)?.data;
+    if (!current || !activeNodeId) return;
+    if (reference.edgeId) {
+      state.onEdgesChange([{ type: 'remove', id: reference.edgeId }]);
+    } else {
+      updateNodeData(activeNodeId, removeAudioSpeechReference(current.prompt ?? '', current.workflowInputs, reference));
+    }
+  }, [activeNodeId, finishContinuousEdit, updateNodeData]);
 
   const onChangeAudioVoice = useCallback(
     (value: AudioTtsVoice) => updateNodeData(activeNodeId!, { audioVoice: value }),
@@ -1168,6 +1187,9 @@ function AINodeDialog() {
           onChangeSeedanceDuration={onChangeSeedanceDuration}
           onChangeGenerateAudio={onChangeGenerateAudio}
           audioPurpose={audioPurpose}
+          audioSpeechSettings={data.audioSpeechSettings}
+          onChangeAudioSpeechSettings={onChangeAudioSpeechSettings}
+          onRemoveAudioReference={onRemoveAudioReference}
           audioVoice={data.audioVoice ?? 'alloy'}
           audioFormat={data.audioFormat ?? 'wav'}
           audioSpeed={data.audioSpeed ?? 1}

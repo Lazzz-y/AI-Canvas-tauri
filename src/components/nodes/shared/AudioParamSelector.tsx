@@ -3,12 +3,19 @@
  */
 import { Icon } from '@iconify/react';
 import { memo, useEffect, useRef, useState } from 'react';
-import type { AudioOutputFormat, AudioTtsVoice } from '../../../types/aiTypes';
+import type { AudioOutputFormat, AudioSpeechReference, AudioSpeechSettings, AudioSpeechWorkflowControls, AudioTtsVoice } from '../../../types/aiTypes';
 import type { AudioGenerationPurpose } from '../../../types/media';
 import AnimatedButton from '../../shared/AnimatedButton';
+import { AUDIO_SPEECH_PACES, AUDIO_SPEECH_VOICES, audioSpeechModeIssue, normalizeAudioSpeechSettings } from '../../../services/ai/audioSpeechSettings';
 import { useT } from '../../../i18n';
 
 interface AudioParamSelectorProps {
+  speechControls?: AudioSpeechWorkflowControls;
+  speechSettings?: AudioSpeechSettings;
+  references?: AudioSpeechReference[];
+  onChangeSpeechSettings?: (value: AudioSpeechSettings) => void;
+  onAddReference?: () => void;
+  onRemoveReference?: (reference: AudioSpeechReference) => void;
   purpose?: AudioGenerationPurpose;
   voice?: AudioTtsVoice;
   format?: AudioOutputFormat;
@@ -41,6 +48,12 @@ const VOICES: Array<{ value: AudioTtsVoice; label: string }> = [
 const FORMATS: AudioOutputFormat[] = ['wav', 'opus', 'aac', 'flac', 'pcm'];
 
 function AudioParamSelector({
+  speechControls,
+  speechSettings,
+  references = [],
+  onChangeSpeechSettings,
+  onAddReference,
+  onRemoveReference,
   purpose,
   voice = 'alloy',
   format = 'wav',
@@ -84,7 +97,14 @@ function AudioParamSelector({
 
   if (!purpose) return null;
 
-  const triggerLabel = purpose === 'speech'
+  const speech = normalizeAudioSpeechSettings(speechSettings, speechControls?.duration);
+  const hasReference = references.length > 0;
+  const modeIssue = speechControls ? audioSpeechModeIssue(speechControls, hasReference) : undefined;
+  const voiceLabel = AUDIO_SPEECH_VOICES.find((item) => item.value === speech.voiceStyle)!.label;
+  const addReference = () => { setOpen(false); onAddReference?.(); };
+  const triggerLabel = speechControls
+    ? `${hasReference ? t('参考音色') : t(voiceLabel)} · ${t(AUDIO_SPEECH_PACES[speech.pace].label)} · ${speech.duration}s`
+    : purpose === 'speech'
     ? `${voice} · ${format.toUpperCase()} · ${speed}x`
     : `${musicDuration}s${musicBpm ? ` · ${musicBpm} BPM` : ''}`;
 
@@ -107,7 +127,61 @@ function AudioParamSelector({
 
         {open ? (
           <div className="img-ratio-popup ui-schema-popup ui-schema-video-params-popup block">
-            {purpose === 'speech' ? (
+            {speechControls ? (
+              <div className="flex flex-col gap-3 text-xs text-canvas-text" data-audio-speech-mode={hasReference ? 'reference' : 'text'}>
+                <div className="flex items-center justify-between">
+                  <span className="font-medium">{t(hasReference ? '带参考语音' : '纯文本')}</span>
+                  <button type="button" className="ui-btn ui-btn--sm" onClick={addReference}>{t('+ 添加参考')}</button>
+                </div>
+                {hasReference ? (
+                  <div className="flex max-h-32 flex-col gap-2 overflow-y-auto">
+                    {references.map((reference) => (
+                      <div key={reference.key} className="ui-card flex items-center gap-2 p-2">
+                        <Icon icon="mdi:account-voice" width={16} />
+                        <span className="min-w-0 flex-1 truncate" title={reference.label}>{reference.label}{!reference.url ? t('（已失效）') : ''}</span>
+                        <button type="button" className="ui-btn ui-btn--sm" aria-label={t('替换参考 {label}', { label: reference.label })}
+                          onClick={() => { onRemoveReference?.(reference); addReference(); }}>{t('替换')}</button>
+                        <button type="button" className="ui-btn ui-btn--sm" aria-label={t('移除参考 {label}', { label: reference.label })}
+                          onClick={() => onRemoveReference?.(reference)}>{t('移除')}</button>
+                      </div>
+                    ))}
+                    <span className="text-canvas-text-secondary">{t('使用参考语音的音色')}</span>
+                  </div>
+                ) : (
+                  <div>
+                    <div className="mb-2 text-canvas-text-secondary">{t('声音类型')}</div>
+                    <div className="grid grid-cols-3 gap-1.5" role="group" aria-label={t('声音类型')}>
+                      {AUDIO_SPEECH_VOICES.map((item) => (
+                        <button type="button" key={item.value} aria-pressed={speech.voiceStyle === item.value}
+                          className={`ui-btn ui-btn--sm ${speech.voiceStyle === item.value ? 'is-active' : ''}`}
+                          onClick={() => { onChangeSpeechSettings?.({ ...speech, voiceStyle: item.value }); onContinuousEditEnd?.(); }}>
+                          {t(item.label)}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                <label className="flex flex-col gap-2">
+                  <span className="flex justify-between"><span>{t('语速')}</span><span>{t(AUDIO_SPEECH_PACES[speech.pace].label)}</span></span>
+                  <input type="range" className="rh-duration-input" min={0} max={4} step={1} value={speech.pace}
+                    onChange={(event) => onChangeSpeechSettings?.({ ...speech, pace: Number(event.target.value) })}
+                    onPointerUp={onContinuousEditEnd} onKeyUp={onContinuousEditEnd} onBlur={onContinuousEditEnd} />
+                  <span className="flex justify-between text-canvas-text-secondary"><span>{t('慢')}</span><span>{t('正常')}</span><span>{t('快')}</span></span>
+                </label>
+                <label className="flex flex-col gap-2">
+                  <span className="flex items-center justify-between gap-2"><span>{t('生成时长（秒）')}</span>
+                    <input type="number" className="ui-input ui-input--sm w-20" min={1} max={3600} step={1} value={speech.duration}
+                      onChange={(event) => { if (event.target.value) onChangeSpeechSettings?.({ ...speech, duration: Number(event.target.value) }); }}
+                      onBlur={onContinuousEditEnd} />
+                  </span>
+                  <input type="range" className="rh-duration-input" min={1} max={Math.max(60, speech.duration)} step={1} value={speech.duration}
+                    onChange={(event) => onChangeSpeechSettings?.({ ...speech, duration: Number(event.target.value) })}
+                    onPointerUp={onContinuousEditEnd} onKeyUp={onContinuousEditEnd} onBlur={onContinuousEditEnd} />
+                </label>
+                <p className="text-canvas-text-secondary">{t('语速通过描述控制，实际效果以生成结果为准。')}</p>
+                {modeIssue ? <p role="status" className="text-canvas-text-secondary">{t(modeIssue)}</p> : null}
+              </div>
+            ) : purpose === 'speech' ? (
               <div className="rh-v5-meta-panel">
                 <label className="rh-vram-adv-row">
                   <span className="rh-vram-adv-label">{t('音色')}</span>

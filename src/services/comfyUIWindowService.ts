@@ -98,7 +98,7 @@ export function extractComfyUIIONodes(jsonStr: string): WorkflowIONode[] {
     const isDisplayOnly = /showAnything|PreviewAny|DisplayText/i.test(classType);
     if (inputs && !isDisplayOnly && !results.some((item) => item.nodeId === nodeId)) {
       for (const [key, value] of Object.entries(inputs)) {
-        if (/text|prompt|writing/i.test(key) && typeof value === 'string' && value.trim()) {
+        if (/text|prompt|writing|(?:^|\.)instruction$/i.test(key) && typeof value === 'string' && value.trim()) {
           results.push({ nodeId, title: title || classType || key, type: 'prompt' });
           break;
         }

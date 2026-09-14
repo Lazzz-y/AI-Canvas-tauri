@@ -27,6 +27,7 @@ import { getRunningHubModel } from '../../../services/ai/providers/runninghubMod
 import QualityRatioSelector from './QualityRatioSelector';
 import VideoParamSelector from './VideoParamSelector';
 import AudioParamSelector from './AudioParamSelector';
+import { collectAudioSpeechReferences, resolveAudioSpeechWorkflow } from '../../../services/ai/audioSpeechSettings';
 import StyleSelector from './StyleSelector';
 import MentionEditor, { type MentionEditorHandle } from './MentionEditor';
 import SlashCommandMenu from './SlashCommandMenu';
@@ -34,7 +35,7 @@ import PresetManager from './PresetManager';
 import SkillManager from './SkillManager';
 import { expandSkillReferences } from '../../../services/skillPromptService';
 import { MAX_IMAGE_BATCH_COUNT } from '../../../types/aiTypes';
-import type { AudioOutputFormat, AudioTtsVoice, VideoReferenceItem } from '../../../types/aiTypes';
+import type { AudioOutputFormat, AudioSpeechSettings, AudioSpeechReference, AudioTtsVoice, VideoReferenceItem } from '../../../types/aiTypes';
 import type { AudioGenerationPurpose } from '../../../types/media';
 import { useT } from '../../../i18n';
 import WorkflowApiParameterFields from './WorkflowApiParameterFields';
@@ -365,6 +366,9 @@ interface PromptPanelProps {
   onChangeSeedanceRatio?: (value: string | undefined) => void;
   onChangeSeedanceDuration?: (value: number | undefined) => void;
   onChangeGenerateAudio?: (value: boolean | undefined) => void;
+  audioSpeechSettings?: AudioSpeechSettings;
+  onChangeAudioSpeechSettings?: (value: AudioSpeechSettings) => void;
+  onRemoveAudioReference?: (reference: AudioSpeechReference) => void;
   audioPurpose?: AudioGenerationPurpose;
   audioVoice?: AudioTtsVoice;
   audioFormat?: AudioOutputFormat;
@@ -437,6 +441,9 @@ export default function PromptPanel({
   onChangeSeedanceRatio,
   onChangeSeedanceDuration,
   onChangeGenerateAudio,
+  audioSpeechSettings,
+  onChangeAudioSpeechSettings,
+  onRemoveAudioReference,
   audioPurpose,
   audioVoice,
   audioFormat,
@@ -654,6 +661,27 @@ export default function PromptPanel({
     }
   }, [showToast, uploadSkill, t]);
 
+  const selectedAudioWorkflow = nodeType === 'ai-audio' ? workflows.find((item) => item.id === selectedWorkflowId) : undefined;
+  const speechControls = resolveAudioSpeechWorkflow(selectedAudioWorkflow);
+  // 返回稳定标量，避免其他节点移动时让弹窗重渲染。
+  const audioReferenceSnapshot = useAppStore((state) => speechControls ? JSON.stringify(collectAudioSpeechReferences(
+    prompt, nodeId, state.nodes, state.edges, state.dramaAssets, selectedAudioWorkflow, workflowInputs,
+  )) : '[]');
+  const audioReferences = JSON.parse(audioReferenceSnapshot) as AudioSpeechReference[];
+  const addAudioReference = () => {
+    requestAnimationFrame(() => {
+      const editor = promptInputRef.current?.querySelector<HTMLElement>('[contenteditable="true"]');
+      if (!editor) return;
+      editor.focus();
+      const range = document.createRange();
+      range.selectNodeContents(editor);
+      range.collapse(false);
+      const selection = window.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+      document.execCommand('insertText', false, '@');
+    });
+  };
   const runninghubModel = selectedProvider === 'runninghub' ? getRunningHubModel(selectedModel, true) : undefined;
   const runninghubWorkflow = workflows?.find((workflow) => workflow.id === selectedWorkflowId && workflow.adapterType === 'runninghub');
   const workflowApi = workflows?.find((workflow) => workflow.id === selectedWorkflowId && workflow.adapterType === 'workflow-api');
@@ -813,7 +841,13 @@ export default function PromptPanel({
 
         {nodeType === 'ai-audio' && !runninghubWorkflow && !runninghubModel && !workflowApi && (
           <AudioParamSelector
-            purpose={audioPurpose}
+            purpose={speechControls ? 'speech' : audioPurpose}
+            speechControls={speechControls}
+            speechSettings={audioSpeechSettings}
+            references={audioReferences}
+            onChangeSpeechSettings={onChangeAudioSpeechSettings}
+            onAddReference={addAudioReference}
+            onRemoveReference={onRemoveAudioReference}
             voice={audioVoice}
             format={audioFormat}
             speed={audioSpeed}

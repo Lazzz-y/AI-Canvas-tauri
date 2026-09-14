@@ -67,7 +67,18 @@ ComfyUI 在 AI Canvas 里是一种 **provider**：工作流导入后会出现在
 
 ### 4.2 内置工作流播种
 
-[builtinWorkflows.ts](../src/services/builtinWorkflows.ts) 内置了 6 个 MiniMax H3 视频工作流（文生/图生/参考生 × 普通/Turbo），JSON 打包在 `src/assets/comfyWorkflows/` 下，界面格式放在同级 `ui/` 里。
+[builtinWorkflows.ts](../src/services/builtinWorkflows.ts) 内置了 6 个 MiniMax H3 视频工作流（文生/图生/参考生 × 普通/Turbo）和 2 个 AuK 音频工作流。每项可独立声明分类，未声明时保留视频分类。API JSON 打包在 `src/assets/comfyWorkflows/` 下，界面格式放在同级 `ui/` 里。
+
+| AuK 工作流 | 默认输入 | 输出 |
+|---|---|---|
+| 文生语音（`builtin-auk-tts`） | 输入朗读正文，提交时与面板声音描述组合到节点 4 的 `instruction` | FLAC |
+| 参考音频与声音克隆（`builtin-auk-voice-cloning`） | 节点 10 的 `task.text`：要说的台词；节点 7 的 `audio`：通过 @ 或连线提供的参考音频 | MP3，V0 |
+
+AuK 资源来自提供的 `AuK-文生语音.json` 和 `AuK-参考音频与声音克隆.json`；界面格式原样保留布局，执行图移除说明节点，并按节点声明转换控件和连线。依赖 ComfyUI-AuK 与 `SaveAudioAdvanced`，原模型选择为 `auk_flash_w4a8.safetensors`、`qwen_omni_w4a8.safetensors`、`auk_vae.safetensors`。模型和节点仍需在目标 ComfyUI 安装；内置工作流不会安装或启动它们。
+
+资源保留原工作流 3 秒、种子 42 等参数。语音参数面板可覆盖本次生成时长；未设置时采用图中的时长。克隆前必须通过 @、连线或显式音频输入提供参考语音，缺少参考时在上传与提交前报错，不使用图内示例文件。`task.text` 与保存节点的 `format.quality` 使用 ComfyUI DynamicCombo 的点分隔输入格式。
+
+验证入口：`builtinWorkflows.test.ts`、`audioSpeechSettings.test.ts`、`comfyWorkflowAudioIO.test.ts`、工作流编辑与保存回写测试。网络由测试替身模拟，未启动 ComfyUI 或执行真实生成。源码回滚撤销对应改动即可；已添加到用户工作流库的两条记录可由用户单独删除，既有视频工作流不变。
 
 播种按 id **逐个记账**在 `localStorage` 的 `aicanvas.builtinWorkflows.seededIds`：
 
@@ -78,6 +89,21 @@ ComfyUI 在 AI Canvas 里是一种 **provider**：工作流导入后会出现在
 ### 4.3 从 ComfyUI 编辑后保存回来
 
 见 [§11](#11-comfyui-编辑窗口与回写)。
+
+### 4.4 语音参数面板
+
+`AudioParamSelector.tsx` 复用现有弹层与主题控件；`services/ai/audioSpeechSettings.ts` 统一管理声音描述、引用状态和 AuK 参数注入。按可验证的单路 `AuKGenerateEdit → AuKInstructionEncode` 结构识别能力，支持直接指令或匹配模式的 `AuKInstructionBuilder`，不依赖内置工作流 ID。
+
+- 纯文本：男声、女声、正太、萝莉、小女孩、小男孩。正太与萝莉使用动画风格描述，小男孩与小女孩使用自然儿童声音描述。
+- 带参考语音：通过 @ 音频、@ 角色声音、连线或显式音频输入识别；隐藏声音类型，以参考音色为准。可添加、替换、移除引用，移除后恢复已保存的纯文本音色；本节点已有的生成结果不会自动成为参考。
+- 两种状态均提供五档语速描述与生成时长。AuK 没有合成速度倍率输入，滑块不承诺精确倍速；克隆调速描述写入编码指令，不写入朗读台词。时长范围为 1–3600 秒，滑块常用范围 1–60 秒，数值输入可设置更长时间。
+- 不自动切换工作流。纯文本图遇到参考音频、克隆图缺少参考音频时提示切换或补充引用。显式音频输入优先，其次 @ 引用，再次连线；当前克隆图仅有一个参考音频入口。
+- 节点保存 `audioSpeechSettings`，弹窗、快捷和批量生成均传入统一链路并记录输出历史。按已确认边界，继续沿用现有结构撤销语义，参数值不随画布撤销恢复。
+- 普通厂商原生音色 ID、格式及倍率配置保持原语义；不把六类描述式声音伪装成厂商 voice ID。只改本次提交图，保留工作流库中的源图、采样配置和保存格式。
+
+验证包括引用增删与失效、纯文本/参考面板结构、暗浅主题容器、参数序列化、快捷及批量传递、两类 AuK 请求与原图不变。主题结构检查不替代浏览器视觉验收，真实音色与语速需在目标 ComfyUI 试听。
+
+本阶段验证：8 个定向测试文件共 114 项通过；前端类型、测试类型、定向 ESLint、差异与严格 UTF-8 检查通过。按确认结果保留现有画布结构撤销行为。
 
 ## 5. IO 节点识别
 
@@ -90,7 +116,7 @@ ComfyUI 在 AI Canvas 里是一种 **provider**：工作流导入后会出现在
 | `audio` | `LoadAudio*`、`VHS_LoadAudio*`、`RecordAudio*` |
 | `prompt` | `CLIPTextEncode`、`*TextEncode`、`StringLiteral`、`PrimitiveString`、`ShowText`/`pysssss` |
 
-类型规则没命中时还有一层兜底：节点的 `inputs` 里只要有名字含 `text` / `prompt` / `writing` 且值是非空字符串的输入，就算作 `prompt` 类型。`showAnything`、`PreviewAny`、`DisplayText` 这类展示节点排除在外 —— 它们的 `text` 是给人看的结果，不是提示词入口。
+类型规则没命中时还有一层兜底：节点的 `inputs` 里只要有名字含 `text` / `prompt` / `writing`，或名为 `instruction`（包括点分隔子字段），且值是非空字符串的输入，就算作 `prompt` 类型。`showAnything`、`PreviewAny`、`DisplayText` 这类展示节点排除在外 —— 它们的 `text` 是给人看的结果，不是提示词入口。
 
 识别结果只是**候选清单**，用来在提示词框里 `@` 和在面板上标默认节点，不影响参数注入。
 
@@ -130,11 +156,11 @@ ComfyUI 在 AI Canvas 里是一种 **provider**：工作流导入后会出现在
 
 | 情况 | 行为 |
 |------|------|
-| 指定了默认提示词节点，且没 `@` 过提示词节点 | 只写这一个节点，写它第一个存在且是字符串的键（`text` → `prompt` → `string` → `value`） |
+| 指定了默认提示词节点，且没 `@` 过提示词节点 | 只写这一个节点，写它第一个存在且是字符串的键（`text` → `prompt` → `string` → `value` → `instruction`）；无直接字段时查找同名的点分隔子字段 |
 | 没有任何 `@` 赋值，也没默认节点 | 兜底猜测：遍历所有 `text`/`prompt` 输入，**只替换看起来像占位符的值**（长度 < 10 且不含空格，例如 `t-1`） |
 | 有 `@` 赋值 | 只写被 `@` 命中且在 `ioNodes` 里的节点，其余保持原值 |
 
-显式赋值仅处理 `prompt` 类型 IO，与默认输入共用 `text → prompt → string → value` 字段顺序，只写已有的字符串字段，保留连线。无法找到可写字段时在提交前报错，不静默使用旧文本。
+显式赋值仅处理 `prompt` 类型 IO，与默认输入共用 `text → prompt → string → value → instruction` 字段顺序；没有直接字段时，按输入顺序取第一个匹配上述名称的点分隔子字段（例如 `task.text`）。只写已有的字符串字段，保留连线。显式赋值无法找到可写字段时在提交前报错，不静默使用旧文本。
 
 ### 8.2 图片 / 音频 / 视频
 

@@ -1,6 +1,7 @@
 /**
  * ai/generateAudio — 音频生成入口
  */
+import { collectAudioSpeechReferences, resolveAudioSpeechWorkflow, stripAudioSpeechReferences } from './audioSpeechSettings';
 import { resolveNodeReferences } from '../nodeReferenceService';
 import { useAppStore } from '../../store/useAppStore';
 import { executeWorkflowApiMedia } from '../workflowApi/workflowApiAdapter';
@@ -136,10 +137,17 @@ export async function generateAudio(
   signal?: AbortSignal,
 ): Promise<AudioGenerationResult> {
   const { prompt: rawPrompt, model, provider } = params;
+  const state = useAppStore.getState();
+  const selectedWorkflow = params.workflowId ? state.workflows.find((item) => item.id === params.workflowId) : undefined;
+  if (resolveAudioSpeechWorkflow(selectedWorkflow)) {
+    const invalid = collectAudioSpeechReferences(rawPrompt, params.nodeId, state.nodes, state.edges,
+      state.dramaAssets, selectedWorkflow, params.workflowInputs).find((reference) => !reference.url);
+    if (invalid) throw new Error(`参考语音已失效：${invalid.label}，请重新选择`);
+  }
 
   // 解析 @{nodeId:label} 引用为对应节点的实际输出内容
-  const prompt = resolveNodeReferences(rawPrompt);
-  // @ 引用和连线统一收集；角色库绑定的声音仍通过连线进入。
+  const prompt = resolveNodeReferences(stripAudioSpeechReferences(rawPrompt, state.nodes));
+  // 参考音频通过独立媒体通道传递，不混入朗读正文。
   const mentionedMedia = collectPromptNodeMediaUrls(rawPrompt);
   const connectedMedia = collectConnectedReferenceMedia(params.nodeId);
   const references = mergeMediaReferences(mentionedMedia.references, connectedMedia.references);
