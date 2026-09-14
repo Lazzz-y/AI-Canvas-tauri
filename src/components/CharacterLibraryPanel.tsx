@@ -268,6 +268,7 @@ export default function CharacterLibraryPanel() {
   const [dialogReferenceId, setDialogReferenceId] = useState<string | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [voicePickerOpen, setVoicePickerOpen] = useState(false);
+  const [voiceDockState, setVoiceDockState] = useState({ context: '', expanded: false });
   // 记角色归属，切换角色时自然失效，不必在 effect 里回收状态
   const [playingVoice, setPlayingVoice] = useState<{
     characterId: string;
@@ -362,6 +363,13 @@ export default function CharacterLibraryPanel() {
     [nodes],
   );
   const voiceClips = selectedCharacter?.voiceClips ?? [];
+  const voiceDockContext = `${open}:${scope}:${selectedCharacter?.id ?? ''}`;
+  const voiceDockOpen = voiceDockState.context === voiceDockContext && voiceDockState.expanded;
+  // 上下文变化时同步复位本组件状态，避免先显示上一角色的声音列表再收起。
+  if (voiceDockState.context !== voiceDockContext) {
+    setVoiceDockState({ context: voiceDockContext, expanded: false });
+    if (voicePickerOpen) setVoicePickerOpen(false);
+  }
   const visibleActions = (selectedCharacter?.actions ?? []).filter((action) => (
     actionFilter === 'all' || action.category === actionFilter
   ));
@@ -737,7 +745,7 @@ export default function CharacterLibraryPanel() {
                   </div>
                 ) : null}
 
-                <section className="character-voice-dock" aria-label={t('角色声音')}>
+                {voiceDockOpen ? <section className="character-voice-dock" aria-label={t('角色声音')}>
                   <div className="character-voice-dock-head">
                     <Icon icon="lucide:audio-lines" width="14" height="14" aria-hidden="true" />
                     <span>{t('角色声音')}</span>
@@ -863,7 +871,7 @@ export default function CharacterLibraryPanel() {
                       ))}
                     </div>
                   )}
-                </section>
+                </section> : null}
 
                 <section className="character-library-profile" aria-label={t('当前角色')}>
                   <div className="character-library-profile-copy">
@@ -894,19 +902,19 @@ export default function CharacterLibraryPanel() {
                     ) : null}
                     <button
                       type="button"
-                      data-tooltip={t('从画布添加视角图')}
-                      aria-label={t('从画布添加视角图')}
-                      aria-expanded={pickerOpen}
-                      className={pickerOpen ? 'is-active' : ''}
+                      data-tooltip={t(voiceDockOpen ? '收起角色声音' : '展开角色声音')}
+                      aria-label={t(voiceDockOpen ? '收起角色声音' : '展开角色声音')}
+                      aria-expanded={voiceDockOpen}
+                      className={voiceDockOpen ? 'is-active' : ''}
                       onClick={() => {
-                        setVoicePickerOpen(false);
-                        setPickerOpen((open) => !open);
+                        if (voiceDockOpen) {
+                          voicePlayerRef.current?.pause();
+                          setVoicePickerOpen(false);
+                        }
+                        setVoiceDockState({ context: voiceDockContext, expanded: !voiceDockOpen });
                       }}
                     >
-                      <Icon icon="lucide:image-plus" width="16" height="16" aria-hidden="true" />
-                    </button>
-                    <button type="button" data-tooltip={t('编辑角色')} aria-label={t('编辑角色')} onClick={() => openEditor(selectedCharacter)}>
-                      <Icon icon="lucide:pencil" width="16" height="16" aria-hidden="true" />
+                      <Icon icon="lucide:audio-lines" width="16" height="16" aria-hidden="true" />
                     </button>
                     <button
                       type="button"
@@ -920,11 +928,27 @@ export default function CharacterLibraryPanel() {
                     </button>
                     <button
                       type="button"
+                      data-tooltip={t('从画布添加视角图')}
+                      aria-label={t('从画布添加视角图')}
+                      aria-expanded={pickerOpen}
+                      className={pickerOpen ? 'is-active' : ''}
+                      onClick={() => {
+                        setVoicePickerOpen(false);
+                        setPickerOpen((open) => !open);
+                      }}
+                    >
+                      <Icon icon="lucide:image-plus" width="16" height="16" aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
                       data-tooltip={scope === 'project' ? t('复制到全局资产') : t('复制到本项目')}
                       aria-label={scope === 'project' ? t('复制到全局资产') : t('复制到本项目')}
                       onClick={() => void handleCopy()}
                     >
                       <Icon icon="lucide:copy-plus" width="16" height="16" aria-hidden="true" />
+                    </button>
+                    <button type="button" data-tooltip={t('编辑角色')} aria-label={t('编辑角色')} onClick={() => openEditor(selectedCharacter)}>
+                      <Icon icon="lucide:pencil" width="16" height="16" aria-hidden="true" />
                     </button>
                     <button type="button" data-tooltip={t('删除角色')} aria-label={t('删除角色')} onClick={() => setDeleteConfirmOpen(true)}>
                       <Icon icon="lucide:trash-2" width="16" height="16" aria-hidden="true" />

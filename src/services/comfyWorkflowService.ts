@@ -3,11 +3,12 @@
  *
  * Handles workflow JSON mutation, image upload, submission, and result polling.
  */
+import { applyAudioSpeechSettings, audioSpeechModeIssue, resolveAudioSpeechWorkflow, stripAudioSpeechReferences } from './ai/audioSpeechSettings';
 import { isRemoteMediaUrl } from '../utils/mediaUrl';
 import { useAppStore } from '../store/useAppStore';
 import { comfyBaseUrlFor } from './comfyServers';
 import type { WorkflowIONode, WorkflowIONodeType } from '../types';
-import type { AIAudioGenParams, AIImageGenParams, AIVideoGenParams } from '../types/aiTypes';
+import type { AIAudioGenParams, AIImageGenParams, AIVideoGenParams, AudioSpeechSettings } from '../types/aiTypes';
 import { mapImageDimensions, mapVideoDimensions, resolveVideoDurationSeconds } from './aiDimensions';
 import { resolveNodeReferences } from './nodeReferenceService';
 import {
@@ -243,7 +244,11 @@ function writeNodeInput(
 ): boolean {
   const inputs = workflowObj[nodeId]?.inputs as Record<string, unknown> | undefined;
   if (!inputs) return false;
-  const key = keys.find((candidate) => typeof inputs[candidate] === 'string');
+  // ComfyUI DynamicCombo 的子字段以点分隔，例如 task.text；只写已有字符串字段。
+  const key = keys.find((candidate) => typeof inputs[candidate] === 'string')
+    ?? Object.keys(inputs).find((candidate) => (
+      typeof inputs[candidate] === 'string' && keys.some((name) => candidate.endsWith(`.${name}`))
+    ));
   if (!key) return false;
   inputs[key] = value;
   return true;
@@ -251,7 +256,7 @@ function writeNodeInput(
 
 /** 默认节点按类型接受的输入键：写第一个已存在且是字符串的键 */
 const DEFAULT_NODE_INPUT_KEYS: Record<WorkflowIONodeType, string[]> = {
-  prompt: ['text', 'prompt', 'string', 'value'],
+  prompt: ['text', 'prompt', 'string', 'value', 'instruction'],
   image: ['image'],
   video: ['video'],
   audio: ['audio'],
@@ -1348,6 +1353,7 @@ async function submitComfyUIWorkflow(
   referenceAudioUrls: string[] = [],
   /** 提示词框里引用的图片/视频，用于填充工作流指定的默认 IO 节点 */
   promptMedia: { imageUrls?: string[]; videoUrls?: string[] } = {},
+  speech?: { settings?: AudioSpeechSettings },
 ): Promise<{ baseUrl: string; promptId: string; workflowObj: Record<string, Record<string, unknown>> }> {
   const baseUrl = getComfyUIConfig(workflowId);
 
@@ -1366,6 +1372,21 @@ async function submitComfyUIWorkflow(
     throw new Error('工作流 JSON 解析失败');
   }
 
+  const speechControls = speech ? resolveAudioSpeechWorkflow(wf) : undefined;
+  if (speechControls) {
+    const explicitAudio = speechControls.referenceInputId ? workflowInputs?.[speechControls.referenceInputId] : undefined;
+    const issue = audioSpeechModeIssue(speechControls, Boolean(referenceAudioUrls.length || explicitAudio?.trim()));
+    if (issue) throw new Error(issue);
+    const nodes = useAppStore.getState().nodes ?? [];
+    prompt = stripAudioSpeechReferences(prompt, nodes);
+    workflowInputs = workflowInputs && { ...workflowInputs };
+    for (const io of wf.ioNodes ?? []) {
+      if (io.type === 'prompt' && workflowInputs?.[io.nodeId] !== undefined) {
+        workflowInputs[io.nodeId] = stripAudioSpeechReferences(workflowInputs[io.nodeId], nodes);
+      }
+    }
+  }
+
   // 收集所有 IO 节点信息
   const ioNodes = wf.ioNodes || [];
   const ioNodeIds = ioNodes.filter((io) => io.type === 'prompt').map((io) => io.nodeId);
@@ -1379,9 +1400,15 @@ async function submitComfyUIWorkflow(
   const defaultNodeFor = (type: WorkflowIONodeType) => (
     mentionedTypes.has(type) ? undefined : wf.defaultNodes?.[type]
   );
+  if (speechControls && mentionedTypes.has('prompt') && workflowInputs?.[speechControls.textNodeId] === undefined) {
+    throw new Error('请给当前语音工作流的正文输入赋值');
+  }
 
   // 注入提示词到 prompt 类型 IO 节点（没 @ 时优先写默认节点）
-  injectPromptsIntoWorkflow(workflowObj, workflowInputs, prompt, ioNodeIds, defaultNodeFor('prompt'));
+  injectPromptsIntoWorkflow(workflowObj, workflowInputs, prompt, ioNodeIds,
+    defaultNodeFor('prompt') ?? (!mentionedTypes.has('prompt') ? speechControls?.textNodeId : undefined));
+
+  if (speechControls) applyAudioSpeechSettings(workflowObj, speechControls, speech?.settings);
 
   // 显式图片/视频 IO 赋值（上传 → 替换对应输入文件名）
   await injectExplicitMediaIntoWorkflow(workflowObj, workflowInputs, ioNodes, baseUrl, signal);
@@ -1744,7 +1771,7 @@ export async function executeComfyUIAudioGenerate(
       }
     }
 
-    const { baseUrl, workflowObj } = await submitComfyUIWorkflow(workflowId!, workflowInputs, prompt, signal, referenceAudioUrls);
+    const { baseUrl, workflowObj } = await submitComfyUIWorkflow(workflowId!, workflowInputs, prompt, signal, referenceAudioUrls, {}, { settings: params.audioSpeechSettings });
 
     if (params.nodeId && projectId) {
       progressSession = createComfyProgressSession({ baseUrl, projectId, nodeId: params.nodeId, signal });

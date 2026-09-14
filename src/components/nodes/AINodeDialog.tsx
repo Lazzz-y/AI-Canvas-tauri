@@ -11,8 +11,9 @@ import { derivedNodePlacement } from '../../store/store.utils';
 import type { AnimationAction, BaseNodeData, CameraGenerationSettings, ImagePostProcess, ModelOption } from '../../types';
 import { ANIMATION_FRAME_GRIDS } from '../../types';
 import { generateShotlistRows } from '../../services/shotlistService';
-import { MAX_IMAGE_BATCH_COUNT, type AudioOutputFormat, type AudioTtsVoice, type VideoReferenceItem } from '../../types/aiTypes';
+import { MAX_IMAGE_BATCH_COUNT, type AudioSpeechSettings, type AudioSpeechReference, type AudioOutputFormat, type AudioTtsVoice, type VideoReferenceItem } from '../../types/aiTypes';
 import { generateText, generateImage, generateImagesBatch, generateVideo, generateAudio, buildPanoramaPrompt } from '../../services/aiService';
+import { removeAudioSpeechReference } from '../../services/ai/audioSpeechSettings';
 import { persistAudioGenerationResult } from '../../services/ai/generateAudio';
 import { persistMediaUrlToProjectData } from '../../services/fileService';
 import {
@@ -277,6 +278,8 @@ function AINodeDialog() {
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
+        // 先让顶层 UI Kit 下拉处理 Escape，保留当前节点参数弹窗。
+        if (document.querySelector('[data-ui-select-portal]')) return;
         e.stopPropagation();
         if (isExpanded) {
           setIsExpanded(false);
@@ -299,8 +302,13 @@ function AINodeDialog() {
       // Extract workflow IO node assignments from the prompt string
       // Format: @wf{ioNodeId|title|type}(value content)
       // ioNodeId can contain ":" (e.g. "57:27"), fields are pipe-separated to avoid ambiguity
-      const workflowInputs: Record<string, string> = {};
+      const workflowInputs: Record<string, string> = { ...current?.workflowInputs };
       const wfRegex = /@wf\{([^|]+)\|([^|]+)\|([^|}]+)\}\(([\s\S]*?)\)/g;
+      // 芯片赋值随正文重建；下拉等面板直接写入的输入保留。
+      for (const previous of (current?.prompt ?? '').matchAll(wfRegex)) {
+        delete workflowInputs[previous[1]];
+      }
+      wfRegex.lastIndex = 0;
       let match: RegExpExecArray | null;
       while ((match = wfRegex.exec(value)) !== null) {
         const ioNodeId = match[1]; // Full ID (may contain ":")
@@ -627,6 +635,7 @@ function AINodeDialog() {
           prompt: effectivePrompt,
           model: nodeModel,
           provider: nodeProvider,
+          audioSpeechSettings: latestData.audioSpeechSettings,
           audioVoice: latestData.audioVoice,
           audioFormat: latestData.audioFormat,
           audioSpeed: latestData.audioSpeed,
@@ -671,6 +680,7 @@ function AINodeDialog() {
           mediaUrl: persisted.mediaUrl,
           filePath: persisted.filePath,
           params: {
+            audioSpeechSettings: latestData.audioSpeechSettings,
             audioVoice: latestData.audioVoice,
             audioFormat: latestData.audioFormat,
             audioSpeed: latestData.audioSpeed,
@@ -904,6 +914,22 @@ function AINodeDialog() {
     (value: VideoReferenceItem[]) => updateNodeData(activeNodeId!, { videoReferences: value }),
     [activeNodeId, updateNodeData]
   );
+
+  const onChangeAudioSpeechSettings = useCallback((value: AudioSpeechSettings) => {
+    updateContinuousNodeData({ audioSpeechSettings: value });
+  }, [updateContinuousNodeData]);
+
+  const onRemoveAudioReference = useCallback((reference: AudioSpeechReference) => {
+    finishContinuousEdit();
+    const state = useAppStore.getState();
+    const current = state.nodes.find((item) => item.id === activeNodeId)?.data;
+    if (!current || !activeNodeId) return;
+    if (reference.edgeId) {
+      state.onEdgesChange([{ type: 'remove', id: reference.edgeId }]);
+    } else {
+      updateNodeData(activeNodeId, removeAudioSpeechReference(current.prompt ?? '', current.workflowInputs, reference));
+    }
+  }, [activeNodeId, finishContinuousEdit, updateNodeData]);
 
   const onChangeAudioVoice = useCallback(
     (value: AudioTtsVoice) => updateNodeData(activeNodeId!, { audioVoice: value }),
@@ -1168,6 +1194,9 @@ function AINodeDialog() {
           onChangeSeedanceDuration={onChangeSeedanceDuration}
           onChangeGenerateAudio={onChangeGenerateAudio}
           audioPurpose={audioPurpose}
+          audioSpeechSettings={data.audioSpeechSettings}
+          onChangeAudioSpeechSettings={onChangeAudioSpeechSettings}
+          onRemoveAudioReference={onRemoveAudioReference}
           audioVoice={data.audioVoice ?? 'alloy'}
           audioFormat={data.audioFormat ?? 'wav'}
           audioSpeed={data.audioSpeed ?? 1}

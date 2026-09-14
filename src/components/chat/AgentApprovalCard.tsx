@@ -4,6 +4,7 @@
  * 展示等待确认的工具操作（画布写入、文件写入、媒体生成、永久删除、项目记忆、API 配置），
  * 提供确认 / 拒绝。键盘可操作，类别用文字标签而非仅颜色表达。
  */
+import Select from '../shared/Select';
 import { useEffect, useMemo, useState } from 'react';
 import { Icon } from '@iconify/react';
 import type {
@@ -214,11 +215,11 @@ function ApprovalCardContent({
           <div className="mb-2 flex flex-wrap items-center gap-2">
             <input className="ui-input min-w-0 flex-1" aria-label={t('搜索模型名称或 ID')} placeholder={t('搜索模型名称或 ID')}
               value={query} onChange={(event) => { setQuery(event.target.value); setPage(1); }} />
-            <select className="ui-select__control" aria-label={t('模型分类')} value={categoryFilter}
-              onChange={(event) => { setCategoryFilter(event.target.value); setPage(1); }}>
+            <Select fixedMenu className="min-w-0" aria-label={t('模型分类')} value={categoryFilter}
+              onChange={(selectedOptionValue) => { setCategoryFilter(selectedOptionValue); setPage(1); }}>
               <option value="">{t('全部分类')}</option>
               {Object.entries(PROVIDER_CATEGORY_LABELS).map(([value, label]) => <option key={value} value={value}>{t(label)}</option>)}
-            </select>
+            </Select>
             <button type="button" className="ui-btn ui-btn--sm" disabled={!selectedModelIds.length}
               onClick={() => setSelectedModelIds([])}>{t('清空已选')}</button>
           </div>

@@ -1,6 +1,7 @@
 /**
  * PromptPanel 提示词面板 — AI 生成节点的核心输入面板，集成模型选择器、提示词编辑器、质量/比例/视频参数、生成按钮、/ 指令菜单
  */
+import Select from '../../shared/Select';
 import { lazy, Suspense, useState, useRef, useCallback, useEffect } from 'react';
 // 生成中的思考球：仅在生成时按需加载
 const ThinkingOrb = lazy(() => import('thinking-orbs').then((m) => ({ default: m.ThinkingOrb })));
@@ -27,6 +28,10 @@ import { getRunningHubModel } from '../../../services/ai/providers/runninghubMod
 import QualityRatioSelector from './QualityRatioSelector';
 import VideoParamSelector from './VideoParamSelector';
 import AudioParamSelector from './AudioParamSelector';
+import CharacterVoiceSelector, { type CharacterVoiceChoice } from './CharacterVoiceSelector';
+import { collectAudioSpeechReferences, resolveAudioSpeechWorkflow } from '../../../services/ai/audioSpeechSettings';
+import { resolveDramaVoiceRef } from '../../../services/dramaAssetPrompt';
+import { buildDramaVoiceMentionId } from '../../../types/dramaAssets';
 import StyleSelector from './StyleSelector';
 import MentionEditor, { type MentionEditorHandle } from './MentionEditor';
 import SlashCommandMenu from './SlashCommandMenu';
@@ -34,7 +39,7 @@ import PresetManager from './PresetManager';
 import SkillManager from './SkillManager';
 import { expandSkillReferences } from '../../../services/skillPromptService';
 import { MAX_IMAGE_BATCH_COUNT } from '../../../types/aiTypes';
-import type { AudioOutputFormat, AudioTtsVoice, VideoReferenceItem } from '../../../types/aiTypes';
+import type { AudioOutputFormat, AudioSpeechSettings, AudioSpeechReference, AudioTtsVoice, VideoReferenceItem } from '../../../types/aiTypes';
 import type { AudioGenerationPurpose } from '../../../types/media';
 import { useT } from '../../../i18n';
 import WorkflowApiParameterFields from './WorkflowApiParameterFields';
@@ -209,6 +214,7 @@ function CameraSettingsSelector({
   useEffect(() => {
     if (!open) return;
     const closeOnOutside = (event: PointerEvent) => {
+      if (event.target instanceof Element && event.target.closest('[data-ui-select-portal]')) return;
       if (!rootRef.current?.contains(event.target as globalThis.Node)) setOpen(false);
     };
     document.addEventListener('pointerdown', closeOnOutside, true);
@@ -252,31 +258,31 @@ function CameraSettingsSelector({
           <div className="mt-2 grid grid-cols-2 gap-2">
             <label className="min-w-0 text-[10px] text-canvas-text-muted">
               <span className="mb-1 block">{t('焦距')}</span>
-              <select className="h-8 w-full rounded-md border border-canvas-border bg-canvas-card px-2 text-[11px] text-canvas-text outline-none focus:border-indigo-400" value={value.lens ?? ''} onChange={(event) => updateSetting('lens', event.target.value as CameraLens || undefined)}>
+              <Select fixedMenu className="min-w-0 w-full" value={value.lens ?? ''} onChange={(selectedOptionValue) => updateSetting('lens', selectedOptionValue as CameraLens || undefined)}>
                 <option value="">{t('自动')}</option>
                 {CAMERA_LENS_OPTIONS.map((option) => <option key={option.value} value={option.value}>{t(option.label)}</option>)}
-              </select>
+              </Select>
             </label>
             <label className="min-w-0 text-[10px] text-canvas-text-muted">
               <span className="mb-1 block">{t('快门效果')}</span>
-              <select className="h-8 w-full rounded-md border border-canvas-border bg-canvas-card px-2 text-[11px] text-canvas-text outline-none focus:border-indigo-400" value={value.shutterEffect ?? ''} onChange={(event) => updateSetting('shutterEffect', event.target.value as CameraShutterEffect || undefined)}>
+              <Select fixedMenu className="min-w-0 w-full" value={value.shutterEffect ?? ''} onChange={(selectedOptionValue) => updateSetting('shutterEffect', selectedOptionValue as CameraShutterEffect || undefined)}>
                 <option value="">{t('自动')}</option>
                 {CAMERA_SHUTTER_OPTIONS.map((option) => <option key={option.value} value={option.value}>{t(option.label)}</option>)}
-              </select>
+              </Select>
             </label>
             <label className="min-w-0 text-[10px] text-canvas-text-muted">
               <span className="mb-1 block">{t('光圈')}</span>
-              <select className="h-8 w-full rounded-md border border-canvas-border bg-canvas-card px-2 text-[11px] text-canvas-text outline-none focus:border-indigo-400" value={value.aperture ?? ''} onChange={(event) => updateSetting('aperture', event.target.value as CameraAperture || undefined)}>
+              <Select fixedMenu className="min-w-0 w-full" value={value.aperture ?? ''} onChange={(selectedOptionValue) => updateSetting('aperture', selectedOptionValue as CameraAperture || undefined)}>
                 <option value="">{t('自动')}</option>
                 {CAMERA_APERTURE_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
-              </select>
+              </Select>
             </label>
             <label className="min-w-0 text-[10px] text-canvas-text-muted">
               <span className="mb-1 block">{t('曝光时间')}</span>
-              <select className="h-8 w-full rounded-md border border-canvas-border bg-canvas-card px-2 text-[11px] text-canvas-text outline-none focus:border-indigo-400" value={value.exposureTime ?? ''} onChange={(event) => updateSetting('exposureTime', event.target.value as CameraExposureTime || undefined)}>
+              <Select fixedMenu className="min-w-0 w-full" value={value.exposureTime ?? ''} onChange={(selectedOptionValue) => updateSetting('exposureTime', selectedOptionValue as CameraExposureTime || undefined)}>
                 <option value="">{t('自动')}</option>
                 {CAMERA_EXPOSURE_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
-              </select>
+              </Select>
             </label>
           </div>
           <p className="mt-2 px-0.5 text-[9px] text-canvas-text-muted">{t('自动项不会写入提示词；预览仅用于表达景深、明暗、透视与动态趋势。')}</p>
@@ -365,6 +371,9 @@ interface PromptPanelProps {
   onChangeSeedanceRatio?: (value: string | undefined) => void;
   onChangeSeedanceDuration?: (value: number | undefined) => void;
   onChangeGenerateAudio?: (value: boolean | undefined) => void;
+  audioSpeechSettings?: AudioSpeechSettings;
+  onChangeAudioSpeechSettings?: (value: AudioSpeechSettings) => void;
+  onRemoveAudioReference?: (reference: AudioSpeechReference) => void;
   audioPurpose?: AudioGenerationPurpose;
   audioVoice?: AudioTtsVoice;
   audioFormat?: AudioOutputFormat;
@@ -437,6 +446,9 @@ export default function PromptPanel({
   onChangeSeedanceRatio,
   onChangeSeedanceDuration,
   onChangeGenerateAudio,
+  audioSpeechSettings,
+  onChangeAudioSpeechSettings,
+  onRemoveAudioReference,
   audioPurpose,
   audioVoice,
   audioFormat,
@@ -654,6 +666,61 @@ export default function PromptPanel({
     }
   }, [showToast, uploadSkill, t]);
 
+  const selectedAudioWorkflow = nodeType === 'ai-audio' ? workflows.find((item) => item.id === selectedWorkflowId) : undefined;
+  const speechControls = resolveAudioSpeechWorkflow(selectedAudioWorkflow);
+  const referenceInputId = speechControls?.referenceInputId;
+  const loadGlobalCharacters = useAppStore((state) => state.loadGlobalCharacters);
+  useEffect(() => {
+    if (referenceInputId) void loadGlobalCharacters();
+  }, [referenceInputId, loadGlobalCharacters]);
+  const voiceChoiceSnapshot = useAppStore((state) => JSON.stringify(referenceInputId ? [
+    ...state.dramaAssets.characters.map((character) => ({ character, scope: 'project' as const })),
+    ...state.globalCharacters.map((character) => ({ character, scope: 'global' as const })),
+  ].flatMap(({ character, scope }) => {
+    if (!character.primaryVoiceClipId) return [];
+    const voice = resolveDramaVoiceRef(character, character.primaryVoiceClipId);
+    if (!voice) return [];
+    return [{
+      id: `${scope}:${character.id}:${voice.id}`, scope, label: voice.label, url: voice.url,
+      // 项目角色沿用声音片段引用；全局声音读取持久化音频快照，不依赖项目节点。
+      value: scope === 'project'
+        ? `@drama{${buildDramaVoiceMentionId(character.id, voice.id)}:${voice.label.replace(/[{}]/g, '')}}`
+        : voice.url,
+    }];
+  }) : []));
+  const voiceChoices = JSON.parse(voiceChoiceSnapshot) as CharacterVoiceChoice[];
+  const selectedReference = referenceInputId ? workflowInputs?.[referenceInputId] ?? '' : '';
+  const selectCharacterVoice = (value: string) => {
+    if (!referenceInputId || !onWorkflowInputsChange) return;
+    const inputs = { ...workflowInputs };
+    if (value) inputs[referenceInputId] = value;
+    else delete inputs[referenceInputId];
+    // 同一输入已有手动 IO 芯片时移除旧赋值，防止编辑正文后重新覆盖下拉选择。
+    const nextPrompt = prompt.replace(/@wf\{([^|]+)\|([^|]+)\|([^|}]+)\}\(([\s\S]*?)\)/g,
+      (token, id: string) => id === referenceInputId ? '' : token);
+    if (nextPrompt !== prompt) onChange(nextPrompt);
+    onWorkflowInputsChange(inputs);
+    onContinuousEditEnd?.();
+  };
+  // 返回稳定标量，避免其他节点移动时让弹窗重渲染。
+  const audioReferenceSnapshot = useAppStore((state) => speechControls ? JSON.stringify(collectAudioSpeechReferences(
+    prompt, nodeId, state.nodes, state.edges, state.dramaAssets, selectedAudioWorkflow, workflowInputs,
+  )) : '[]');
+  const audioReferences = JSON.parse(audioReferenceSnapshot) as AudioSpeechReference[];
+  const addAudioReference = () => {
+    requestAnimationFrame(() => {
+      const editor = promptInputRef.current?.querySelector<HTMLElement>('[contenteditable="true"]');
+      if (!editor) return;
+      editor.focus();
+      const range = document.createRange();
+      range.selectNodeContents(editor);
+      range.collapse(false);
+      const selection = window.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+      document.execCommand('insertText', false, '@');
+    });
+  };
   const runninghubModel = selectedProvider === 'runninghub' ? getRunningHubModel(selectedModel, true) : undefined;
   const runninghubWorkflow = workflows?.find((workflow) => workflow.id === selectedWorkflowId && workflow.adapterType === 'runninghub');
   const workflowApi = workflows?.find((workflow) => workflow.id === selectedWorkflowId && workflow.adapterType === 'workflow-api');
@@ -708,6 +775,17 @@ export default function PromptPanel({
           workflows={workflows}
         />
 
+        {referenceInputId && onWorkflowInputsChange ? (
+          <CharacterVoiceSelector
+            key={`${nodeId}:${selectedWorkflowId}:${isGenerating}`}
+            choices={voiceChoices}
+            value={selectedReference}
+            disabled={isGenerating}
+            onChange={selectCharacterVoice}
+            onPlaybackError={() => showToast(t('声音试听失败，请检查音频文件是否可用'), 'error')}
+          />
+        ) : null}
+
         {nodeType === 'ai-animation' && onAnimationActionChange && (
           <>
             <div className="animation-action-picker" role="group" aria-label={t('动画动作')}>
@@ -728,19 +806,19 @@ export default function PromptPanel({
                 </button>
               ))}
             </div>
-            <select
-              className="animation-frames-select"
+            <Select fixedMenu
+              className="min-w-0 shrink-0"
+              size="sm"
               value={animationFrames}
               aria-label={t('生成帧数')}
-              onChange={(event) => {
-                event.stopPropagation();
-                onAnimationFramesChange?.(Number(event.target.value));
+              onChange={(selectedOptionValue) => {
+                onAnimationFramesChange?.(Number(selectedOptionValue));
               }}
             >
               {[6, 8, 10, 12, 16, 20].map((count) => (
                 <option key={count} value={count}>{t('{count} 帧', { count })}</option>
               ))}
-            </select>
+            </Select>
           </>
         )}
 
@@ -813,7 +891,13 @@ export default function PromptPanel({
 
         {nodeType === 'ai-audio' && !runninghubWorkflow && !runninghubModel && !workflowApi && (
           <AudioParamSelector
-            purpose={audioPurpose}
+            purpose={speechControls ? 'speech' : audioPurpose}
+            speechControls={speechControls}
+            speechSettings={audioSpeechSettings}
+            references={audioReferences}
+            onChangeSpeechSettings={onChangeAudioSpeechSettings}
+            onAddReference={addAudioReference}
+            onRemoveReference={onRemoveAudioReference}
             voice={audioVoice}
             format={audioFormat}
             speed={audioSpeed}

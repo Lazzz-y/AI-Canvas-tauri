@@ -1,3 +1,4 @@
+import Select from '../../shared/Select';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useT } from '../../../i18n';
 import type { CloudWorkflowMediaKind, WorkflowApiDraft } from '../../../types/workflowApi';
@@ -34,10 +35,10 @@ function WorkflowCard({ draft, onChange, onValidityChange }: {
     <div className="mt-3 flex flex-col gap-3">
       <div className="provider-fields-grid">
         <label className="provider-field"><span>{t('工作流名称')}</span><input value={draft.name} maxLength={120} onChange={(event) => onChange({ ...draft, name: event.target.value })} /></label>
-        <label className="provider-field"><span>{t('输出类型')}</span><select className="ui-select__control" value={draft.manifest.outputKind} disabled={editing}
-          onChange={(event) => onChange({ ...draft, manifest: { ...draft.manifest, outputKind: event.target.value as CloudWorkflowMediaKind } })}>
+        <label className="provider-field"><span>{t('输出类型')}</span><Select fixedMenu className="min-w-0" value={draft.manifest.outputKind} disabled={editing}
+          onChange={(selectedOptionValue) => onChange({ ...draft, manifest: { ...draft.manifest, outputKind: selectedOptionValue as CloudWorkflowMediaKind } })}>
           <option value="image">{t('图片')}</option><option value="video">{t('视频')}</option><option value="audio">{t('音频')}</option>
-        </select></label>
+        </Select></label>
       </div>
       {protocol && <div className="break-all text-xs text-canvas-text-secondary">{protocol.submit.method} {protocol.submit.path}</div>}
       <button type="button" className="ui-btn ui-btn--secondary self-start" disabled={!protocol} onClick={() => { setEditing(!editing); setProtocolValid(true); }}>{t('编辑调用路径与参数映射')}</button>

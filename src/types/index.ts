@@ -1,7 +1,7 @@
 /**
  * types 全局类型定义 — 定义 NodeType、BaseNodeData、CanvasProject、AppConfig、ModelOption、WorkflowDefinition 等核心类型
  */
-import type { AudioOutputFormat, AudioTtsVoice, ModelExecutionProfile, VideoModelCapability, VideoReferenceItem } from './aiTypes';
+import type { AudioOutputFormat, AudioSpeechSettings, AudioTtsVoice, ModelExecutionProfile, VideoModelCapability, VideoReferenceItem } from './aiTypes';
 import type { AudioGenerationPurpose } from './media';
 import type { ImageAnnotationLayer } from '@tenney95/xiaoluo-image-editor';
 import type { CanvasNoteData } from './canvasNote';
@@ -276,6 +276,7 @@ export interface BaseNodeData {
   generateAudio?: boolean;    // 生成有声视频（Seedance 2.0 / 1.5 pro）
   videoReferences?: VideoReferenceItem[]; // 手动挑选的参考帧 / 参考角色；不选则沿用连线顺序
   audioVoice?: AudioTtsVoice; // TTS 音色
+  audioSpeechSettings?: AudioSpeechSettings;
   audioFormat?: AudioOutputFormat; // TTS 输出格式
   audioSpeed?: number;        // TTS 播放速度：0.25-4
   audioPurpose?: AudioGenerationPurpose; // 当前音频模型用途

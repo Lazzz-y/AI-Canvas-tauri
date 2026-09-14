@@ -274,7 +274,7 @@ export function buildAssetChipEl(path: string, assetUrl?: string): HTMLSpanEleme
 
 export function buildDramaChipEl(dramaId: string, name: string, kind: string, thumbUrl?: string): HTMLSpanElement {
   const span = document.createElement('span');
-  span.className = `prompt-chip ${kind === 'action-video' ? 'chip-video' : 'chip-image'}`;
+  span.className = `prompt-chip ${kind === 'voice' ? 'chip-audio' : kind === 'action-video' ? 'chip-video' : 'chip-image'}`;
   span.contentEditable = 'false';
   span.setAttribute('data-drama-id', dramaId);
   span.setAttribute('data-drama-label', name);
@@ -290,7 +290,7 @@ export function buildDramaChipEl(dramaId: string, name: string, kind: string, th
     image.alt = '';
     icon.appendChild(image);
   } else {
-    icon.textContent = kind.startsWith('action-') ? '动' : kind === 'character' ? '人' : kind === 'scene' ? '场' : '道';
+    icon.textContent = kind === 'voice' ? '♪' : kind.startsWith('action-') ? '动' : kind === 'character' ? '人' : kind === 'scene' ? '场' : '道';
   }
   span.appendChild(icon);
   const label = document.createElement('span');
@@ -401,11 +401,13 @@ export function renderPromptToNodes(text: string, metaMap: Map<string, NodeMeta>
       let thumb: string | undefined;
       try {
         const store = useAppStore.getState();
-        const { assetId, referenceImageId, actionId, actionMediaId } = parseDramaMentionId(dramaId);
+        const { assetId, referenceImageId, actionId, actionMediaId, voiceClipId } = parseDramaMentionId(dramaId);
         const found = store.dramaAssets.characters.find((asset) => asset.id === assetId)
           || store.dramaAssets.scenes.find((asset) => asset.id === assetId)
           || store.dramaAssets.props.find((asset) => asset.id === assetId);
-        if (actionId !== undefined) {
+        if (voiceClipId !== undefined) {
+          kind = 'voice';
+        } else if (actionId !== undefined) {
           const media = resolveDramaActionMediaRef(found, actionId, actionMediaId);
           kind = media?.kind === 'video' ? 'action-video' : 'action-image';
           thumb = media && media.kind !== 'video' ? media.url : undefined;

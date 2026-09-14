@@ -529,16 +529,32 @@ export function buildDramaActionMentionId(assetId: string, actionId: string, med
   return `${assetId}#action/${encodeURIComponent(actionId)}/${encodeURIComponent(mediaId)}`;
 }
 
+/** 固定到所选声音片段，之后切换主音色不会替换已有引用。 */
+export function buildDramaVoiceMentionId(assetId: string, clipId: string): string {
+  return `${assetId}#voice/${encodeURIComponent(clipId)}`;
+}
+
 export function parseDramaMentionId(raw: string): {
   assetId: string;
   referenceImageId?: string;
   actionId?: string;
   actionMediaId?: string;
+  voiceClipId?: string;
   mergeAll: boolean;
 } {
   const separator = raw.indexOf('#');
   if (separator < 0) return { assetId: raw, mergeAll: false };
   const pick = raw.slice(separator + 1);
+  if (pick.startsWith('voice/')) {
+    try {
+      const segments = pick.split('/');
+      if (segments.length !== 2 || !segments[1]) throw new Error('Invalid voice mention');
+      return { assetId: raw.slice(0, separator), voiceClipId: decodeURIComponent(segments[1]), mergeAll: false };
+    } catch {
+      // 保留声音引用类型，损坏的引用不能回落到角色图片。
+      return { assetId: raw.slice(0, separator), voiceClipId: '', mergeAll: false };
+    }
+  }
   if (pick.startsWith('action/')) {
     const segments = pick.split('/');
     try {

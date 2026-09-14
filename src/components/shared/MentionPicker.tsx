@@ -7,6 +7,8 @@
  */
 import { Icon } from '@iconify/react';
 import type { ReactNode } from 'react';
+import type { CharacterCropRect } from '../../types/dramaAssets';
+import { AVATAR_ASPECT, cropImageStyle } from '../character/characterReferencePresentation';
 
 export interface MentionPickerTab {
   id: string;
@@ -24,6 +26,8 @@ export interface MentionPickerItem {
   key: string;
   label: string;
   thumbnailUrl?: string;
+  /** 复用角色头像的归一化裁剪参数。 */
+  thumbnailCrop?: CharacterCropRect;
   /** 无缩略图时的占位图标（iconify 名） */
   icon?: string;
   /** 缩略图右上角小标，如 #3 / 自身 / 视频 */
@@ -132,12 +136,14 @@ export default function MentionPicker({
                 if (!item.disabled) item.onSelect();
               }}
             >
-              <span className="mention-picker-card-media">
+              <span className="mention-picker-card-media" style={item.thumbnailCrop ? { aspectRatio: AVATAR_ASPECT } : undefined}>
                 {/* 图标垫在底层：缩略图加载失败时自己隐藏，露出图标而不是空白卡 */}
                 <Icon icon={item.icon || 'mdi:vector-square'} width="26" height="26" />
                 {item.thumbnailUrl && (
                   <img
                     src={item.thumbnailUrl}
+                    className={item.thumbnailCrop ? 'is-cropped' : undefined}
+                    style={cropImageStyle(item.thumbnailCrop)}
                     alt=""
                     loading="lazy"
                     draggable={false}

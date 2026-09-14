@@ -2,6 +2,7 @@
  * DirectorDeskNode — 3D 导演台节点
  * 通过 Tauri 独立窗口打开 Tenney95/3d-director-desk，截图/导出回写本节点。
  */
+import Select from '../shared/Select';
 import {
   memo,
   useCallback,
@@ -10,7 +11,6 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
-  type ChangeEvent,
 } from 'react';
 import { Handle, Position } from '@xyflow/react';
 import { Icon } from '@iconify/react';
@@ -377,8 +377,8 @@ function DirectorDeskNode({
     }
   }, [busy, data.directorRuntimeKind, data.label, id, instanceId, ready, runBlenderOperation, runtimeKind, showToast, updateNodeDataTransient]);
 
-  const handleRuntimeChange = useCallback((event: ChangeEvent<HTMLSelectElement>) => {
-    const nextKind = event.target.value as DirectorRuntimeKind;
+  const handleRuntimeChange = useCallback((value: string) => {
+    const nextKind = value as DirectorRuntimeKind;
     const projectId = useAppStore.getState().currentProjectId;
     if (!projectId || nextKind === runtimeKind) return;
     try {
@@ -415,13 +415,13 @@ function DirectorDeskNode({
         >
           <div className="node-preview director-preview">
             <div className="nodrag nopan absolute left-2 top-2 z-10">
-              <select
+              <Select fixedMenu
                 value={runtimeKind ?? ''}
                 onChange={handleRuntimeChange}
                 disabled={!!busy}
                 aria-label="3D 导演运行时"
                 data-tooltip={runtimeUnavailableReason}
-                className="h-7 max-w-[180px] rounded-md border border-canvas-border bg-canvas-surface/90 px-2 text-[11px] text-canvas-text shadow-sm outline-none focus:border-violet-400"
+                className="min-w-0 max-w-[180px]" size="sm"
               >
                 {!runtimeResolution.supported && (
                   <option value="" disabled>未知运行时</option>
@@ -435,7 +435,7 @@ function DirectorDeskNode({
                     {option.label}
                   </option>
                 ))}
-              </select>
+              </Select>
             </div>
             {captureUrls.length > 0 ? (
               <div

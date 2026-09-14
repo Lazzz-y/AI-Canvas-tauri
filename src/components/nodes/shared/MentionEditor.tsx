@@ -19,6 +19,7 @@ import {
   DRAMA_MENTION_MERGE_ALL,
   buildDramaMentionId,
   buildDramaActionMentionId,
+  buildDramaVoiceMentionId,
 } from '../../../types/dramaAssets';
 import type { CharacterReferenceImage } from '../../../types/dramaAssets';
 import { CHARACTER_REFERENCE_KIND_LABELS } from '../../character/characterReferencePresentation';
@@ -262,10 +263,12 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
     ? workflowMentionNodes.filter((n) => n.label.toLowerCase().includes(mentionQuery.toLowerCase()))
     : workflowMentionNodes;
 
+  const currentNodeType = nodes.find((node) => node.id === nodeId)?.data.type;
+  const isAudioNode = currentNodeType === 'ai-audio';
   const dramaMentionItems = useMemo(() => {
     if (!showMention) return [];
-    return resolveDramaMentionItems(dramaAssets, mentionQuery);
-  }, [showMention, dramaAssets, mentionQuery]);
+    return resolveDramaMentionItems(dramaAssets, mentionQuery, currentNodeType);
+  }, [showMention, dramaAssets, mentionQuery, currentNodeType]);
 
   // 角色参考图 / 动作列表 / 单个动作的素材选择。
   const [dramaRefPickerId, setDramaRefPickerId] = useState<string | null>(null);
@@ -980,7 +983,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
     })),
   ];
 
-  const drillItem = dramaRefPickerId
+  const drillItem = !isAudioNode && dramaRefPickerId
     ? dramaMentionItems.find((item) => item.id === dramaRefPickerId)
     : undefined;
   const drillRefs: CharacterReferenceImage[] = (drillItem?.referenceImages ?? [])
@@ -1057,15 +1060,34 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
       .map((item) => {
         const references = (item.referenceImages ?? []).filter((reference) => !!reference.imageUrl);
         const multiRef = references.length > 1;
-        const hasActions = dramaAssets.characters.some((character) => character.id === item.id && !!character.actions?.length);
+        const character = item.kind === 'character'
+          ? dramaAssets.characters.find((candidate) => candidate.id === item.id)
+          : undefined;
+        const hasActions = !!character?.actions?.length;
+        const avatarReference = character?.referenceImages?.find((reference) => reference.id === character.avatarReferenceImageId)
+          ?? character?.referenceImages?.find((reference) => reference.id === character.primaryReferenceImageId)
+          ?? character?.referenceImages?.[0];
+        const avatarCrop = avatarReference?.imageUrl && avatarReference.id === character?.avatarReferenceImageId
+          ? character?.avatarCrop
+          : undefined;
         const thumb = dramaThumbOf(item) || references[0]?.imageUrl;
         return {
           key: `drama:${item.id}`,
           label: item.name,
-          thumbnailUrl: thumb,
-          icon: 'mdi:account-box-outline',
-          badge: multiRef ? `${references.length} 图` : thumb ? undefined : '简介',
+          thumbnailUrl: avatarReference?.imageUrl || thumb,
+          thumbnailCrop: avatarCrop,
+          icon: isAudioNode ? MEDIA_ICONS.audio : 'mdi:account-box-outline',
+          badge: isAudioNode ? '音频' : multiRef ? `${references.length} 图` : thumb ? undefined : '简介',
           onSelect: () => {
+            if (isAudioNode) {
+              if (!item.voice) return;
+              restoreMentionCursor();
+              deleteAtChar();
+              insertDramaChipAtCursor(buildDramaVoiceMentionId(item.id, item.voice.id), item.voice.label, 'voice');
+              setShowMention(false);
+              setMentionQuery('');
+              return;
+            }
             // 单图或无图但有动作的角色也能进入动作选择。
             if (multiRef || hasActions) {
               setDramaRefPickerId(item.id);
@@ -1201,7 +1223,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
           <MentionPicker
             ariaLabel="引用节点或资产"
             tabs={[
-              { id: 'nodes', label: '输入图', icon: 'mdi:image-multiple-outline' },
+              { id: 'nodes', label: isAudioNode ? '输入音频' : '输入图', icon: isAudioNode ? MEDIA_ICONS.audio : 'mdi:image-multiple-outline' },
               { id: 'assets', label: '资产库', icon: 'mdi:bookshelf' },
             ]}
             activeTab={effectiveTab}
@@ -1255,7 +1277,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
             items={effectiveTab === 'assets' ? assetTabItems : nodeTabItems}
             emptyText={effectiveTab === 'assets' && drillItem && dramaActionPicker
               ? drillAction ? '该动作暂无图片、GIF 或视频素材' : '该角色暂无动作，请先在角色库中添加'
-              : mentionQuery ? '无匹配节点或资产' : effectiveTab === 'assets' ? '暂无短剧资产' : '暂无可引用的输入'}
+              : mentionQuery ? '无匹配节点或资产' : effectiveTab === 'assets' ? isAudioNode ? '暂无带音频的角色，请先在角色库中添加音频' : '暂无短剧资产' : '暂无可引用的输入'}
             footer={(
               <button
                 type="button"
