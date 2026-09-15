@@ -147,7 +147,7 @@ npm run tauri build
 
 开发沟通 QQ 群：873354155
 
-## 联合开发者
+## 代码贡献
 
 <p>
   <a href="https://github.com/zhurui0523" title="zhurui0523"><img src="https://images.weserv.nl/?url=github.com/zhurui0523.png&amp;w=128&amp;h=128&amp;fit=cover&amp;mask=circle" width="64" height="64" alt="zhurui0523" /></a>
