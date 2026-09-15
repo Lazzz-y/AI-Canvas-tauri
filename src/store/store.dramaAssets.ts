@@ -99,6 +99,7 @@ export interface BindAudioNodeToCharacterVoiceInput {
   transcript?: string;
   durationSec?: number;
   makePrimary?: boolean;
+  hideNode?: boolean;
 }
 
 export interface DramaAssetsSlice {
@@ -1190,10 +1191,18 @@ export const createDramaAssetsSlice: StateCreator<AppState, [], [], DramaAssetsS
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
     };
-    const saved = await get().addCharacterVoiceClip(input.scope, character.id, clip, {
-      makePrimary: input.makePrimary === true,
-    });
-    return saved ? clip.id : null;
+    const guard = input.hideNode ? registerCanvasDerivation(state, sourceNode.id) : null;
+    try {
+      const saved = await get().addCharacterVoiceClip(input.scope, character.id, clip, {
+        makePrimary: input.makePrimary === true,
+      });
+      if (saved && guard && isCanvasDerivationFresh(guard, get())) {
+        if (get().setCharacterLibraryNodeHidden(sourceNode.id, true)) silentSave(get);
+      }
+      return saved ? clip.id : null;
+    } finally {
+      if (guard) completeCanvasDerivation(guard);
+    }
   },
 
   createAudioNodeFromCharacterVoice: (scope, characterId, clipId) => {
