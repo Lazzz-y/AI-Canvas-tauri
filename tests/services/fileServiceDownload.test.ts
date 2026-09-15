@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
+  appDataDir: vi.fn(async () => '/project/app'),
   ensureProjectDataDir: vi.fn(),
   exists: vi.fn(async (_path: string) => false),
   invoke: vi.fn(),
@@ -25,7 +26,7 @@ vi.mock('@tauri-apps/api/core', () => ({
   invoke: mocks.invoke,
 }));
 vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn() }));
-vi.mock('@tauri-apps/api/path', () => ({ appDataDir: vi.fn(), localDataDir: vi.fn() }));
+vi.mock('@tauri-apps/api/path', () => ({ appDataDir: mocks.appDataDir, localDataDir: vi.fn() }));
 vi.mock('../../src/services/fs/core', () => ({
   CATEGORY_EXTENSIONS: {},
   arrayBufferToBase64: vi.fn(),
@@ -203,6 +204,9 @@ describe('persistMediaUrlToProjectData', () => {
     vi.clearAllMocks();
     mocks.isTauriEnv.mockReturnValue(true);
     mocks.ensureProjectDataDir.mockResolvedValue('/project/data');
+    mocks.exists.mockResolvedValue(false);
+    mocks.writeFile.mockReset();
+    mocks.invoke.mockReset();
     mocks.resolveUniqueDestPath.mockImplementation(async (dataDir: string, fileName: string) => (
       `${dataDir}/${fileName}`
     ));
@@ -243,5 +247,84 @@ describe('persistMediaUrlToProjectData', () => {
       'ai-image',
       '自定义接口图片',
     )).rejects.toThrow('生成媒体未能写入项目目录');
+  });
+
+  it.each([
+    ['directory', 'forbidden path: C:/private/user/project', '应用拒绝访问项目文件，请在设置中重新选择文件保存目录'],
+    ['write', new Error('Access is denied. (os error 5): C:/private/user/image.png'), '系统拒绝写入项目目录，请检查目录的写入权限'],
+    ['exists', 'forbidden path: C:/private/user/image.png', '应用拒绝访问项目文件，请在设置中重新选择文件保存目录'],
+    ['download', '下载请求失败: HTTP 403 Forbidden https://cdn.example/image?token=private-token', '图片或媒体下载失败（HTTP 403）'],
+    ['download', '目标磁盘空间不足，需要至少 999 字节，当前可用 1 字节', '目标磁盘空间不足'],
+    ['download', '下载请求失败: connection timed out https://cdn.example/private-token', '下载媒体失败，请检查网络或媒体链接是否已失效'],
+    ['write', new Error('unknown private-token C:/private/user/image.png'), '保存过程发生异常，请检查文件保存目录和媒体来源'],
+  ])('reports a safe reason for %s failures', async (operation, failure, reason) => {
+    const log = vi.spyOn(console, 'error');
+    const warn = vi.spyOn(console, 'warn');
+    if (operation === 'directory') mocks.ensureProjectDataDir.mockRejectedValueOnce(failure);
+    if (operation === 'write') mocks.writeFile.mockRejectedValueOnce(failure);
+    if (operation === 'exists') mocks.exists.mockRejectedValueOnce(failure);
+    if (operation === 'download') mocks.invoke.mockRejectedValueOnce(failure);
+
+    const error = await persistMediaUrlToProjectData(
+      operation === 'download' ? 'https://cdn.example/generated.png' : 'data:image/png;base64,AQID',
+      'project-1', 'ai-image', '图片', { deduplicateByContent: true },
+    ).catch((failure: unknown) => failure);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe(`生成媒体未能写入项目目录：${reason}`);
+    expect(error).not.toHaveProperty('cause');
+    expect(log).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+    if (operation === 'directory' || operation === 'exists') expect(mocks.writeFile).not.toHaveBeenCalled();
+    expect(mocks.ensureProjectDataDir).toHaveBeenCalledWith('project-1', { throwOnError: true });
+  });
+
+  it('propagates blob write failures instead of replacing them with a generic failure', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(new Uint8Array([1]), {
+      headers: { 'content-type': 'image/png' },
+    }));
+    mocks.writeFile.mockRejectedValueOnce('forbidden path');
+
+    await expect(persistMediaUrlToProjectData(
+      'blob:http://localhost/generated-image', 'project-1', 'ai-image',
+    )).rejects.toThrow('应用拒绝访问项目文件');
+  });
+
+  it('keeps optional download failures nullable for existing callers', async () => {
+    mocks.writeFile.mockRejectedValueOnce(new Error('write failed'));
+    await expect(downloadUrlAndSave('data:image/png;base64,AQID', 'project-1', 'ai-image'))
+      .resolves.toBeNull();
+  });
+
+  it('preserves cancellation without putting the abort reason in the error', async () => {
+    const controller = new AbortController();
+    controller.abort(new Error('private-token'));
+    await expect(persistMediaUrlToProjectData(
+      'https://cdn.example/generated.png', 'project-1', 'ai-image', undefined, { signal: controller.signal },
+    )).rejects.toMatchObject({ name: 'AbortError', message: '媒体保存已取消' });
+    expect(mocks.invoke).not.toHaveBeenCalled();
+  });
+});
+
+describe('project directory error propagation', () => {
+  it('lets strict persistence receive the real directory error without logging paths', async () => {
+    const core = await vi.importActual<typeof import('../../src/services/fs/core')>('../../src/services/fs/core');
+    vi.stubGlobal('window', { __TAURI_INTERNALS__: {} });
+    core.setBaseDataDir(undefined);
+    const failure = new Error('forbidden path: C:/private/user/project');
+    mocks.exists.mockRejectedValueOnce(failure);
+    const log = vi.spyOn(console, 'error');
+
+    await expect(core.ensureProjectDataDir('project-1', { throwOnError: true })).rejects.toBe(failure);
+    expect(log).not.toHaveBeenCalled();
+  });
+
+  it('keeps directory failures nullable for existing callers', async () => {
+    const core = await vi.importActual<typeof import('../../src/services/fs/core')>('../../src/services/fs/core');
+    vi.stubGlobal('window', { __TAURI_INTERNALS__: {} });
+    core.setBaseDataDir(undefined);
+    mocks.exists.mockRejectedValueOnce(new Error('forbidden path'));
+
+    await expect(core.ensureProjectDataDir('project-1')).resolves.toBeNull();
   });
 });

@@ -333,7 +333,10 @@ export async function getProjectDataDir(projectId: string): Promise<string | nul
 }
 
 /** 确保项目数据目录存在（Tauri 端） */
-export async function ensureProjectDataDir(projectId: string): Promise<string | null> {
+export async function ensureProjectDataDir(
+  projectId: string,
+  options: { throwOnError?: boolean } = {},
+): Promise<string | null> {
   if (!isTauriEnv()) return null;
   const dirPath = await getProjectDataDir(projectId);
   if (!dirPath) return null;
@@ -342,6 +345,7 @@ export async function ensureProjectDataDir(projectId: string): Promise<string | 
     if (!dirExists) await mkdir(dirPath, { recursive: true });
     return dirPath;
   } catch (err) {
+    if (options.throwOnError) throw err;
     console.error('Failed to create project data dir:', dirPath, err);
     return null;
   }

@@ -47,6 +47,8 @@ export interface FileTransferOptions {
   onProgress?: (progress: FileTransferProgress) => void;
   /** Data URL 按内容摘要复用确定路径，供持久化迁移重试使用。 */
   deduplicateByContent?: boolean;
+  /** 持久化入口需要接收底层异常，再转换为不含路径、链接或凭据的错误。 */
+  throwOnError?: boolean;
 }
 
 interface NativeFileTransferResult {
@@ -686,11 +688,11 @@ export async function saveDataUrlToProjectData(
   dataUrl: string,
   projectId: string,
   fileName: string,
-  options: Pick<FileTransferOptions, 'deduplicateByContent'> = {},
+  options: Pick<FileTransferOptions, 'deduplicateByContent' | 'throwOnError'> = {},
 ): Promise<{ filePath: string; assetUrl: string } | null> {
   if (!isTauriEnv()) return null;
 
-  const dataDir = await ensureProjectDataDir(projectId);
+  const dataDir = await ensureProjectDataDir(projectId, { throwOnError: options.throwOnError });
   if (!dataDir) return null;
 
   try {
@@ -708,7 +710,7 @@ export async function saveDataUrlToProjectData(
     } else {
       destPath = await resolveUniqueDestPath(dataDir, fileName);
     }
-    if (!options.deduplicateByContent || !await exists(destPath).catch(() => false)) {
+    if (!options.deduplicateByContent || !await exists(destPath)) {
       await writeFile(destPath, bytes);
       notifyProjectDiskChanged();
     }
@@ -718,6 +720,7 @@ export async function saveDataUrlToProjectData(
 
     return { filePath: destPath, assetUrl };
   } catch (err) {
+    if (options.throwOnError) throw err;
     console.error('Failed to save data URL to project data:', fileName, err);
     return null;
   }
@@ -731,10 +734,11 @@ export async function saveBinaryToProjectData(
   data: Uint8Array,
   projectId: string,
   fileName: string,
+  options: Pick<FileTransferOptions, 'throwOnError'> = {},
 ): Promise<{ filePath: string; assetUrl: string } | null> {
   if (!isTauriEnv()) return null;
 
-  const dataDir = await ensureProjectDataDir(projectId);
+  const dataDir = await ensureProjectDataDir(projectId, { throwOnError: options.throwOnError });
   if (!dataDir) return null;
 
   const destPath = await resolveUniqueDestPath(dataDir, fileName);
@@ -743,6 +747,7 @@ export async function saveBinaryToProjectData(
     await writeFile(destPath, data);
     notifyProjectDiskChanged();
   } catch (err) {
+    if (options.throwOnError) throw err;
     console.error('Failed to save binary to project data:', destPath, err);
     return null;
   }
@@ -837,6 +842,32 @@ export interface PersistedProjectMedia {
   sourceUrl: string;
 }
 
+/** 原始异常只用于本次分类，不把路径、签名 URL 或响应正文传入节点和历史。 */
+function describeMediaPersistenceFailure(error: unknown): string {
+  const message = typeof error === 'string' ? error : error instanceof Error ? error.message : '';
+  if (/forbidden path|路径未获授权|not allowed on the scope/i.test(message)) {
+    return '应用拒绝访问项目文件，请在设置中重新选择文件保存目录';
+  }
+  if (/permission denied|access is denied|拒绝访问|os error 5\b|EACCES|EPERM/i.test(message)) {
+    return '系统拒绝写入项目目录，请检查目录的写入权限';
+  }
+  if (/no space|disk.*full|磁盘.*不足|空间不足|ENOSPC|os error 112\b/i.test(message)) {
+    return '目标磁盘空间不足';
+  }
+  const httpStatus = /\bHTTP\s+(\d{3})\b/i.exec(message)?.[1];
+  if (httpStatus) return `图片或媒体下载失败（HTTP ${httpStatus}）`;
+  if (/下载请求失败|failed to fetch|network|timed?\s*out|超时/i.test(message)) {
+    return '下载媒体失败，请检查网络或媒体链接是否已失效';
+  }
+  if (/目录.*不存在|no such file|path not found|找不到指定|ENOENT|os error [23]\b/i.test(message)) {
+    return '项目目录或源文件不存在，请检查文件保存位置';
+  }
+  if (error instanceof MediaDataUrlTooLargeError || error instanceof MediaDataUrlTotalTooLargeError) {
+    return '媒体超过内存保存上限';
+  }
+  return '保存过程发生异常，请检查文件保存目录和媒体来源';
+}
+
 /**
  * 将一次媒体生成结果收敛为可持久化的项目文件引用。
  * 没有项目目录时（浏览器环境）无法落盘：远程 URL 仍可展示，但内嵌媒体一旦进入
@@ -854,9 +885,18 @@ export async function persistMediaUrlToProjectData(
     if (isTransientMediaUrl(url)) throw new Error('当前环境没有项目目录，无法保存内嵌媒体');
     return { mediaUrl: url, sourceUrl: url };
   }
-  const saved = await downloadUrlAndSave(url, projectId, fallbackPrefix, baseName, options);
+  let saved: Awaited<ReturnType<typeof downloadUrlAndSave>>;
+  try {
+    saved = await downloadUrlAndSave(url, projectId, fallbackPrefix, baseName, { ...options, throwOnError: true });
+  } catch (error) {
+    if (isAbortError(error) || options?.signal?.aborted) {
+      throw new DOMException('媒体保存已取消', 'AbortError');
+    }
+    // eslint-disable-next-line preserve-caught-error -- 原始异常可能包含路径、签名 URL 或凭据，不保留 cause。
+    throw new Error(`生成媒体未能写入项目目录：${describeMediaPersistenceFailure(error)}`);
+  }
   if (!saved?.filePath || !saved.assetUrl) {
-    throw new Error('生成媒体未能写入项目目录');
+    throw new Error('生成媒体未能写入项目目录：项目目录或本地媒体地址不可用');
   }
   if (isLocalMediaUrl(url)) {
     return { ...saved, mediaUrl: saved.assetUrl, sourceUrl: saved.assetUrl };
@@ -888,7 +928,7 @@ export async function downloadUrlAndSave(
       const fileName = baseName && baseName.trim()
         ? buildNodeFileName(baseName, guessExtension(url, mime, fallbackPrefix), fallbackPrefix)
         : `${sanitizeFileName(fallbackPrefix)}-${Date.now()}${guessExtension('', mime, fallbackPrefix)}`;
-      return saveDataUrlToProjectData(url, projectId, fileName, options);
+      return await saveDataUrlToProjectData(url, projectId, fileName, options);
     }
 
     if (/^blob:/i.test(url)) {
@@ -907,10 +947,10 @@ export async function downloadUrlAndSave(
       throwIfMediaReadAborted(options?.signal);
       assertMediaDataUrlSize(bytes.byteLength, kind, fileName);
       if (options?.deduplicateByContent) {
-        const dataDir = await ensureProjectDataDir(projectId);
+        const dataDir = await ensureProjectDataDir(projectId, { throwOnError: options.throwOnError });
         if (!dataDir) return null;
         const destPath = await resolveContentAddressedProjectPath(dataDir, fileName, bytes);
-        if (!await exists(destPath).catch(() => false)) {
+        if (!await exists(destPath)) {
           throwIfMediaReadAborted(options?.signal);
           await writeFile(destPath, bytes);
           notifyProjectDiskChanged();
@@ -921,7 +961,7 @@ export async function downloadUrlAndSave(
           assetUrl: convertFileSrc ? convertFileSrc(destPath) : '',
         };
       }
-      return saveBinaryToProjectData(bytes, projectId, fileName);
+      return await saveBinaryToProjectData(bytes, projectId, fileName, options);
     }
 
     const sourcePath = localMediaUrlToPath(url);
@@ -931,7 +971,7 @@ export async function downloadUrlAndSave(
     const fileName = baseName && baseName.trim()
       ? buildNodeFileName(baseName, guessExtension(sourceName ?? url, undefined, fallbackPrefix), fallbackPrefix)
       : sourceName ? sanitizeFileName(sourceName) : extractFileNameFromUrl(url, fallbackPrefix);
-    const dataDir = await ensureProjectDataDir(projectId);
+    const dataDir = await ensureProjectDataDir(projectId, { throwOnError: options?.throwOnError });
     if (!dataDir) return null;
     const result = await withDownloadDestinationLock(
       dataDir,
@@ -949,6 +989,7 @@ export async function downloadUrlAndSave(
     const toAssetUrl = await getConvertFileSrc();
     return { filePath: result.path, assetUrl: toAssetUrl ? toAssetUrl(result.path) : '' };
   } catch (err) {
+    if (options?.throwOnError) throw err;
     console.warn('[fileService] downloadUrlAndSave failed:', err);
     return null;
   }
