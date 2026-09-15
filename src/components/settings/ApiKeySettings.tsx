@@ -481,20 +481,36 @@ export default function ApiKeySettings({ onClose }: { onClose: () => void }) {
   };
 
   const handleRemoveConnection = async (connectionId: string) => {
-    const providerConfig = config.providers[connectionId];
-    const definition = getProviderDefinition(connectionId, providerConfig);
-    if (connectionId === 'dreamina') await handleDreaminaLogout();
-    if (definition?.kind === 'web-search') {
-      for (const searchDefinition of getWebSearchProviderDefinitions()) {
-        await removeProviderConfig(searchDefinition.id);
+    try {
+      const providerConfig = useAppStore.getState().config.providers[connectionId];
+      const definition = getProviderDefinition(connectionId, providerConfig);
+      if (connectionId === 'dreamina') await handleDreaminaLogout();
+      const connectionIds = definition?.kind === 'web-search'
+        ? getWebSearchProviderDefinitions().map((provider) => provider.id)
+        : [connectionId];
+      if (connectionId === 'runninghub-model') connectionIds.push('runninghub');
+      let cleanupFailed = false;
+      for (const id of connectionIds) {
+        try {
+          await removeProviderConfig(id);
+        } catch {
+          // Action 先移除内存配置，再清理项目引用。后者失败不能跳过配置提交。
+          // 若配置仍存在，则删除本身未完成，不能当作引用清理失败继续。
+          if (useAppStore.getState().config.providers[id]) throw new Error('连接删除失败，请重试');
+          cleanupFailed = true;
+        }
       }
-      updateConfig({ webSearchProviderId: undefined });
-    } else {
-      await removeProviderConfig(connectionId);
+      if (definition?.kind === 'web-search') updateConfig({ webSearchProviderId: undefined });
+      await saveConfig({ silent: true, throwOnError: true });
+      setPendingDeleteId(undefined);
+      useAppStore.getState().showToast(
+        cleanupFailed ? t('连接已删除，但部分项目的模型引用清理失败，请检查相关项目') : t('连接已删除'),
+        cleanupFailed ? 'error' : 'success',
+      );
+    } catch {
+      const state = useAppStore.getState();
+      state.showToast(state.configSaveError || t('连接删除失败，请重试'), 'error');
     }
-    if (connectionId === 'runninghub-model') await removeProviderConfig('runninghub');
-    setPendingDeleteId(undefined);
-    await saveConfig();
   };
 
   return (

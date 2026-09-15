@@ -1112,19 +1112,19 @@ export async function loadConfigWithSecrets(options?: {
         const providers = config.providers ?? {};
         const unreadSecrets: string[] = [];
         const missingSecrets: string[] = [];
-        const migratedProviders: Record<string, unknown> = {};
         for (const [id, provider] of Object.entries(providers)) {
           try {
             const restored = await restoreConfigSecrets({ providers: { [id]: provider } });
             providers[id] = (restored.config as { providers: Record<string, unknown> }).providers[id];
             missingSecrets.push(...restored.missing);
-            if (restored.migrated) migratedProviders[id] = providers[id];
           } catch { unreadSecrets.push(id); }
         }
         let persistedConfig: unknown = raw;
-        if (normalizationChanged || Object.keys(migratedProviders).length) {
-          const clean = configWithoutSecrets(config);
-          persistedConfig = await patchConfigToDb(createConfigPatch(configWithoutSecrets(raw), clean));
+        // 空 Key 等旧字段也必须从实际记录中移除，否则整条连接删除时，
+        // 数据库对象与不含凭据的比较基线不同，会被误判为并发修改。
+        const migrationChanges = createConfigPatch(raw, configWithoutSecrets(config));
+        if (migrationChanges.length) {
+          persistedConfig = await patchConfigToDb(migrationChanges);
         }
         return { config, persistedConfig, missingSecrets, unreadSecrets, ...(cleanupPending ? { cleanupPending } : {}) };
       }
