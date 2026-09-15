@@ -805,9 +805,6 @@ export default function CharacterLibraryPanel() {
                       {voiceClips.map((clip) => {
                         const voiceNode = nodes.find((node) => node.id === clip.sourceNodeId);
                         const voiceHidden = voiceNode?.data.hiddenByCharacterLibrary === true;
-                        const voiceCanvasLabel = voiceNode
-                          ? t('定位画布节点')
-                          : t('添加到画布');
                         return (
                         <div
                           key={clip.id}
@@ -854,14 +851,14 @@ export default function CharacterLibraryPanel() {
                             >
                               <Icon icon="lucide:mic" width="13" height="13" aria-hidden="true" />
                             </button>
-                            {!voiceHidden ? <button
+                            {voiceNode && !voiceHidden ? <button
                               type="button"
-                              data-tooltip={voiceCanvasLabel}
-                              aria-label={voiceCanvasLabel}
+                              data-tooltip={t('定位画布节点')}
+                              aria-label={t('定位画布节点')}
                               onClick={() => handleVoiceToCanvas(clip)}
                             >
                               <Icon
-                                icon={voiceNode ? 'lucide:locate-fixed' : 'lucide:square-plus'}
+                                icon="lucide:locate-fixed"
                                 width="13"
                                 height="13"
                                 aria-hidden="true"
@@ -883,8 +880,8 @@ export default function CharacterLibraryPanel() {
                             ) : null}
                             <button
                               type="button"
-                              data-tooltip={t('移除该声音')}
-                              aria-label={t('移除该声音')}
+                              data-tooltip={t(clip.sourceNodeId ? '解除声音关联' : '移除该声音')}
+                              aria-label={t(clip.sourceNodeId ? '解除声音关联' : '移除该声音')}
                               onClick={() => void handleRemoveVoiceClip(clip)}
                             >
                               <Icon icon="lucide:trash-2" width="13" height="13" aria-hidden="true" />
