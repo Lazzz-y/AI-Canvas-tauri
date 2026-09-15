@@ -420,7 +420,7 @@ function CharacterNodeCaptureDialog({
         const clipId = await bindAudioNodeToCharacterVoice({
           nodeId: sourceNodeId, scope, characterId: effectiveCharacterId,
           kind: voiceKind, label: voiceLabel, transcript: voiceTranscript,
-          makePrimary: makePrimaryVoice, durationSec: voiceDuration,
+          makePrimary: makePrimaryVoice, durationSec: voiceDuration, hideNode,
         });
         if (!clipId) return;
         showToast('已添加到角色声音库');
@@ -889,14 +889,14 @@ function CharacterNodeCaptureDialog({
               </div>
             </>
           )}
-          {captureTab !== 'voice' ? <label className="character-capture-hide-option">
+          <label className="character-capture-hide-option">
             <input
               type="checkbox"
               checked={hideNode}
               onChange={(event) => setHideNode(event.target.checked)}
             />
             <span>添加后隐藏画布节点</span>
-          </label> : null}
+          </label>
         </section>
       </div>
 

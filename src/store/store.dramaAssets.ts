@@ -99,6 +99,7 @@ export interface BindAudioNodeToCharacterVoiceInput {
   transcript?: string;
   durationSec?: number;
   makePrimary?: boolean;
+  hideNode?: boolean;
 }
 
 export interface DramaAssetsSlice {
@@ -1023,20 +1024,33 @@ export const createDramaAssetsSlice: StateCreator<AppState, [], [], DramaAssetsS
   },
 
   removeCharacterVoiceClip: async (scope, characterId, clipId) => {
+    const state = get();
     const characters = scope === 'project'
-      ? get().dramaAssets.characters
-      : get().globalCharacters;
+      ? state.dramaAssets.characters
+      : state.globalCharacters;
     const character = characters.find((item) => item.id === characterId);
-    if (!character?.voiceClips?.some((clip) => clip.id === clipId)) return false;
-    const rest = character.voiceClips.filter((clip) => clip.id !== clipId);
-    return get().saveCharacterCard(scope, normalizeDramaCharacter({
-      ...character,
-      voiceClips: rest,
-      primaryVoiceClipId: character.primaryVoiceClipId === clipId
-        ? rest[0]?.id
-        : character.primaryVoiceClipId,
-      updatedAt: Date.now(),
-    }));
+    const clip = character?.voiceClips?.find((item) => item.id === clipId);
+    if (!character || !clip) return false;
+    const rest = (character.voiceClips ?? []).filter((item) => item.id !== clipId);
+    const sourceNodeId = scope === 'project' ? clip.sourceNodeId : undefined;
+    const guard = sourceNodeId ? registerCanvasDerivation(state, sourceNodeId) : null;
+    try {
+      const saved = await get().saveCharacterCard(scope, normalizeDramaCharacter({
+        ...character,
+        voiceClips: rest,
+        primaryVoiceClipId: character.primaryVoiceClipId === clipId
+          ? rest[0]?.id
+          : character.primaryVoiceClipId,
+        updatedAt: Date.now(),
+      }));
+      // 声音条目与来源节点共用素材，解除关联只恢复显隐，不删除节点、连线或文件。
+      if (saved && sourceNodeId && guard && isCanvasDerivationFresh(guard, get())) {
+        if (get().setCharacterLibraryNodeHidden(sourceNodeId, false)) silentSave(get);
+      }
+      return saved;
+    } finally {
+      if (guard) completeCanvasDerivation(guard);
+    }
   },
 
   setCharacterPrimaryVoice: async (scope, characterId, clipId) => {
@@ -1190,10 +1204,18 @@ export const createDramaAssetsSlice: StateCreator<AppState, [], [], DramaAssetsS
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
     };
-    const saved = await get().addCharacterVoiceClip(input.scope, character.id, clip, {
-      makePrimary: input.makePrimary === true,
-    });
-    return saved ? clip.id : null;
+    const guard = input.hideNode ? registerCanvasDerivation(state, sourceNode.id) : null;
+    try {
+      const saved = await get().addCharacterVoiceClip(input.scope, character.id, clip, {
+        makePrimary: input.makePrimary === true,
+      });
+      if (saved && guard && isCanvasDerivationFresh(guard, get())) {
+        if (get().setCharacterLibraryNodeHidden(sourceNode.id, true)) silentSave(get);
+      }
+      return saved ? clip.id : null;
+    } finally {
+      if (guard) completeCanvasDerivation(guard);
+    }
   },
 
   createAudioNodeFromCharacterVoice: (scope, characterId, clipId) => {
@@ -1231,7 +1253,7 @@ export const createDramaAssetsSlice: StateCreator<AppState, [], [], DramaAssetsS
         nodeHeight: 160,
       },
     });
-    if (scope === 'project') {
+    if (scope === 'project' && clip.sourceNodeId) {
       void state.addCharacterVoiceClip('project', characterId, {
         ...clip,
         sourceNodeId: nodeId,

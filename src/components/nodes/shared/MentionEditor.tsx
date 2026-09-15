@@ -22,8 +22,8 @@ import {
   buildDramaVoiceMentionId,
 } from '../../../types/dramaAssets';
 import type { CharacterReferenceImage } from '../../../types/dramaAssets';
-import { CHARACTER_REFERENCE_KIND_LABELS } from '../../character/characterReferencePresentation';
-import { resolveDramaActionMediaRef } from '../../../services/dramaAssetPrompt';
+import { AVATAR_ASPECT, CHARACTER_REFERENCE_KIND_LABELS } from '../../character/characterReferencePresentation';
+import { resolveDramaActionMediaRef, resolveDramaVoiceRef } from '../../../services/dramaAssetPrompt';
 import {
   bestNodeThumb,
   buildAssetChipEl,
@@ -265,6 +265,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
 
   const currentNodeType = nodes.find((node) => node.id === nodeId)?.data.type;
   const isAudioNode = currentNodeType === 'ai-audio';
+  const isVideoNode = currentNodeType === 'ai-video';
   const dramaMentionItems = useMemo(() => {
     if (!showMention) return [];
     return resolveDramaMentionItems(dramaAssets, mentionQuery, currentNodeType);
@@ -273,6 +274,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
   // 角色参考图 / 动作列表 / 单个动作的素材选择。
   const [dramaRefPickerId, setDramaRefPickerId] = useState<string | null>(null);
   const [dramaActionPicker, setDramaActionPicker] = useState(false);
+  const [dramaVoicePicker, setDramaVoicePicker] = useState(false);
   const [dramaActionId, setDramaActionId] = useState<string | null>(null);
   // @ 面板的 Tab / 资产种类筛选
   const [pickerTab, setPickerTab] = useState<'nodes' | 'assets'>('nodes');
@@ -280,6 +282,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
   useEffect(() => {
     if (!showMention) {
       setDramaRefPickerId(null);
+      setDramaVoicePicker(false);
       setDramaActionPicker(false);
       setDramaActionId(null);
       setPickerTab('nodes');
@@ -1003,7 +1006,24 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
     ];
   })();
 
-  const assetTabItems: MentionPickerItem[] = drillItem && dramaActionPicker
+  const assetTabItems: MentionPickerItem[] = drillItem && drillCharacter && isVideoNode && dramaVoicePicker
+    ? (drillCharacter.voiceClips ?? []).map((clip) => ({
+      key: `drama-voice:${clip.id}`,
+      audioPreviewUrl: resolveDramaVoiceRef(drillCharacter, clip.id)?.url,
+      label: clip.label?.trim() || '角色声音',
+      icon: MEDIA_ICONS.audio,
+      disabled: !resolveDramaVoiceRef(drillCharacter, clip.id),
+      onSelect: () => {
+        const voice = resolveDramaVoiceRef(drillCharacter, clip.id);
+        if (!voice) return;
+        restoreMentionCursor();
+        deleteAtChar();
+        insertDramaChipAtCursor(buildDramaVoiceMentionId(drillCharacter.id, clip.id), voice.label, 'voice');
+        setShowMention(false);
+        setMentionQuery('');
+      },
+    }))
+    : drillItem && dramaActionPicker
     ? drillAction && drillCharacter
       ? (drillAction.media ?? []).map((media) => ({
         key: `drama-action-media:${media.id}`,
@@ -1052,6 +1072,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
       ...(drillRefs.length === 0 ? [{
         key: 'drama-brief', label: dramaThumbOf(drillItem) ? '主视觉' : '角色简介', icon: 'lucide:text',
         thumbnailUrl: dramaThumbOf(drillItem),
+        disabled: drillItem.kind === 'character' && !dramaThumbOf(drillItem),
         onSelect: () => handleSelectDramaMention(drillItem),
       }] : []),
     ]
@@ -1071,14 +1092,24 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
           ? character?.avatarCrop
           : undefined;
         const thumb = dramaThumbOf(item) || references[0]?.imageUrl;
+        const hasUsableAction = character?.actions?.some((action) =>
+          action.media?.some((media) => !!resolveDramaActionMediaRef(character, action.id, media.id)),
+        );
+        const hasUsableVoice = isVideoNode && character?.voiceClips?.some((clip) =>
+          !!resolveDramaVoiceRef(character, clip.id),
+        );
+        const emptyCharacter = !!character && !isAudioNode && !thumb && !hasUsableAction && !hasUsableVoice;
         return {
           key: `drama:${item.id}`,
           label: item.name,
           thumbnailUrl: avatarReference?.imageUrl || thumb,
           thumbnailCrop: avatarCrop,
+          disabled: emptyCharacter,
+          title: emptyCharacter ? '该角色暂无可引用的素材' : undefined,
           icon: isAudioNode ? MEDIA_ICONS.audio : 'mdi:account-box-outline',
           badge: isAudioNode ? '音频' : multiRef ? `${references.length} 图` : thumb ? undefined : '简介',
           onSelect: () => {
+            if (emptyCharacter) return;
             if (isAudioNode) {
               if (!item.voice) return;
               restoreMentionCursor();
@@ -1088,9 +1119,10 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
               setMentionQuery('');
               return;
             }
-            // 单图或无图但有动作的角色也能进入动作选择。
-            if (multiRef || hasActions) {
+            // 单图或无图但有动作、视频可用声音的角色也能进入素材选择。
+            if (multiRef || hasActions || (isVideoNode && character?.voiceClips?.length)) {
               setDramaRefPickerId(item.id);
+              setDramaVoicePicker(false);
               setDramaActionPicker(false);
               setDramaActionId(null);
             } else handleSelectDramaMention(item);
@@ -1241,10 +1273,11 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
                 <button
                   type="button"
                   className="mention-picker-chip"
-                  aria-label={dramaActionPicker ? '返回角色参考图' : '返回资产列表'}
+                  aria-label={dramaActionPicker || dramaVoicePicker ? '返回角色参考图' : '返回资产列表'}
                   onMouseDown={(e) => {
                     e.preventDefault();
-                    if (dramaActionPicker) {
+                    if (dramaActionPicker || dramaVoicePicker) {
+                      setDramaVoicePicker(false);
                       setDramaActionPicker(false);
                       setDramaActionId(null);
                     } else setDramaRefPickerId(null);
@@ -1258,11 +1291,28 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
                     type="button"
                     className={`mention-picker-chip${dramaActionPicker ? ' active' : ''}`}
                     aria-pressed={dramaActionPicker}
-                    onMouseDown={(e) => { e.preventDefault(); setDramaActionPicker(true); setDramaActionId(null); }}
+                    onMouseDown={(e) => { e.preventDefault(); setDramaVoicePicker(false); setDramaActionPicker(true); setDramaActionId(null); }}
                   >
                     <Icon icon="lucide:accessibility" width="12" height="12" />
                     动作
                     <span className="mention-picker-chip-count">{drillActions.length}</span>
+                  </button>
+                )}
+                {drillCharacter && isVideoNode && (
+                  <button
+                    type="button"
+                    className={`mention-picker-chip${dramaVoicePicker ? ' active' : ''}`}
+                    aria-pressed={dramaVoicePicker}
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      setDramaVoicePicker(true);
+                      setDramaActionPicker(false);
+                      setDramaActionId(null);
+                    }}
+                  >
+                    <Icon icon={MEDIA_ICONS.audio} width="12" height="12" />
+                    声音
+                    <span className="mention-picker-chip-count">{drillCharacter.voiceClips?.length ?? 0}</span>
                   </button>
                 )}
                 {dramaActionPicker && drillAction && (
@@ -1275,7 +1325,10 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
               </>
             ) : undefined}
             items={effectiveTab === 'assets' ? assetTabItems : nodeTabItems}
-            emptyText={effectiveTab === 'assets' && drillItem && dramaActionPicker
+            mediaAspectRatio={effectiveTab === 'assets' ? AVATAR_ASPECT : undefined}
+            emptyText={effectiveTab === 'assets' && drillItem && dramaVoicePicker
+              ? '该角色暂无声音，请先在角色库中添加'
+              : effectiveTab === 'assets' && drillItem && dramaActionPicker
               ? drillAction ? '该动作暂无图片、GIF 或视频素材' : '该角色暂无动作，请先在角色库中添加'
               : mentionQuery ? '无匹配节点或资产' : effectiveTab === 'assets' ? isAudioNode ? '暂无带音频的角色，请先在角色库中添加音频' : '暂无短剧资产' : '暂无可引用的输入'}
             footer={(

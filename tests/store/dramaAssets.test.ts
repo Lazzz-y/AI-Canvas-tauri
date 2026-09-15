@@ -57,6 +57,81 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+describe('角色声音移除与画布来源', () => {
+  function setupVoice(sourceNodeId?: string) {
+    const node: Node<BaseNodeData> = {
+      id: 'audio-1', type: 'ai-audio', position: { x: 20, y: 30 },
+      data: { type: 'ai-audio', label: '生成声音', audioUrl: 'https://cdn/voice.wav', hiddenByCharacterLibrary: true },
+    };
+    const edge: Edge = { id: 'audio-edge', source: node.id, target: 'next' };
+    const character = sampleCharacter({
+      primaryVoiceClipId: 'voice',
+      voiceClips: [{ id: 'voice', kind: 'timbre', audioUrl: node.data.audioUrl, sourceNodeId, transcript: '', createdAt: 1, updatedAt: 1 }],
+    });
+    useAppStore.setState({ nodes: [node], edges: [edge], dramaAssets: { ...emptyDramaAssetLibrary(), characters: [character] } });
+    return { node, edge, character };
+  }
+
+  it('解除关联恢复隐藏节点，保留节点内容和连线', async () => {
+    const { node, edge } = setupVoice('audio-1');
+    const store = useAppStore.getState();
+    expect(await store.removeCharacterVoiceClip('project', 'char_1', 'voice')).toBe(true);
+    const state = useAppStore.getState();
+    expect(state.dramaAssets.characters[0].voiceClips).toEqual([]);
+    expect(state.dramaAssets.characters[0].primaryVoiceClipId).toBeUndefined();
+    expect(state.nodes).toEqual([{ ...node, data: { ...node.data, hiddenByCharacterLibrary: false } }]);
+    expect(state.edges).toEqual([edge]);
+    expect(state.selectedNodeIds).toEqual([]);
+  });
+
+  it('移除上传声音只删除条目，不按相同 URL 猜测或恢复画布节点', async () => {
+    const { node, edge } = setupVoice();
+    expect(await useAppStore.getState().removeCharacterVoiceClip('project', 'char_1', 'voice')).toBe(true);
+    expect(useAppStore.getState().dramaAssets.characters[0].voiceClips).toEqual([]);
+    expect(useAppStore.getState().nodes).toEqual([node]);
+    expect(useAppStore.getState().edges).toEqual([edge]);
+  });
+
+  it('用上传声音生成台词不会把音频副本登记为来源关联', () => {
+    setupVoice();
+    const id = useAppStore.getState().createVoiceOverNodeFromCharacterVoice('project', 'char_1', 'voice');
+    const state = useAppStore.getState();
+    expect(id).toBeTruthy();
+    expect(state.dramaAssets.characters[0].voiceClips?.[0].sourceNodeId).toBeUndefined();
+    const edge = state.edges.find((item) => item.target === id);
+    expect(edge).toBeDefined();
+    expect(state.nodes.find((node) => node.id === edge?.source)?.data.audioUrl).toBe('https://cdn/voice.wav');
+  });
+
+  it('原关联节点已删除时可移除声音，不创建替代节点', async () => {
+    setupVoice('deleted-node');
+    const before = useAppStore.getState().nodes;
+    expect(await useAppStore.getState().removeCharacterVoiceClip('project', 'char_1', 'voice')).toBe(true);
+    expect(useAppStore.getState().nodes).toBe(before);
+  });
+
+  it('声音保存失败时不解除关联或恢复节点', async () => {
+    const { node, character } = setupVoice('audio-1');
+    useAppStore.setState({ saveCharacterCard: vi.fn(async () => false) });
+    expect(await useAppStore.getState().removeCharacterVoiceClip('project', 'char_1', 'voice')).toBe(false);
+    expect(useAppStore.getState().nodes).toEqual([node]);
+    expect(useAppStore.getState().dramaAssets.characters).toEqual([character]);
+  });
+
+  it.each(['project', 'revision', 'deleted-node'])('等待保存期间 %s 变化不会恢复过期节点', async (change) => {
+    setupVoice('audio-1');
+    const pending = deferred<boolean>();
+    useAppStore.setState({ saveCharacterCard: vi.fn(() => pending.promise) });
+    const result = useAppStore.getState().removeCharacterVoiceClip('project', 'char_1', 'voice');
+    if (change === 'project') useAppStore.setState({ currentProjectId: 'p2' });
+    if (change === 'revision') useAppStore.getState().setCanvasRevision(1);
+    if (change === 'deleted-node') useAppStore.setState({ nodes: [] });
+    pending.resolve(true);
+    expect(await result).toBe(true);
+    expect(useAppStore.getState().nodes[0]?.data.hiddenByCharacterLibrary).not.toBe(false);
+  });
+});
+
 const actionMedia: CharacterActionMedia = {
   id: 'media-1', kind: 'image', name: '站立', url: 'https://cdn/action.png', createdAt: 1, updatedAt: 1,
 };
