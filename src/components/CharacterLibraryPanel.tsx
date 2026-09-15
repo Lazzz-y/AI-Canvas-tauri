@@ -806,7 +806,7 @@ export default function CharacterLibraryPanel() {
                         const voiceNode = nodes.find((node) => node.id === clip.sourceNodeId);
                         const voiceHidden = voiceNode?.data.hiddenByCharacterLibrary === true;
                         const voiceCanvasLabel = voiceNode
-                          ? t(voiceHidden ? '显示并定位节点' : '定位画布节点')
+                          ? t('定位画布节点')
                           : t('添加到画布');
                         return (
                         <div
@@ -854,7 +854,7 @@ export default function CharacterLibraryPanel() {
                             >
                               <Icon icon="lucide:mic" width="13" height="13" aria-hidden="true" />
                             </button>
-                            <button
+                            {!voiceHidden ? <button
                               type="button"
                               data-tooltip={voiceCanvasLabel}
                               aria-label={voiceCanvasLabel}
@@ -866,7 +866,7 @@ export default function CharacterLibraryPanel() {
                                 height="13"
                                 aria-hidden="true"
                               />
-                            </button>
+                            </button> : null}
                             {voiceNode ? (
                               <button
                                 type="button"

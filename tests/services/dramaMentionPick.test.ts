@@ -361,3 +361,54 @@ describe('音频节点的角色声音引用', () => {
     await expect(resolvePromptWithMediaRefs(`@drama{char_1#${pick}:音频}`)).rejects.toThrow('角色音频引用已失效');
   });
 });
+
+describe('视频请求中的角色素材归属', () => {
+  beforeEach(() => {
+    useAppStore.setState(useAppStore.getInitialState(), true);
+  });
+
+  it('保留交错引用的位置、角色 ID 和声音用途，不包含样本台词', async () => {
+    const first = voiceCharacter();
+    first.referenceImages = [{ id: 'front', kind: 'primary', imageUrl: actionImage, prompt: '', createdAt: 0, updatedAt: 0 }];
+    first.primaryReferenceImageId = 'front';
+    first.voiceClips![1].transcript = '这是样本原台词';
+    const second: DramaCharacter = { ...first, id: 'char_2', name: '另一个角色', voiceClips: [
+      { ...first.voiceClips![1], id: 'line', kind: 'line', audioUrl: otherVoiceUrl },
+    ] };
+    useAppStore.setState({ dramaAssets: { ...emptyDramaAssetLibrary(), characters: [first, second] } });
+    const prompt = `保留手写图片1 ${voiceMention()} @drama{char_2#front:另一个角色} @drama{char_1#front:林小满} @drama{${buildDramaVoiceMentionId('char_2', 'line')}:台词}`;
+    const result = await resolvePromptWithMediaRefs(prompt, { preserveBindings: true });
+    const bindings = result.segments!.filter((segment) => typeof segment !== 'string');
+    expect(bindings.map((segment) => segment.character)).toEqual([
+      { id: 'char_1', name: '林小满', usage: 'timbre' },
+      { id: 'char_2', name: '另一个角色', usage: 'appearance' },
+      { id: 'char_1', name: '林小满', usage: 'appearance' },
+      { id: 'char_2', name: '另一个角色', usage: 'line' },
+    ]);
+    expect(result.segments![0]).toBe('保留手写图片1 ');
+    expect(result.imageUrls).toEqual([actionImage]);
+    expect(result.prompt).not.toContain('样本原台词');
+    expect(JSON.stringify(result.segments)).not.toContain('样本原台词');
+  });
+
+  it('拼图与动作各自保留所属角色，声音不会替换成主视觉', async () => {
+    const card = voiceCharacter();
+    card.referenceImages = [
+      { id: 'a', kind: 'primary', imageUrl: actionImage, prompt: '', createdAt: 0, updatedAt: 0 },
+      { id: 'b', kind: 'turnaround', imageUrl: actionGif, prompt: '', createdAt: 0, updatedAt: 0 },
+    ];
+    useAppStore.setState({ dramaAssets: { ...emptyDramaAssetLibrary(), characters: [card] } });
+    const merger = await import('../../src/services/characterReferenceMerge');
+    const merge = vi.spyOn(merger, 'mergeReferenceImages').mockResolvedValue('data:image/png;base64,bWVyZ2Vk');
+    try {
+      const result = await resolvePromptWithMediaRefs(`@drama{char_1#all:林小满} ${actionMention('clip')} ${voiceMention()}`, { preserveBindings: true });
+      const bindings = result.segments!.filter((segment) => typeof segment !== 'string');
+      expect(bindings.map((segment) => [segment.reference.kind, segment.character?.usage])).toEqual([
+        ['image', 'appearance'], ['video', 'action'], ['audio', 'timbre'],
+      ]);
+      expect(bindings.every((segment) => segment.character?.id === 'char_1')).toBe(true);
+    } finally {
+      merge.mockRestore();
+    }
+  });
+});
