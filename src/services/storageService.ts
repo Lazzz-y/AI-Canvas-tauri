@@ -827,7 +827,7 @@ export async function loadWorkflows(): Promise<WorkflowRecord[]> {
     return await getAllWorkflows();
   } catch (error) {
     console.error('Load workflows failed:', error);
-    return [];
+    throw error;
   }
 }
 

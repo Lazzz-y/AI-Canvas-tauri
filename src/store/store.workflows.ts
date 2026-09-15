@@ -42,7 +42,15 @@ function validateWorkflow(workflow: WorkflowDefinition) {
   } else if (workflow.runninghub) throw new Error('云工作流定义与来源不一致');
 }
 
-export const createWorkflowSlice: StateCreator<AppState, [], [], WorkflowSlice> = (set, get) => ({
+export const createWorkflowSlice: StateCreator<AppState, [], [], WorkflowSlice> = (set, get) => {
+  // 加载、补齐、编辑和删除共用顺序，防止旧保存或旧列表在删除完成后写回。
+  let persistenceQueue = Promise.resolve();
+  const enqueue = <T,>(operation: () => Promise<T>): Promise<T> => {
+    const pending = persistenceQueue.then(operation);
+    persistenceQueue = pending.then(() => undefined, () => undefined);
+    return pending;
+  };
+  return ({
   workflows: [],
   workflowPanelOpen: false,
   workflowPanelSource: 'comfyui',
@@ -50,7 +58,7 @@ export const createWorkflowSlice: StateCreator<AppState, [], [], WorkflowSlice> 
 
   setWorkflowPanelOpen: (open, source) => set({ workflowPanelOpen: open, ...(source ? { workflowPanelSource: source } : {}) }),
 
-  addWorkflow: async (wf) => {
+  addWorkflow: (wf) => enqueue(async () => {
     validateWorkflow(wf);
     await fileService.saveWorkflow({
       id: wf.id,
@@ -69,9 +77,9 @@ export const createWorkflowSlice: StateCreator<AppState, [], [], WorkflowSlice> 
       updatedAt: wf.updatedAt,
     });
     set((state) => ({ workflows: [...state.workflows, wf] }));
-  },
+  }),
 
-  updateWorkflow: async (id, updates) => {
+  updateWorkflow: (id, updates) => enqueue(async () => {
     const existing = get().workflows.find((workflow) => workflow.id === id);
     if (!existing) throw new Error('要更新的工作流不存在');
     const updatedWorkflow: WorkflowDefinition = {
@@ -87,18 +95,18 @@ export const createWorkflowSlice: StateCreator<AppState, [], [], WorkflowSlice> 
         workflow.id === id ? updatedWorkflow : workflow
       )),
     }));
-  },
+  }),
 
-  deleteWorkflow: async (id) => {
+  deleteWorkflow: (id) => enqueue(async () => {
+    await fileService.deleteWorkflow(id);
     set((state) => ({
       workflows: state.workflows.filter((w) => w.id !== id),
     }));
-    await fileService.deleteWorkflow(id).catch((e) => console.warn('[删除工作流] 清理失败:', e));
-  },
+  }),
 
-  resetBuiltInWorkflows: async () => {
+  resetBuiltInWorkflows: () => enqueue(async () => {
     const builtIns = resetBuiltInWorkflows();
-    await Promise.all(builtIns.map((workflow) => fileService.saveWorkflow(workflow)));
+    for (const workflow of builtIns) await fileService.saveWorkflow(workflow);
     const builtInIds = new Set(builtIns.map((workflow) => workflow.id));
     set((state) => ({
       workflows: [
@@ -107,9 +115,9 @@ export const createWorkflowSlice: StateCreator<AppState, [], [], WorkflowSlice> 
       ],
     }));
     return builtIns.length;
-  },
+  }),
 
-  loadWorkflows: async () => {
+  loadWorkflows: () => enqueue(async () => {
     const records = await fileService.loadWorkflows();
     const mapped: WorkflowDefinition[] = records.map((r) => ({
       id: r.id,
@@ -128,18 +136,19 @@ export const createWorkflowSlice: StateCreator<AppState, [], [], WorkflowSlice> 
       updatedAt: r.updatedAt,
     }));
     // 早先播种的内置工作流缺可编辑图，补上后 ComfyUI 才能正常打开
-    const patched = mapped.map((workflow) => {
+    const patched = await Promise.all(mapped.map(async (workflow) => {
       const upgraded = withBuiltInEditableContent(workflow);
       if (upgraded) {
-        fileService.saveWorkflow(upgraded).catch((e) => console.warn('[内置工作流] 补可编辑图失败:', e));
+        await fileService.saveWorkflow(upgraded).catch((e) => console.warn('[内置工作流] 补可编辑图失败:', e));
       }
       return upgraded ?? workflow;
-    });
+    }));
     // 首次启动把内置工作流落盘，之后它们和用户导入的工作流没有区别
     const seeded = pendingBuiltInWorkflows(patched);
     for (const workflow of seeded) {
-      fileService.saveWorkflow(workflow).catch((e) => console.warn('[内置工作流] 持久化失败:', e));
+      await fileService.saveWorkflow(workflow).catch((e) => console.warn('[内置工作流] 持久化失败:', e));
     }
-    if (patched.length > 0 || seeded.length > 0) set({ workflows: [...seeded, ...patched] });
-  },
-});
+    set({ workflows: [...seeded, ...patched] });
+  }),
+  });
+};

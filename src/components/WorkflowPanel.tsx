@@ -321,9 +321,9 @@ export default function WorkflowPanel() {
   const handleDelete = useCallback(
     (id: string, e: React.MouseEvent) => {
       e.stopPropagation();
-      deleteWorkflow(id);
+      void deleteWorkflow(id).catch(() => showToast('删除工作流失败，请重试', 'error'));
     },
-    [deleteWorkflow]
+    [deleteWorkflow, showToast]
   );
 
   // 默认 IO 节点：用户没 @ 该类型节点时，提示词框里的同类内容自动注入这里

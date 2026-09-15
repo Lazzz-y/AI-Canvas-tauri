@@ -7,11 +7,12 @@ const fileMocks = vi.hoisted(() => ({
   deleteWorkflow: vi.fn(),
   loadWorkflows: vi.fn(),
 }));
+const builtInMocks = vi.hoisted(() => ({ withBuiltInEditableContent: vi.fn() }));
 
 vi.mock('../../src/services/fileService', () => fileMocks);
 vi.mock('../../src/services/builtinWorkflows', () => ({
   pendingBuiltInWorkflows: () => [],
-  withBuiltInEditableContent: () => null,
+  withBuiltInEditableContent: builtInMocks.withBuiltInEditableContent,
 }));
 
 import { createWorkflowSlice } from '../../src/store/store.workflows';
@@ -39,6 +40,9 @@ function createSlice(initialWorkflows: WorkflowDefinition[] = []) {
 beforeEach(() => {
   vi.clearAllMocks();
   fileMocks.saveWorkflow.mockResolvedValue(undefined);
+  fileMocks.deleteWorkflow.mockResolvedValue(undefined);
+  fileMocks.loadWorkflows.mockResolvedValue([]);
+  builtInMocks.withBuiltInEditableContent.mockReturnValue(null);
 });
 
 describe('工作流持久化顺序', () => {
@@ -97,9 +101,116 @@ describe('工作流持久化顺序', () => {
 
     const pending = slice.addWorkflow(workflow);
     expect(getState().workflows).toEqual([]);
+    await vi.waitFor(() => expect(resolveSave).toBeDefined());
 
     resolveSave?.();
     await pending;
     expect(getState().workflows).toEqual([workflow]);
+  });
+
+  it('删除落库失败时保留条目并允许重试', async () => {
+    const { slice, getState } = createSlice([workflow]);
+    fileMocks.deleteWorkflow.mockRejectedValueOnce(new Error('删除失败'));
+
+    await expect(slice.deleteWorkflow(workflow.id)).rejects.toThrow('删除失败');
+    expect(getState().workflows).toEqual([workflow]);
+
+    await slice.deleteWorkflow(workflow.id);
+    expect(getState().workflows).toEqual([]);
+  });
+
+  it('数据库删除完成前不从界面移除条目', async () => {
+    const { slice, getState } = createSlice([workflow]);
+    let finishDelete!: () => void;
+    fileMocks.deleteWorkflow.mockImplementationOnce(() => new Promise<void>((resolve) => { finishDelete = resolve; }));
+    const deleting = slice.deleteWorkflow(workflow.id);
+    await vi.waitFor(() => expect(finishDelete).toBeDefined());
+    expect(getState().workflows).toEqual([workflow]);
+
+    finishDelete();
+    await deleting;
+    expect(getState().workflows).toEqual([]);
+  });
+
+  it('等待旧编辑写入后再删除，重新加载不会恢复已删除工作流', async () => {
+    const disk = new Map([[workflow.id, workflow]]);
+    const other = { ...workflow, id: 'other-workflow' };
+    disk.set(other.id, other);
+    const { slice, getState } = createSlice([...disk.values()]);
+    let finishSave!: () => void;
+    fileMocks.saveWorkflow.mockImplementationOnce(async (record: WorkflowDefinition) => {
+      await new Promise<void>((resolve) => { finishSave = resolve; });
+      disk.set(record.id, record);
+    });
+    fileMocks.deleteWorkflow.mockImplementation(async (id: string) => { disk.delete(id); });
+    fileMocks.loadWorkflows.mockImplementation(async () => [...disk.values()]);
+
+    const updating = slice.updateWorkflow(workflow.id, { name: '旧编辑' });
+    await vi.waitFor(() => expect(finishSave).toBeDefined());
+    const deleting = slice.deleteWorkflow(workflow.id);
+    expect(fileMocks.deleteWorkflow).not.toHaveBeenCalled();
+    finishSave();
+    await Promise.all([updating, deleting]);
+    await slice.loadWorkflows();
+    expect(getState().workflows).toEqual([other]);
+
+    const restarted = createSlice();
+    await restarted.slice.loadWorkflows();
+    expect(restarted.getState().workflows).toEqual([other]);
+  });
+
+  it('删除后的迟到编辑不能重新创建工作流', async () => {
+    const { slice, getState } = createSlice([workflow]);
+    const deleting = slice.deleteWorkflow(workflow.id);
+    const updating = slice.updateWorkflow(workflow.id, { name: '迟到编辑' });
+    await expect(updating).rejects.toThrow('不存在');
+    await deleting;
+    expect(fileMocks.saveWorkflow).not.toHaveBeenCalled();
+    expect(getState().workflows).toEqual([]);
+  });
+
+  it('加载时的内置补齐完成后才删除，不留下后台写回', async () => {
+    const disk = new Map([[workflow.id, workflow]]);
+    const { slice, getState } = createSlice();
+    fileMocks.loadWorkflows.mockImplementation(async () => [...disk.values()]);
+    builtInMocks.withBuiltInEditableContent.mockReturnValueOnce({ ...workflow, editableContent: '{}' });
+    let finishSave!: () => void;
+    fileMocks.saveWorkflow.mockImplementationOnce(async (record: WorkflowDefinition) => {
+      await new Promise<void>((resolve) => { finishSave = resolve; });
+      disk.set(record.id, record);
+    });
+    fileMocks.deleteWorkflow.mockImplementation(async (id: string) => { disk.delete(id); });
+
+    const loading = slice.loadWorkflows();
+    await vi.waitFor(() => expect(finishSave).toBeDefined());
+    const deleting = slice.deleteWorkflow(workflow.id);
+    expect(fileMocks.deleteWorkflow).not.toHaveBeenCalled();
+    finishSave();
+    await Promise.all([loading, deleting]);
+    await slice.loadWorkflows();
+    expect(disk.size).toBe(0);
+    expect(getState().workflows).toEqual([]);
+  });
+
+  it('重新加载空列表时清除内存中的旧工作流', async () => {
+    const { slice, getState } = createSlice([workflow]);
+    await slice.loadWorkflows();
+    expect(getState().workflows).toEqual([]);
+  });
+
+  it('加载失败时保留原列表，不按空列表处理', async () => {
+    const { slice, getState } = createSlice([workflow]);
+    fileMocks.loadWorkflows.mockRejectedValueOnce(new Error('数据库读取失败'));
+    await expect(slice.loadWorkflows()).rejects.toThrow('数据库读取失败');
+    expect(getState().workflows).toEqual([workflow]);
+    expect(fileMocks.saveWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('存储服务不把数据库读取失败伪装成空工作流列表', async () => {
+    const db = await import('../../src/services/indexedDbService');
+    const storage = await import('../../src/services/storageService');
+    const failure = new Error('数据库读取失败');
+    vi.spyOn(db, 'getAllWorkflows').mockRejectedValueOnce(failure);
+    await expect(storage.loadWorkflows()).rejects.toBe(failure);
   });
 });
