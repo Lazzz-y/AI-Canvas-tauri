@@ -41,6 +41,27 @@ interface BuiltInWorkflowSpec {
 
 const BUILT_IN_SPECS: BuiltInWorkflowSpec[] = [
   {
+    id: 'builtin-qwen3-voice-clone',
+    name: 'Qwen3-TTS-01-原声1比1克隆',
+    fileName: 'qwen3-voice-clone.json',
+    category: 'ai-audio',
+    defaultNodes: { prompt: '3', audio: '1' },
+  },
+  {
+    id: 'builtin-qwen3-voice-design',
+    name: 'Qwen3-TTS-02-文生语音抽卡',
+    fileName: 'qwen3-voice-design.json',
+    category: 'ai-audio',
+    defaultNodes: { prompt: '1' },
+  },
+  {
+    id: 'builtin-qwen3-reference-voice-design',
+    name: 'Qwen3-TTS-03-参考音频抽卡-支持方言',
+    fileName: 'qwen3-reference-voice-design.json',
+    category: 'ai-audio',
+    defaultNodes: { prompt: '3', audio: '1' },
+  },
+  {
     id: 'builtin-auk-tts',
     name: 'AuK 文生语音',
     fileName: 'auk-tts.json',

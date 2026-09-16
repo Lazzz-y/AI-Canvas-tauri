@@ -3,6 +3,7 @@ import type { AudioSpeechReference, AudioSpeechSettings, AudioSpeechWorkflowCont
 import type { DramaAssetLibrary } from '../../types/dramaAssets';
 import { parseDramaMentionId } from '../../types/dramaAssets';
 import { findDramaAsset, resolveDramaVoiceRef } from '../dramaAssetPrompt';
+import { applyQwenSpeechSettings, inspectQwenSpeechGraph } from './qwenSpeechSettings';
 
 export const AUDIO_SPEECH_VOICES = [
   { value: 'male', label: '男声', description: 'A clear adult male voice' },
@@ -26,7 +27,7 @@ const workflowChip = () => /@wf\{([^|]+)\|([^|]+)\|([^|}]+)\}\(([\s\S]*?)\)/g;
 const bounded = (value: number | undefined, fallback: number, min: number, max: number) =>
   Number.isFinite(value) ? Math.round(Math.min(max, Math.max(min, value!))) : fallback;
 
-export function normalizeAudioSpeechSettings(settings?: AudioSpeechSettings, duration = 3): Required<AudioSpeechSettings> {
+export function normalizeAudioSpeechSettings(settings?: AudioSpeechSettings, duration = 3): Required<Pick<AudioSpeechSettings, 'voiceStyle' | 'pace' | 'duration'>> {
   return {
     voiceStyle: AUDIO_SPEECH_VOICES.find((voice) => voice.value === settings?.voiceStyle)?.value ?? 'female',
     pace: bounded(settings?.pace, 2, 0, 4),
@@ -34,11 +35,12 @@ export function normalizeAudioSpeechSettings(settings?: AudioSpeechSettings, dur
   };
 }
 
-/** 只识别可验证的单路 AuK 语音图；不按工作流 ID 或厂商名称散落判断。 */
+/** 按实际连接识别支持的语音图，复制或重命名不会丢失参数能力。 */
 export function resolveAudioSpeechWorkflow(workflow?: WorkflowDefinition): AudioSpeechWorkflowControls | undefined {
   if (!workflow || workflow.category !== 'ai-audio' || (workflow.adapterType && workflow.adapterType !== 'comfyui')) return;
   try {
-    const controls = inspectAudioSpeechGraph(JSON.parse(workflow.fileContent));
+    const graph = JSON.parse(workflow.fileContent);
+    const controls = inspectAudioSpeechGraph(graph) ?? inspectQwenSpeechGraph(graph, workflow);
     if (!controls || !workflow.ioNodes?.some((io) => io.nodeId === controls.textNodeId && io.type === 'prompt')) return;
     if (controls.referenceInputId && !workflow.ioNodes.some((io) => io.nodeId === controls.referenceInputId && io.type === 'audio')) return;
     if (workflow.defaultNodes?.prompt && workflow.defaultNodes.prompt !== controls.textNodeId) return;
@@ -146,7 +148,8 @@ export function audioSpeechModeIssue(controls: AudioSpeechWorkflowControls, hasR
 }
 
 /** 只修改本次提交的图，正文已按 IO 优先级注入；语速描述不能写进朗读台词字段。 */
-export function applyAudioSpeechSettings(graph: Graph, controls: AudioSpeechWorkflowControls, settings?: AudioSpeechSettings) {
+export function applyAudioSpeechSettings(graph: Graph, controls: AudioSpeechWorkflowControls, settings?: AudioSpeechSettings, explicitInputs?: Record<string, string>) {
+  if (controls.qwen) return applyQwenSpeechSettings(graph, controls, settings, explicitInputs);
   const values = normalizeAudioSpeechSettings(settings, controls.duration);
   const textInputs = graph[controls.textNodeId].inputs as Record<string, unknown>;
   const encodeInputs = graph[controls.encodeId].inputs as Record<string, unknown>;

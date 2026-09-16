@@ -12,6 +12,8 @@ import { useAppStore } from '../../src/store/useAppStore';
 import { generateAudio } from '../../src/services/ai/generateAudio';
 import { mediaProviderRegistry } from '../../src/services/ai/mediaProviderRegistry';
 import AudioParamSelector from '../../src/components/nodes/shared/AudioParamSelector';
+import { pendingBuiltInWorkflows } from '../../src/services/builtinWorkflows';
+import { qwenFieldValue, QWEN_VOICE_PRESETS } from '../../src/services/ai/qwenSpeechSettings';
 import { batchExecuteNodes } from '../../src/utils/batchExecute';
 import { executeGeneration } from '../../src/services/generationService';
 
@@ -180,5 +182,122 @@ describe('生成入口的文本与参考分离', () => {
     expect(useAppStore.getState().nodes[0].data.audioSpeechSettings).toEqual({ voiceStyle: 'boy', pace: 1, duration: 12 });
     await useAppStore.getState().undo();
     expect(useAppStore.getState().nodes[0].data.audioSpeechSettings).toEqual({ voiceStyle: 'boy', pace: 1, duration: 12 });
+  });
+});
+
+describe('Qwen 语音面板和字段能力', () => {
+  const ids = ['builtin-qwen3-voice-clone', 'builtin-qwen3-voice-design', 'builtin-qwen3-reference-voice-design'];
+  function qwenWorkflow(id = ids[2]) {
+    localStorage.clear();
+    return pendingBuiltInWorkflows([]).find((item) => item.id === id)!;
+  }
+  function override(wf: WorkflowDefinition, values: Record<string, string | number | boolean>): AudioSpeechSettings {
+    return { qwen: { [wf.id]: values } };
+  }
+
+  it.each(ids)('%s 由图识别，不依赖内置 ID，所有字段默认值来自对应输入', (id) => {
+    const wf = qwenWorkflow(id);
+    const renamed = { ...wf, id: 'user-workflow', name: '我的副本' };
+    const controls = resolveAudioSpeechWorkflow(renamed)!;
+    expect(controls.qwen?.workflowId).toBe('user-workflow');
+    expect(controls.duration).toBeUndefined();
+    const graph = JSON.parse(wf.fileContent);
+    for (const field of controls.qwen!.fields.filter((item) => !item.virtual)) {
+      expect(field.value).toEqual(graph[field.nodeId].inputs[field.key]);
+    }
+    expect(controls.qwen?.fields.some((field) => field.key === 'ref_text')).toBe(false);
+    expect(controls.qwen?.fields.some((field) => field.key === 'seconds')).toBe(false);
+    expect(controls.referenceInputId).toBe(id === ids[1] ? undefined : '1');
+  });
+
+  it.each(['broken-reference', 'broken-conversion', 'different-output', 'second-generator'])('不为 %s 图展示错误的参数能力', (change) => {
+    const wf = qwenWorkflow();
+    const graph = JSON.parse(wf.fileContent);
+    if (change === 'broken-reference') graph['3'].inputs.ref_audio = ['5', 0];
+    if (change === 'broken-conversion') graph['6'].inputs.target_voice = ['3', 0];
+    if (change === 'different-output') graph['4'].inputs.audio = ['3', 0];
+    if (change === 'second-generator') graph.extra = graph['3'];
+    expect(resolveAudioSpeechWorkflow({ ...wf, fileContent: JSON.stringify(graph) })).toBeUndefined();
+  });
+
+  it('未编辑时保留目标样本、原音色和采样；其他工作流覆盖值不串入', () => {
+    const wf = qwenWorkflow();
+    const controls = resolveAudioSpeechWorkflow(wf)!;
+    const graph = JSON.parse(wf.fileContent);
+    const settings = { voiceStyle: 'male' as const, pace: 4, duration: 10, qwen: { unrelated: { 'design.instruct': '别的音色' } } };
+    applyAudioSpeechSettings(graph, controls, settings);
+    const original = JSON.parse(wf.fileContent);
+    expect(graph['5'].inputs.instruct).toBe(original['5'].inputs.instruct);
+    expect(graph['5'].inputs.text).toBe(original['5'].inputs.text);
+    expect(graph['3']).toEqual(original['3']);
+    expect(graph['6']).toEqual(original['6']);
+    expect(graph['5'].inputs).not.toHaveProperty('seconds');
+  });
+
+  it('各组覆盖准确写入，正文、转写连线与未编辑参数不变', () => {
+    const wf = qwenWorkflow();
+    const controls = resolveAudioSpeechWorkflow(wf)!;
+    const graph = JSON.parse(wf.fileContent);
+    const values = { 'clone.temperature': 0.6, 'clone.max_new_tokens': 2048, 'clone.seed_mode': 'fixed', 'clone.seed': 99,
+      'clone.x_vector_only': true, 'design.instruct': '温暖低沉的成年女声', 'design.pace': 1,
+      'design.seed_mode': 'fixed', 'design.seed': 123, 'design.text': '这是一段目标音色样本。',
+      'asr.language': 'Cantonese', 'asr.hints': '地名提示', 'asr.normalize_text': true,
+      'conversion.pitch_shift': -2, 'conversion.output_gain_db': 1.5 };
+    applyAudioSpeechSettings(graph, controls, override(wf, values));
+    expect(graph['3'].inputs).toMatchObject({ temperature: 0.6, max_new_tokens: 2048, seed: 99, x_vector_only: true, ref_text: ['2', 0] });
+    expect(graph['5'].inputs).toMatchObject({ seed: 123, text: '这是一段目标音色样本。', instruct: '温暖低沉的成年女声\n语速偏慢。' });
+    expect(graph['2'].inputs).toMatchObject({ language: 'Cantonese', hints: '地名提示', normalize_text: true });
+    expect(graph['6'].inputs).toMatchObject({ pitch_shift: -2, output_gain_db: 1.5, source_audio: ['3', 0], target_voice: ['5', 0] });
+    expect(JSON.parse(wf.fileContent)['3'].inputs.seed).toBe(20260916);
+    expect(values['design.instruct']).toBe('温暖低沉的成年女声');
+  });
+
+  it.each([
+    ['clone.temperature', NaN], ['clone.seed', 1.5], ['clone.max_new_tokens', 2],
+    ['design.pace', 7], ['design.model_choice', '0.6B'], ['clone.language', 'made-up-language'],
+  ])('拒绝无效覆盖 %s=%s，不静默写入', (key, value) => {
+    const wf = qwenWorkflow();
+    expect(() => applyAudioSpeechSettings(JSON.parse(wf.fileContent), resolveAudioSpeechWorkflow(wf)!, override(wf, { [key]: value }))).toThrow('的值无效');
+  });
+
+  it('固定与抽卡分别控制两条 TTS 链路', () => {
+    const wf = qwenWorkflow();
+    const controls = resolveAudioSpeechWorkflow(wf)!;
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    const graph = JSON.parse(wf.fileContent);
+    applyAudioSpeechSettings(graph, controls, override(wf, { 'clone.seed_mode': 'randomize', 'design.seed_mode': 'fixed', 'design.seed': 88 }));
+    expect(graph['3'].inputs.seed).toBe(Math.floor(Number.MAX_SAFE_INTEGER * 0.5));
+    expect(graph['5'].inputs.seed).toBe(88);
+    const field = controls.qwen!.fields.find((item) => item.id === 'design.seed')!;
+    expect(qwenFieldValue(controls.qwen!, field, override(wf, { 'design.seed': 88 }))).toBe(88);
+    expect(qwenFieldValue(controls.qwen!, field, { qwen: {} })).toBe(20260916);
+  });
+
+  it.each(ids)('%s 在暗浅主题显示可用参数，隐藏无效秒数', (id) => {
+    const wf = qwenWorkflow(id);
+    const controls = resolveAudioSpeechWorkflow(wf)!;
+    for (const theme of ['light', 'dark']) {
+      const html = renderToStaticMarkup(createElement('div', { 'data-theme': theme }, createElement(AudioParamSelector, {
+        purpose: 'speech', speechControls: controls, references: controls.referenceInputId ? [{ key: 'voice', label: '角色声音', url: 'voice.wav' }] : [],
+      })));
+      expect(html).toContain('data-qwen-speech-mode');
+      expect(html).toContain('生成长度上限（token）');
+      expect(html).not.toContain('生成时长（秒）');
+      expect(html).toContain('恢复此工作流默认参数');
+      expect(html).toContain('overflow-y-auto');
+      expect(html).toContain('ui-switch');
+      expect(html).toContain('<details');
+      if (id === ids[0]) { expect(html).not.toContain('自定义音色描述'); expect(html).not.toContain('语速（描述控制）'); }
+      else { expect(html).toContain('自定义音色描述'); expect(html).toContain(QWEN_VOICE_PRESETS[0].label); }
+      if (id === ids[2]) { expect(html).toContain('音色转换（SeedVC）'); expect(html).toContain('目标声音类型'); }
+    }
+  });
+
+  it('覆盖设置通过 Store 和序列化保留，旧 AuK 参数仍保留', () => {
+    const wf = qwenWorkflow();
+    const settings: AudioSpeechSettings = { voiceStyle: 'girl', duration: 8, ...override(wf, { 'clone.seed': 123, 'design.instruct': '自定义音色' }) };
+    useAppStore.setState({ nodes: nodes.map((node) => ({ ...node, position: { x: 0, y: 0 } })) });
+    useAppStore.getState().updateNodeData('target', { audioSpeechSettings: settings });
+    expect(JSON.parse(JSON.stringify(useAppStore.getState().nodes[0].data.audioSpeechSettings))).toEqual(settings);
   });
 });

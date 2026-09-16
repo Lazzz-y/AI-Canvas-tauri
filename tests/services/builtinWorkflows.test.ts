@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   corsSafeFetch: vi.fn(),
@@ -75,11 +75,11 @@ beforeEach(() => {
 });
 
 describe('内置 MiniMax H3 工作流', () => {
-  it('首次启动播种六个视频与两个音频工作流，之后不再重复添加', () => {
+  it('首次启动播种六个视频与五个音频工作流，之后不再重复添加', () => {
     const first = pendingBuiltInWorkflows([]);
-    expect(first).toHaveLength(8);
+    expect(first).toHaveLength(11);
     expect(first.filter((workflow) => workflow.category === 'ai-video')).toHaveLength(6);
-    expect(first.filter((workflow) => workflow.category === 'ai-audio')).toHaveLength(2);
+    expect(first.filter((workflow) => workflow.category === 'ai-audio')).toHaveLength(5);
     expect(pendingBuiltInWorkflows([])).toHaveLength(0);
   });
 
@@ -90,7 +90,7 @@ describe('内置 MiniMax H3 工作流', () => {
     );
     const pending = pendingBuiltInWorkflows([]);
     expect(pending.map((workflow) => workflow.id)).not.toContain('builtin-minimax-h3-t2v');
-    expect(pending).toHaveLength(7);
+    expect(pending).toHaveLength(10);
   });
 
   it('默认 IO 节点都能在工作流 JSON 里找到对应的输入', () => {
@@ -220,16 +220,16 @@ describe('内置 AuK 音频工作流', () => {
     return workflows.find((workflow) => workflow.id === id)!;
   }
 
-  it('已有六个视频工作流的用户只补两个音频工作流，不复写旧数据', () => {
+  it('已播种其他工作流的用户只补缺失的两个 AuK 工作流，不复写旧数据', () => {
     const initial = resetBuiltInWorkflows();
-    const existing = initial.filter((workflow) => workflow.category === 'ai-video');
+    const existing = initial.filter((workflow) => !workflow.id.startsWith('builtin-auk-'));
     existing[0].name = '用户修改的名字';
     localStorage.setItem('aicanvas.builtinWorkflows.seededIds', JSON.stringify(existing.map((workflow) => workflow.id)));
     const pending = pendingBuiltInWorkflows(existing);
     expect(pending.map((workflow) => workflow.id)).toEqual(['builtin-auk-tts', 'builtin-auk-voice-cloning']);
     expect(existing[0].name).toBe('用户修改的名字');
     expect(pendingBuiltInWorkflows(existing)).toEqual([]);
-    expect(resetBuiltInWorkflows()).toHaveLength(8);
+    expect(resetBuiltInWorkflows()).toHaveLength(11);
   });
 
   it.each(['builtin-auk-tts', 'builtin-auk-voice-cloning'])('%s 保留可编辑布局、模型、采样参数和全部执行连线', (id) => {
@@ -363,4 +363,192 @@ describe('内置 AuK 音频工作流', () => {
     expect(mocks.corsSafeFetch).not.toHaveBeenCalled();
   });
 
+});
+
+describe('内置 Qwen3 音频工作流', () => {
+  const ids = ['builtin-qwen3-voice-clone', 'builtin-qwen3-voice-design', 'builtin-qwen3-reference-voice-design'];
+  const reference = 'data:audio/wav;base64,UXdlbi1yZWZlcmVuY2U=';
+
+  beforeEach(() => {
+    mocks.corsSafeFetch.mockImplementation(async (url: string) => {
+      if (url.endsWith('/upload/image')) return jsonResponse({ name: 'qwen-reference.wav', subfolder: '', type: 'input' });
+      if (url.endsWith('/prompt')) return jsonResponse({ prompt_id: 'prompt-qwen' });
+      if (url.includes('/history/')) return jsonResponse({
+        'prompt-qwen': { status: { completed: true }, outputs: {
+          save: { audio: [{ filename: 'qwen.flac', subfolder: 'audio', type: 'output' }] },
+        } },
+      });
+      throw new Error(`未预期的请求：${url}`);
+    });
+  });
+
+  afterEach(() => vi.restoreAllMocks());
+
+  function install(id: string) {
+    const workflows = pendingBuiltInWorkflows([]);
+    mocks.storeState.workflows = workflows as unknown as Array<Record<string, unknown>>;
+    return workflows.find((workflow) => workflow.id === id)!;
+  }
+
+  it('已有八项的用户只补新三项，保留修改且不重复播种', () => {
+    const existing = resetBuiltInWorkflows().filter((workflow) => !ids.includes(workflow.id));
+    expect(existing).toHaveLength(8);
+    existing[0].name = '自定义 AuK';
+    localStorage.setItem('aicanvas.builtinWorkflows.seededIds', JSON.stringify(existing.map((workflow) => workflow.id)));
+    const pending = pendingBuiltInWorkflows(existing);
+    expect(pending.map((workflow) => workflow.id)).toEqual(ids);
+    expect(pending.every((workflow) => workflow.category === 'ai-audio')).toBe(true);
+    expect(existing[0].name).toBe('自定义 AuK');
+    expect(pendingBuiltInWorkflows(existing)).toEqual([]);
+  });
+
+  it.each(ids)('%s 保留编辑布局、执行连线及采样字段，剔除 UI 种子控件', (id) => {
+    const workflow = install(id);
+    const api = JSON.parse(workflow.fileContent);
+    const ui = JSON.parse(workflow.editableContent!);
+    const executable = ui.nodes.filter((node: { type: string }) => !['Note', 'MarkdownNote'].includes(node.type));
+    expect(Object.keys(api)).toHaveLength(executable.length);
+    for (const node of executable) {
+      expect(api[String(node.id)].class_type).toBe(node.type);
+      expect(node.pos).toHaveLength(2);
+    }
+    for (const [, sourceId, slot, targetId, inputIndex] of ui.links) {
+      const target = ui.nodes.find((node: { id: number }) => node.id === targetId);
+      expect(api[String(targetId)].inputs[target.inputs[inputIndex].name]).toEqual([String(sourceId), slot]);
+    }
+    const synth = id === ids[1] ? api['1'] : api['3'];
+    expect(synth.inputs).toMatchObject({ model_choice: '1.7B', precision: 'bf16', seed: 20260916,
+      max_new_tokens: 1536, top_p: 0.9, top_k: 50, repetition_penalty: 1.05, attention: 'sdpa', unload_model_after_generate: true });
+    expect(Object.values(synth.inputs)).not.toContain('randomize');
+    expect(Object.values(synth.inputs)).not.toContain('fixed');
+    if (id !== ids[1]) {
+      expect(api['2'].inputs).toEqual({ model: 'Qwen/Qwen3-ASR-1.7B-hf', precision: 'bf16', language: 'auto',
+        hints: '', normalize_text: false, unload_models: true, audio: ['1', 0] });
+    }
+    expect(withBuiltInEditableContent({ ...workflow, editableContent: undefined })?.editableContent).toBe(workflow.editableContent);
+  });
+
+  it.each([ids[0], ids[2]])('%s 注入新台词和参考音频，保留 ASR 连线与源图', async (id) => {
+    const workflow = install(id);
+    const original = workflow.fileContent;
+    const result = await executeComfyUIAudioGenerate({ prompt: '这回说新的台词。', model: 'wf', provider: 'comfyui', workflowId: id }, undefined, [reference]);
+    const graph = submittedWorkflow();
+    expect(graph['1'].inputs.audio).toBe('qwen-reference.wav');
+    expect(graph['3'].inputs.target_text).toBe('这回说新的台词。');
+    expect(graph['3'].inputs.ref_text).toEqual(['2', 0]);
+    expect(graph['3'].inputs.ref_audio).toEqual(['1', 0]);
+    expect(graph['3'].inputs.seed).toBe(20260916);
+    expect(result.url).toContain('qwen.flac');
+    expect(workflow.fileContent).toBe(original);
+    if (id === ids[2]) {
+      const originalGraph = JSON.parse(original);
+      expect(graph['5'].inputs.text).toBe(originalGraph['5'].inputs.text);
+      expect(graph['5'].inputs.instruct).toBe(originalGraph['5'].inputs.instruct);
+      expect(graph['6']).toEqual(originalGraph['6']);
+      expect(graph['4'].inputs.audio).toEqual(['6', 0]);
+    }
+  });
+
+  it.each([ids[0], ids[2]])('%s 显式台词和音频优先于默认值，保留参考转写', async (id) => {
+    install(id);
+    const explicitReference = `data:audio/wav;base64,${btoa(id)}`;
+    await executeComfyUIAudioGenerate({ prompt: '默认台词', model: 'wf', provider: 'comfyui', workflowId: id,
+      workflowInputs: { '3': '显式新台词', '1': explicitReference } }, undefined, ['data:audio/wav;base64,T1RIRVI=']);
+    const graph = submittedWorkflow();
+    expect(graph['3'].inputs.target_text).toBe('显式新台词');
+    expect(graph['3'].inputs.ref_text).toEqual(['2', 0]);
+    const uploads = mocks.corsSafeFetch.mock.calls.filter(([url]) => String(url).endsWith('/upload/image'));
+    expect(uploads).toHaveLength(1);
+    expect(await ((uploads[0][1].body as FormData).get('image') as Blob).text()).toBe(id);
+  });
+
+  it('文生抽卡仅替换朗读正文，保留音色描述，不上传音频', async () => {
+    const workflow = install(ids[1]);
+    const source = JSON.parse(workflow.fileContent);
+    await executeComfyUIAudioGenerate({ prompt: '新的朗读正文', model: 'wf', provider: 'comfyui', workflowId: workflow.id });
+    const graph = submittedWorkflow();
+    expect(graph['1'].inputs.text).toBe('新的朗读正文');
+    expect(graph['1'].inputs.instruct).toBe(source['1'].inputs.instruct);
+    expect(graph['2'].inputs.audio).toEqual(['1', 0]);
+    expect(mocks.corsSafeFetch.mock.calls.some(([url]) => String(url).endsWith('/upload/image'))).toBe(false);
+  });
+
+  it.each([[ids[1], '1'], [ids[2], '5']])('%s 连续抽卡只更换声音设计种子，不写回源图', async (id, designNodeId) => {
+    const workflow = install(id);
+    const original = { api: workflow.fileContent, ui: workflow.editableContent };
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0.25);
+    const params = { prompt: '抽卡正文', model: 'wf', provider: 'comfyui', workflowId: id };
+    await executeComfyUIAudioGenerate(params, undefined, id === ids[2] ? [reference] : []);
+    expect(submittedWorkflow()[designNodeId].inputs.seed).toBe(Math.floor(0.25 * Number.MAX_SAFE_INTEGER));
+    mocks.corsSafeFetch.mockClear();
+    random.mockReturnValue(0.75);
+    await executeComfyUIAudioGenerate(params, undefined, id === ids[2] ? [reference] : []);
+    expect(submittedWorkflow()[designNodeId].inputs.seed).toBe(Math.floor(0.75 * Number.MAX_SAFE_INTEGER));
+    expect(workflow.fileContent).toBe(original.api);
+    expect(workflow.editableContent).toBe(original.ui);
+  });
+
+  it.each(['fixed', 'missing', 'invalid', 'linked'])('声音设计种子控制为 %s 时不随机', async (mode) => {
+    const workflow = install(ids[1]);
+    const ui = JSON.parse(workflow.editableContent!);
+    const node = ui.nodes.find((item: { id: number }) => item.id === 1);
+    node.widgets_values[7] = 'fixed';
+    if (mode === 'linked') {
+      node.widgets_values[7] = 'randomize';
+      node.inputs.find((input: { name: string }) => input.name === 'seed').link = 9;
+    }
+    workflow.editableContent = mode === 'missing' ? undefined : mode === 'invalid' ? '{' : JSON.stringify(ui);
+    await executeComfyUIAudioGenerate({ prompt: '固定种子', model: 'wf', provider: 'comfyui', workflowId: workflow.id });
+    expect(submittedWorkflow()['1'].inputs.seed).toBe(20260916);
+  });
+
+  it('面板设置进入完整提交图：克隆、目标音色、ASR、转换分别映射', async () => {
+    const workflow = install(ids[2]);
+    const source = workflow.fileContent;
+    const fallback = mocks.corsSafeFetch.getMockImplementation()!;
+    mocks.corsSafeFetch.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url.includes('/object_info/SeedVCVoiceConversion')) return jsonResponse({ SeedVCVoiceConversion: { input: {
+        required: { pitch_shift: ['INT', { min: -12, max: 12 }] },
+      } } });
+      return fallback(url, init);
+    });
+    await executeComfyUIAudioGenerate({ prompt: '默认正文', model: 'wf', provider: 'comfyui', workflowId: workflow.id,
+      workflowInputs: { '3': '真正要说的台词', '5': '显式目标音色样本' },
+      audioSpeechSettings: { qwen: { [workflow.id]: {
+        'clone.seed_mode': 'fixed', 'clone.seed': 789, 'clone.temperature': 0.65, 'clone.language': 'Chinese',
+        'design.seed_mode': 'fixed', 'design.seed': 456, 'design.instruct': '温柔女声', 'design.pace': 3,
+        'design.text': '旧样本正文', 'asr.hints': '公司名称', 'asr.normalize_text': true, 'conversion.pitch_shift': -2,
+      } } },
+    }, undefined, [reference]);
+    const graph = submittedWorkflow();
+    expect(graph['3'].inputs).toMatchObject({ target_text: '真正要说的台词', seed: 789, temperature: 0.65, ref_text: ['2', 0] });
+    expect(graph['5'].inputs).toMatchObject({ instruct: '温柔女声\n语速偏快。', seed: 456, text: '显式目标音色样本' });
+    expect(graph['2'].inputs).toMatchObject({ hints: '公司名称', normalize_text: true });
+    expect(graph['6'].inputs).toMatchObject({ pitch_shift: -2, source_audio: ['3', 0], target_voice: ['5', 0] });
+    expect(workflow.fileContent).toBe(source);
+  });
+
+  it.each(['out-of-range', 'unavailable'])('SeedVC 声明 %s 时阻止无效面板参数提交', async (scenario) => {
+    const workflow = install(ids[2]);
+    const oldUrl = mocks.storeState.config.comfyUIUrl;
+    mocks.storeState.config.comfyUIUrl = `http://seedvc-${scenario}.test:8188`;
+    mocks.corsSafeFetch.mockImplementation(async (url: string) => {
+      if (url.includes('/object_info/')) return jsonResponse(scenario === 'unavailable' ? {} : {
+        SeedVCVoiceConversion: { input: { required: { pitch_shift: ['INT', { min: -12, max: 12 }] } } },
+      });
+      throw new Error('不应上传或提交');
+    });
+    try {
+      await expect(executeComfyUIAudioGenerate({ prompt: '正文', model: 'wf', provider: 'comfyui', workflowId: workflow.id,
+        audioSpeechSettings: { qwen: { [workflow.id]: { 'conversion.pitch_shift': 100 } } },
+      }, undefined, [reference])).rejects.toThrow(scenario === 'unavailable' ? '无法读取 SeedVC' : '不符合目标 ComfyUI');
+      expect(mocks.corsSafeFetch.mock.calls.every(([url]) => String(url).includes('/object_info/'))).toBe(true);
+    } finally { mocks.storeState.config.comfyUIUrl = oldUrl; }
+  });
+
+  it.each([ids[0], ids[2]])('%s 未添加参考语音时在请求前给出明确提示', async (id) => {
+    install(id);
+    await expect(executeComfyUIAudioGenerate({ prompt: '台词', model: 'wf', provider: 'comfyui', workflowId: id })).rejects.toThrow('请添加参考语音');
+    expect(mocks.corsSafeFetch).not.toHaveBeenCalled();
+  });
 });

@@ -473,6 +473,35 @@ export interface AudioSpeechSettings {
   /** 0 很慢、1 偏慢、2 正常、3 偏快、4 很快。 */
   pace?: number;
   duration?: number;
+  /** 按工作流保存用户覆盖值；没有覆盖的字段沿用工作流原值。 */
+  qwen?: Record<string, Record<string, AudioSpeechParameterValue>>;
+}
+
+export type AudioSpeechParameterValue = string | number | boolean;
+
+export interface QwenSpeechField {
+  id: string;
+  nodeId: string;
+  key: string;
+  label: string;
+  group: string;
+  value: AudioSpeechParameterValue;
+  kind: 'text' | 'number' | 'boolean' | 'select';
+  options?: string[];
+  min?: number;
+  max?: number;
+  step?: number;
+  integer?: boolean;
+  hint?: string;
+  virtual?: boolean;
+}
+
+export interface QwenSpeechControls {
+  workflowId: string;
+  mode: 'clone' | 'design' | 'reference-design';
+  fields: QwenSpeechField[];
+  designNodeId?: string;
+  conversionNodeId?: string;
 }
 
 export interface AudioSpeechReference {
@@ -490,7 +519,8 @@ export interface AudioSpeechWorkflowControls {
   textKey: string;
   generatorId: string;
   referenceInputId?: string;
-  duration: number;
+  duration?: number;
+  qwen?: QwenSpeechControls;
 }
 
 export interface AIAudioGenParams {
