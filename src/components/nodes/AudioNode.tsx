@@ -20,6 +20,9 @@ import { transcribeAudio } from '../../services/ai/transcribeAudio';
 import { textNodeHeight } from '../../utils/num';
 import { useT } from '../../i18n';
 import NodeGenerationProgress from './shared/NodeGenerationProgress';
+import FullscreenOverlay from '../shared/FullscreenOverlay';
+import CanvasAudioPreview from '../shared/CanvasAudioPreview';
+import { useCanvasNodeLodProtection } from '../../hooks/useCanvasNodeLod';
 
 /* ── Waveform data ── */
 interface WaveformData {
@@ -190,6 +193,25 @@ function AIAudioNode({ id, data, selected }: { id: string; data: BaseNodeData; s
   const waveformRef = useRef<WaveformData | null>(null);
   const animFrameRef = useRef(0);
   const waveformPressSelectedRef = useRef<boolean | null>(null);
+  const clickTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const playbackAttemptRef = useRef(0);
+  const [fullscreen, setFullscreen] = useState<{ projectId: string | null; time: number; playing: boolean } | null>(null);
+  useCanvasNodeLodProtection(id, isPlaying || !!fullscreen);
+  const closeFullscreen = useCallback(() => setFullscreen(null), []);
+  const openFullscreen = useCallback((event: React.MouseEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    clearTimeout(clickTimerRef.current);
+    const audio = audioRef.current;
+    if (!audio || !data.audioUrl) return;
+    const time = audio.currentTime;
+    const playing = !audio.paused;
+    playbackAttemptRef.current += 1;
+    audio.pause();
+    cancelAnimationFrame(animFrameRef.current);
+    setIsPlaying(false);
+    setFullscreen({ projectId: useAppStore.getState().currentProjectId, time, playing });
+  }, [data.audioUrl]);
 
   const { displayLabel, handleRename } = useNodeRename(id, data, t('粘贴音频'));
 
@@ -281,6 +303,8 @@ function AIAudioNode({ id, data, selected }: { id: string; data: BaseNodeData; s
 
   // ── Reset when URL changes ──
   useEffect(() => {
+    playbackAttemptRef.current += 1;
+    clearTimeout(clickTimerRef.current);
     audioRef.current?.pause();
     cancelAnimationFrame(animFrameRef.current);
     waveformRef.current = null;
@@ -355,10 +379,14 @@ function AIAudioNode({ id, data, selected }: { id: string; data: BaseNodeData; s
 
   // ── Cleanup on unmount ──
   useEffect(() => {
+    const audio = audioRef.current;
     return () => {
+      playbackAttemptRef.current += 1;
+      clearTimeout(clickTimerRef.current);
       cancelAnimationFrame(animFrameRef.current);
+      audio?.pause();
     };
-  }, []);
+  }, [data.audioUrl]);
 
   // ── Progress animation loop ──
   const startProgressLoop = useCallback(() => {
@@ -382,21 +410,23 @@ function AIAudioNode({ id, data, selected }: { id: string; data: BaseNodeData; s
       e.stopPropagation();
       const audio = audioRef.current;
       const canvas = canvasRef.current;
-      if (!audio || !canvas) return;
+      if (!audio || !canvas || fullscreen) return;
+      const attempt = ++playbackAttemptRef.current;
 
-      if (isPlaying) {
+      if (!audio.paused) {
         audio.pause();
         cancelAnimationFrame(animFrameRef.current);
         renderCanvas(canvas, waveformRef.current, -1);
         setIsPlaying(false);
       } else {
         audio.play().then(() => {
+          if (playbackAttemptRef.current !== attempt) return;
           startProgressLoop();
           setIsPlaying(true);
         }).catch(() => {});
       }
     },
-    [isPlaying, startProgressLoop],
+    [fullscreen, startProgressLoop],
   );
 
   // ── Audio timeupdate (for display) ──
@@ -475,14 +505,19 @@ function AIAudioNode({ id, data, selected }: { id: string; data: BaseNodeData; s
           {data.audioUrl ? (
             <div
               className="audio-waveform-wrapper"
+              title={t('双击打开音乐播放器')}
+              onDoubleClick={openFullscreen}
               onPointerDownCapture={() => { waveformPressSelectedRef.current = !!selected; }}
               onPointerCancel={() => { waveformPressSelectedRef.current = null; }}
               onClick={(e) => {
+                clearTimeout(clickTimerRef.current);
+                if (e.detail > 1) { e.stopPropagation(); return; }
                 // 画布可能在 mousedown 时选中节点，需使用本次按下前的状态。
                 const wasSelected = waveformPressSelectedRef.current ?? !!selected;
                 waveformPressSelectedRef.current = null;
                 if (!wasSelected || !selected) return;
-                togglePlay(e);
+                e.stopPropagation();
+                clickTimerRef.current = setTimeout(() => togglePlay(e), 250);
               }}
               onContextMenu={(e) => e.preventDefault()}
             >
@@ -544,6 +579,14 @@ function AIAudioNode({ id, data, selected }: { id: string; data: BaseNodeData; s
           <GooeyBtn className="gooey-btn-right" hue={30} />
         </Handle>
       </div>
+      <FullscreenOverlay isOpen={!!fullscreen} onClose={closeFullscreen} hidePanel unmountOnClose>
+        {fullscreen && (
+          <CanvasAudioPreview
+            nodeId={id} openingProjectId={fullscreen.projectId}
+            initialTime={fullscreen.time} initiallyPlaying={fullscreen.playing} onClose={closeFullscreen}
+          />
+        )}
+      </FullscreenOverlay>
       {/* 语音识别模型下载弹窗（Portal → body，与超分一致） */}
       <ModelDownloadDialog
         type="asr"
