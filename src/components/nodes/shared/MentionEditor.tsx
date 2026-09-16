@@ -277,7 +277,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
   const [dramaVoicePicker, setDramaVoicePicker] = useState(false);
   const [dramaActionId, setDramaActionId] = useState<string | null>(null);
   // @ 面板的 Tab / 资产种类筛选
-  const [pickerTab, setPickerTab] = useState<'nodes' | 'assets'>('nodes');
+  const [pickerTab, setPickerTab] = useState<'nodes' | 'assets' | 'workflow' | null>(null);
   const [dramaKind, setDramaKind] = useState<string>('all');
   useEffect(() => {
     if (!showMention) {
@@ -285,7 +285,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
       setDramaVoicePicker(false);
       setDramaActionPicker(false);
       setDramaActionId(null);
-      setPickerTab('nodes');
+      setPickerTab(null);
       setDramaKind('all');
     }
   }, [showMention]);
@@ -961,7 +961,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
   // 卸载时清除，避免残留 hover 高亮
   useEffect(() => () => { useAppStore.getState().setHoveredMentionNodeId(null); }, []);
 
-  // ── @ 面板数据：输入图（画布节点 + 工作流 IO） / 资产库（短剧资产） ──
+  // ── @ 面板数据：输入图（画布节点） / 资产库（短剧资产） / ComfyUI 节点（工作流 IO） ──
   const dramaThumbOf = useCallback((item: { imageNodeId?: string; imageUrl?: string }) => {
     if (!item.imageNodeId) return item.imageUrl;
     const n = nodes.find((x) => x.id === item.imageNodeId);
@@ -977,14 +977,14 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
       badge: node.isSelf ? '自身' : node.displayId != null ? `#${node.displayId}` : undefined,
       onSelect: () => handleSelectCanvasMention(node.id, node.label),
     })),
-    ...filteredWorkflowMentions.map((node) => ({
-      key: `wf:${node.id}`,
-      label: node.label,
-      icon: MEDIA_ICONS[node._ioType === 'image' || node._ioType === 'video' || node._ioType === 'audio' ? node._ioType : 'text'],
-      badge: '工作流',
-      onSelect: () => handleSelectWorkflowMention(node._ioNodeId, node.label, node._ioType),
-    })),
   ];
+  const workflowTabItems: MentionPickerItem[] = filteredWorkflowMentions.map((node) => ({
+    key: `wf:${node.id}`,
+    label: node.label,
+    icon: MEDIA_ICONS[node._ioType === 'image' || node._ioType === 'video' || node._ioType === 'audio' ? node._ioType : 'text'],
+    badge: '工作流',
+    onSelect: () => handleSelectWorkflowMention(node._ioNodeId, node.label, node._ioType),
+  }));
 
   const drillItem = !isAudioNode && dramaRefPickerId
     ? dramaMentionItems.find((item) => item.id === dramaRefPickerId)
@@ -1130,16 +1130,19 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
         };
       });
 
-  // 当前 Tab 空而另一个有内容时自动切过去（输入 @关键词 时不至于对着空网格）
-  const effectiveTab = drillItem ? 'assets' : pickerTab === 'nodes' && nodeTabItems.length === 0 && assetTabItems.length > 0
-    ? 'assets'
-    : pickerTab === 'assets' && !drillItem && assetTabItems.length === 0 && nodeTabItems.length > 0
-      ? 'nodes'
-      : pickerTab;
+  // 首次打开优先展示有内容的分类；手动切换后保留选择，工作流取消时回到普通分类。
+  const defaultTab = nodeTabItems.length > 0 ? 'nodes'
+    : selectedWorkflow && workflowTabItems.length > 0 ? 'workflow'
+      : assetTabItems.length > 0 ? 'assets' : 'nodes';
+  const effectiveTab = drillItem ? 'assets'
+    : pickerTab === 'workflow' && !selectedWorkflow ? defaultTab
+      : pickerTab ?? defaultTab;
+  const activeTabItems = effectiveTab === 'assets' ? assetTabItems
+    : effectiveTab === 'workflow' ? workflowTabItems : nodeTabItems;
 
   // 回车与鼠标始终选当前页面中的条目，包括动作及素材下钻页。
   useLayoutEffect(() => {
-    selectFirstMentionRef.current = (effectiveTab === 'assets' ? assetTabItems : nodeTabItems)
+    selectFirstMentionRef.current = activeTabItems
       .find((item) => !item.disabled)?.onSelect ?? null;
   });
 
@@ -1257,10 +1260,11 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
             tabs={[
               { id: 'nodes', label: isAudioNode ? '输入音频' : '输入图', icon: isAudioNode ? MEDIA_ICONS.audio : 'mdi:image-multiple-outline' },
               { id: 'assets', label: '资产库', icon: 'mdi:bookshelf' },
+              ...(selectedWorkflow ? [{ id: 'workflow', label: 'ComfyUI 节点' }] : []),
             ]}
             activeTab={effectiveTab}
             onTabChange={(id) => {
-              setPickerTab(id as 'nodes' | 'assets');
+              setPickerTab(id as 'nodes' | 'assets' | 'workflow');
               setDramaRefPickerId(null);
               setDramaActionPicker(false);
               setDramaActionId(null);
@@ -1324,13 +1328,13 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
                 )}
               </>
             ) : undefined}
-            items={effectiveTab === 'assets' ? assetTabItems : nodeTabItems}
+            items={activeTabItems}
             mediaAspectRatio={effectiveTab === 'assets' ? AVATAR_ASPECT : undefined}
             emptyText={effectiveTab === 'assets' && drillItem && dramaVoicePicker
               ? '该角色暂无声音，请先在角色库中添加'
               : effectiveTab === 'assets' && drillItem && dramaActionPicker
               ? drillAction ? '该动作暂无图片、GIF 或视频素材' : '该角色暂无动作，请先在角色库中添加'
-              : mentionQuery ? '无匹配节点或资产' : effectiveTab === 'assets' ? isAudioNode ? '暂无带音频的角色，请先在角色库中添加音频' : '暂无短剧资产' : '暂无可引用的输入'}
+              : mentionQuery ? '无匹配节点或资产' : effectiveTab === 'workflow' ? '当前工作流暂无可引用的节点' : effectiveTab === 'assets' ? isAudioNode ? '暂无带音频的角色，请先在角色库中添加音频' : '暂无短剧资产' : '暂无可引用的输入'}
             footer={(
               <button
                 type="button"
