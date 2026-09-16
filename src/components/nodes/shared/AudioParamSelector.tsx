@@ -7,6 +7,7 @@ import type { AudioOutputFormat, AudioSpeechReference, AudioSpeechSettings, Audi
 import type { AudioGenerationPurpose } from '../../../types/media';
 import AnimatedButton from '../../shared/AnimatedButton';
 import Select from '../../shared/Select';
+import QwenSpeechControls from './QwenSpeechControls';
 import { AUDIO_SPEECH_PACES, AUDIO_SPEECH_VOICES, audioSpeechModeIssue, normalizeAudioSpeechSettings } from '../../../services/ai/audioSpeechSettings';
 import { useT } from '../../../i18n';
 
@@ -100,12 +101,15 @@ function AudioParamSelector({
 
   if (!purpose) return null;
 
-  const speech = normalizeAudioSpeechSettings(speechSettings, speechControls?.duration);
+  const speech = { ...speechSettings, ...normalizeAudioSpeechSettings(speechSettings, speechControls?.duration) };
+  const qwen = speechControls?.qwen;
   const hasReference = references.length > 0;
   const modeIssue = speechControls ? audioSpeechModeIssue(speechControls, hasReference) : undefined;
   const voiceLabel = AUDIO_SPEECH_VOICES.find((item) => item.value === speech.voiceStyle)!.label;
   const addReference = () => { setOpen(false); onAddReference?.(); };
-  const triggerLabel = speechControls
+  const triggerLabel = qwen
+    ? t(qwen.mode === 'clone' ? '原声克隆 · 参数' : qwen.mode === 'design' ? '声音抽卡 · 参数' : '参考音频抽卡 · 参数')
+    : speechControls
     ? `${hasReference ? t('参考音色') : t(voiceLabel)} · ${t(AUDIO_SPEECH_PACES[speech.pace].label)} · ${speech.duration}s`
     : purpose === 'speech'
     ? `${voice} · ${format.toUpperCase()} · ${speed}x`
@@ -129,12 +133,12 @@ function AudioParamSelector({
         </AnimatedButton>
 
         {open ? (
-          <div className="img-ratio-popup ui-schema-popup ui-schema-video-params-popup block">
+          <div className="img-ratio-popup ui-schema-popup ui-schema-video-params-popup block max-h-[70vh] overflow-y-auto overscroll-contain">
             {speechControls ? (
               <div className="flex flex-col gap-3 text-xs text-canvas-text" data-audio-speech-mode={hasReference ? 'reference' : 'text'}>
                 <div className="flex items-center justify-between">
-                  <span className="font-medium">{t(hasReference ? '带参考语音' : '纯文本')}</span>
-                  <button type="button" className="ui-btn ui-btn--sm" onClick={addReference}>{t('+ 添加参考')}</button>
+                  <span className="font-medium">{t(qwen?.mode === 'reference-design' ? '参考语音 → 目标音色' : hasReference ? '带参考语音' : '纯文本')}</span>
+                  {!qwen || speechControls.referenceInputId ? <button type="button" className="ui-btn ui-btn--sm" onClick={addReference}>{t('+ 添加参考')}</button> : null}
                 </div>
                 {hasReference ? (
                   <div className="flex max-h-40 flex-col gap-2 overflow-y-auto">
@@ -147,7 +151,7 @@ function AudioParamSelector({
                           <div className="min-w-0 flex-1">
                             <div className="truncate font-medium leading-5" title={reference.label}>{reference.label}</div>
                             <div className="text-[10px] leading-4 text-canvas-text-muted">
-                              {t(reference.url ? '使用此声音的音色' : '音频已失效，请替换')}
+                              {t(reference.url ? (qwen?.mode === 'reference-design' ? '提供说话方式和方言参考' : '使用此声音的音色') : '音频已失效，请替换')}
                             </div>
                           </div>
                           <div className="flex shrink-0 items-center gap-1">
@@ -163,7 +167,7 @@ function AudioParamSelector({
                       </div>
                     ))}
                   </div>
-                ) : (
+                ) : !qwen ? (
                   <div>
                     <div className="mb-2 text-canvas-text-secondary">{t('声音类型')}</div>
                     <div className="grid grid-cols-3 gap-1.5" role="group" aria-label={t('声音类型')}>
@@ -176,7 +180,9 @@ function AudioParamSelector({
                       ))}
                     </div>
                   </div>
-                )}
+                ) : null}
+                {qwen ? <QwenSpeechControls controls={qwen} settings={speechSettings}
+                  onChange={onChangeSpeechSettings} onEditEnd={onContinuousEditEnd} /> : <>
                 <label className="flex flex-col gap-2">
                   <span className="flex justify-between"><span>{t('语速')}</span><span>{t(AUDIO_SPEECH_PACES[speech.pace].label)}</span></span>
                   <input type="range" className="rh-duration-input" min={0} max={4} step={1} value={speech.pace}
@@ -195,6 +201,7 @@ function AudioParamSelector({
                     onPointerUp={onContinuousEditEnd} onKeyUp={onContinuousEditEnd} onBlur={onContinuousEditEnd} />
                 </label>
                 <p className="text-canvas-text-secondary">{t('语速通过描述控制，实际效果以生成结果为准。')}</p>
+                </>}
                 {modeIssue ? <p role="status" className="text-canvas-text-secondary">{t(modeIssue)}</p> : null}
               </div>
             ) : purpose === 'speech' ? (

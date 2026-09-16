@@ -1,7 +1,7 @@
 # ComfyUI 工作流集成说明
 
 > 本文档描述 AI Canvas 如何导入、管理和执行 ComfyUI 工作流，包括 IO 节点识别、内容与参数注入规则、结果取回和编辑回写链路。
-> 最后更新：2026-09-11。范围、验证与回滚见[可靠性修复](./plans/2026-09-08-comfyui-reliability.md)、[助手多服务器支持](./plans/2026-09-08-comfyui-assistant-servers.md)和[打开与编辑体验](./plans/2026-09-08-comfyui-editor-experience.md)。
+> 最后更新：2026-09-15。范围、验证与回滚见[可靠性修复](./plans/2026-09-08-comfyui-reliability.md)、[助手多服务器支持](./plans/2026-09-08-comfyui-assistant-servers.md)和[打开与编辑体验](./plans/2026-09-08-comfyui-editor-experience.md)。
 
 ## 1. 概览
 
@@ -67,7 +67,7 @@ ComfyUI 在 AI Canvas 里是一种 **provider**：工作流导入后会出现在
 
 ### 4.2 内置工作流播种
 
-[builtinWorkflows.ts](../src/services/builtinWorkflows.ts) 内置了 6 个 MiniMax H3 视频工作流（文生/图生/参考生 × 普通/Turbo）和 2 个 AuK 音频工作流。每项可独立声明分类，未声明时保留视频分类。API JSON 打包在 `src/assets/comfyWorkflows/` 下，界面格式放在同级 `ui/` 里。
+[builtinWorkflows.ts](../src/services/builtinWorkflows.ts) 内置了 6 个 MiniMax H3 视频工作流（文生/图生/参考生 × 普通/Turbo）、2 个 AuK 和 3 个 Qwen3 音频工作流。每项可独立声明分类，未声明时保留视频分类。API JSON 打包在 `src/assets/comfyWorkflows/` 下，界面格式放在同级 `ui/` 里。
 
 | AuK 工作流 | 默认输入 | 输出 |
 |---|---|---|
@@ -79,6 +79,20 @@ AuK 资源来自提供的 `AuK-文生语音.json` 和 `AuK-参考音频与声音
 资源保留原工作流 3 秒、种子 42 等参数。语音参数面板可覆盖本次生成时长；未设置时采用图中的时长。克隆前必须通过 @、连线或显式音频输入提供参考语音，缺少参考时在上传与提交前报错，不使用图内示例文件。`task.text` 与保存节点的 `format.quality` 使用 ComfyUI DynamicCombo 的点分隔输入格式。
 
 验证入口：`builtinWorkflows.test.ts`、`audioSpeechSettings.test.ts`、`comfyWorkflowAudioIO.test.ts`、工作流编辑与保存回写测试。网络由测试替身模拟，未启动 ComfyUI 或执行真实生成。源码回滚撤销对应改动即可；已添加到用户工作流库的两条记录可由用户单独删除，既有视频工作流不变。
+
+| Qwen3 工作流 | 默认输入 | 执行链路 |
+|---|---|---|
+| 01 原声1比1克隆（`builtin-qwen3-voice-clone`） | 节点 3 的 `target_text`：新台词；节点 1：参考音频 | ASR 转写参考语音，连接克隆节点的 `ref_text`，输出 FLAC |
+| 02 文生语音抽卡（`builtin-qwen3-voice-design`） | 节点 1 的 `text`：新台词；`instruct` 保留图中的声音描述 | VoiceDesign 生成，输出 FLAC |
+| 03 参考音频抽卡-支持方言（`builtin-qwen3-reference-voice-design`） | 节点 3 的 `target_text`：新台词；节点 1：参考音频 | ASR 与克隆生成源语音；节点 5 生成目标音色样本；SeedVC 转换后输出 FLAC |
+
+三项均归 `ai-audio`，分别来自用户提供的 `Qwen3-TTS-01-原声1比1克隆.json`、`Qwen3-TTS-02-文生语音抽卡.json`、`Qwen3-TTS-03-参考音频抽卡-支持方言.json`。编辑图逐字节保留源文件，执行图按实际控件和连接转换，移除说明节点与 UI 专用控件。内置名称沿用原文件，不代表克隆相似度或方言效果已经验收。
+
+运行依赖 [ComfyUI-Qwen-TTS](https://github.com/flybirdxx/ComfyUI-Qwen-TTS)；01、03 还依赖 [ComfyUI-QwenASR](https://github.com/1038lab/ComfyUI-QwenASR)，03 另需提供 `SeedVCVoiceConversion` 的节点包与模型。模型与插件由目标 ComfyUI 提供，内置不会安装它们。01、03 使用前须提供参考音频；原图的空输入不替换为机器上的示例文件。03 的目标音色样本正文和声音描述保留原值，默认台词只送入克隆节点，不同时改写音色样本。
+
+Qwen 克隆台词使用精确字段 `target_text`，默认输入与显式 @ 均支持，保持 `ref_text` 转写连线。02、03 的声音设计节点在编辑图中设置了 `randomize`，默认每次提交换种子；01 的克隆种子、03 的克隆与 SeedVC 种子默认固定。语音面板可独立切换两条 TTS 链路的固定／抽卡模式。种子连线不被覆盖；无有效编辑图或旁路设置时默认固定，不改写持久化图。
+
+Qwen 验证入口为 `builtinWorkflows.test.ts`、`audioSpeechSettings.test.ts` 和 `comfyWorkflowAudioIO.test.ts`，覆盖增量播种、API/UI 连线、参数映射、默认与显式引用、模拟音频结果、参数保存和抽卡种子；范围与回滚见[三项音频工作流接入](./plans/2026-09-15-qwen-audio-workflows/task_plan.md)。未启动 ComfyUI 或进行真实生成；第 03 项 SeedVC 节点的安装、执行和听感仍需目标环境验收。
 
 播种按 id **逐个记账**在 `localStorage` 的 `aicanvas.builtinWorkflows.seededIds`：
 
@@ -105,6 +119,23 @@ AuK 资源来自提供的 `AuK-文生语音.json` 和 `AuK-参考音频与声音
 验证包括引用增删与失效、纯文本/参考面板结构、暗浅主题容器、参数序列化、快捷及批量传递、两类 AuK 请求与原图不变。主题结构检查不替代浏览器视觉验收，真实音色与语速需在目标 ComfyUI 试听。
 
 本阶段验证：8 个定向测试文件共 114 项通过；前端类型、测试类型、定向 ESLint、差异与严格 UTF-8 检查通过。按确认结果保留现有画布结构撤销行为。
+
+#### Qwen3 参数
+
+三项 Qwen 工作流也复用该入口和参考管理。`qwenSpeechSettings.ts` 按实际节点与连接识别单路合成、ASR 克隆及 SeedVC 转换，不依赖内置 ID；`QwenSpeechControls.tsx` 渲染声明字段。默认值来自工作流，只有主动编辑才覆盖。
+
+| 工作流 | 常用设置 | 折叠高级设置 |
+|---|---|---|
+| 01 原声克隆 | 参考音频、合成语言、固定／随机种子、生成 token 上限 | 克隆采样、仅提取音色特征、ASR 语言／提示词／规范化、模型运行选项 |
+| 02 文生抽卡 | 六类声音预设、自定义音色描述、描述式语速、语言、抽卡／固定种子、token 上限 | 采样与模型运行选项 |
+| 03 参考抽卡 | 参考音频、目标音色描述；克隆和目标音色分别设置语言、种子及 token 上限 | 两组采样、目标音色样本正文、ASR、SeedVC 转换和模型运行选项 |
+
+- 采样包含 Temperature、Top P、Top K 和重复抑制；运行选项仅开放图中已有的模型、设备、精度、注意力实现及卸载设置。VoiceDesign 仅支持 1.7B，不提供无法加载的 0.6B。
+- Qwen 不提供精确生成秒数，`max_new_tokens` 是长度上限，过低可能截断。02 的语速写入声音描述；03 只引导目标音色样本语速，最终时长另受 SeedVC 长度倍率影响。01 沿用参考声音，不展示无效的描述式语速。
+- 03 的新台词仍写入克隆节点；面板样本正文只改目标音色样本，显式 @ 样本正文优先于面板保存值。参考转写保持 ASR 连线。
+- SeedVC 提供原图已有的音色强度、步数、CFG、参考秒数、基频调整、移调、长度倍率、种子、增益和峰值保护。用户编辑的转换参数提交前读取目标服务节点声明；声明不可用或数值超范围时明确报错，不推断未知范围。
+- 参数保存在 `audioSpeechSettings.qwen[workflowId]`，切换工作流互不覆盖；“恢复此工作流默认参数”只清除此项覆盖。AuK 参数和既有快捷、批量及历史传递链路保持兼容。
+- 弹层限高并可滚动，高级组折叠，下拉使用现有 Portal。实际组件独立预览覆盖暗浅主题、参考增删、种子模式、描述预设、转换开关、滚动和恢复默认；不等同于完整桌面应用或真实模型验收。
 
 ## 5. IO 节点识别
 
@@ -157,11 +188,11 @@ AuK 资源来自提供的 `AuK-文生语音.json` 和 `AuK-参考音频与声音
 
 | 情况 | 行为 |
 |------|------|
-| 指定了默认提示词节点，且没 `@` 过提示词节点 | 只写这一个节点，写它第一个存在且是字符串的键（`text` → `prompt` → `string` → `value` → `instruction`）；无直接字段时查找同名的点分隔子字段 |
+| 指定了默认提示词节点，且没 `@` 过提示词节点 | 只写这一个节点，写它第一个存在且是字符串的键（`text` → `target_text` → `prompt` → `string` → `value` → `instruction`）；无直接字段时查找同名的点分隔子字段 |
 | 没有任何 `@` 赋值，也没默认节点 | 兜底猜测：遍历所有 `text`/`prompt` 输入，**只替换看起来像占位符的值**（长度 < 10 且不含空格，例如 `t-1`） |
 | 有 `@` 赋值 | 只写被 `@` 命中且在 `ioNodes` 里的节点，其余保持原值 |
 
-显式赋值仅处理 `prompt` 类型 IO，与默认输入共用 `text → prompt → string → value → instruction` 字段顺序；没有直接字段时，按输入顺序取第一个匹配上述名称的点分隔子字段（例如 `task.text`）。只写已有的字符串字段，保留连线。显式赋值无法找到可写字段时在提交前报错，不静默使用旧文本。
+显式赋值仅处理 `prompt` 类型 IO，与默认输入共用 `text → target_text → prompt → string → value → instruction` 字段顺序；没有直接字段时，按输入顺序取第一个匹配上述名称的点分隔子字段（例如 `task.text`）。只写已有的字符串字段，保留连线。显式赋值无法找到可写字段时在提交前报错，不静默使用旧文本。
 
 ### 8.2 图片 / 音频 / 视频
 

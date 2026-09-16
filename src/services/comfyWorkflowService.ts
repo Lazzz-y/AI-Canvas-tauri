@@ -256,7 +256,7 @@ function writeNodeInput(
 
 /** 默认节点按类型接受的输入键：写第一个已存在且是字符串的键 */
 const DEFAULT_NODE_INPUT_KEYS: Record<WorkflowIONodeType, string[]> = {
-  prompt: ['text', 'prompt', 'string', 'value', 'instruction'],
+  prompt: ['text', 'target_text', 'prompt', 'string', 'value', 'instruction'],
   image: ['image'],
   video: ['video'],
   audio: ['audio'],
@@ -1408,7 +1408,24 @@ async function submitComfyUIWorkflow(
   injectPromptsIntoWorkflow(workflowObj, workflowInputs, prompt, ioNodeIds,
     defaultNodeFor('prompt') ?? (!mentionedTypes.has('prompt') ? speechControls?.textNodeId : undefined));
 
-  if (speechControls) applyAudioSpeechSettings(workflowObj, speechControls, speech?.settings);
+  if (speechControls?.qwen?.conversionNodeId) {
+    const qwen = speechControls.qwen;
+    const overrides = speech?.settings?.qwen?.[qwen.workflowId] ?? {};
+    const changed = qwen.fields.filter((field) => field.nodeId === qwen.conversionNodeId && overrides[field.id] !== undefined);
+    if (changed.length) {
+      const specs = await fetchNodeInputSpecs(baseUrl, String(workflowObj[qwen.conversionNodeId!].class_type));
+      if (!specs) throw new Error('无法读取 SeedVC 参数声明，请确认目标 ComfyUI 已安装转换节点，或恢复工作流默认参数');
+      for (const field of changed) {
+        const spec = specs[field.key];
+        const value = overrides[field.id];
+        if (!spec || (typeof value === 'number' && ((spec.min !== undefined && value < spec.min)
+          || (spec.max !== undefined && value > spec.max)))) {
+          throw new Error(`${field.label}不符合目标 ComfyUI 的参数范围`);
+        }
+      }
+    }
+  }
+  if (speechControls) applyAudioSpeechSettings(workflowObj, speechControls, speech?.settings, workflowInputs);
 
   // 显式图片/视频 IO 赋值（上传 → 替换对应输入文件名）
   await injectExplicitMediaIntoWorkflow(workflowObj, workflowInputs, ioNodes, baseUrl, signal);
