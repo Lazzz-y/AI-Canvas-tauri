@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createStore } from 'zustand/vanilla';
 import type { AppState } from '../../src/store/useAppStore';
 
+
 type Element = { props: Record<string, unknown> };
 const driver = vi.hoisted(() => ({
   slots: [] as unknown[], cursor: 0, state: () => ({} as AppState),
@@ -28,6 +29,12 @@ vi.mock('react', async () => ({
   useSyncExternalStore: <T,>(_subscribe: unknown, snapshot: () => T) => snapshot(),
 }));
 vi.mock('zustand/react/shallow', () => ({ useShallow: <T,>(selector: T) => selector }));
+// 本用例按中文原文定位按钮与提示（data-tooltip / aria-label / toast 文案）。
+// 直接返回 key，避免运行环境的系统语言不同导致文案被翻译后找不到元素。
+vi.mock('../../src/i18n', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/i18n')>()),
+  useT: () => (text: string) => text,
+}));
 vi.mock('../../src/store/useAppStore', () => ({
   useAppStore: Object.assign(<T,>(selector: (state: AppState) => T) => selector(driver.state()), { getState: () => driver.state() }),
 }));
