@@ -74,11 +74,11 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: 'AI Canvas v0.9.12 - ComfyUI 远程服务与模型选择器优化'
+          releaseName: 'AI Canvas v0.9.12 - ComfyUI 远程服务、模型选择器优化与自定义参考图直传'
           releaseBody: |
             ## ✨ 版本摘要
 
-            AI Canvas v0.9.12 增强 ComfyUI 远程服务体验：支持远程服务自动载入与保存工作流，并在模型选择器中按 ComfyUI 服务器可用性过滤工作流；同时优化模型选择器默认收起所有分组，修复工作流 API 的方括号路径解析与任务永久停留在加载中的问题，并更新 APIMart 供应商描述。
+            AI Canvas v0.9.12 增强 ComfyUI 远程服务体验：支持远程服务自动载入与保存工作流，并在模型选择器中按 ComfyUI 服务器可用性过滤工作流；优化模型选择器默认收起所有分组，修复工作流 API 的方括号路径解析与任务永久停留在加载中的问题；同时新增自定义 multipart 参考图直传，支持在图像生成时直接上传参考图参与请求。
 
             ## 🧩 ComfyUI 远程服务
 
@@ -88,6 +88,11 @@ jobs:
             ## 🎛️ 模型选择器
 
             - 模型选择器默认收起所有分组，移除通用模型的自动展开，界面更聚焦。
+
+            ## 🖼️ 自定义参考图直传
+
+            - 支持自定义 multipart 参考图直传，图像生成时可直接上传参考图参与请求。
+            - 补充模型协议请求体与导入对参考图直传的处理，Provider 连接对话框同步支持该能力。
 
             ## 🐛 修复
 
