@@ -1,5 +1,7 @@
 (() => {
-  if (!['127.0.0.1', 'localhost'].includes(window.location.hostname)) return;
+  // 来源由原生注入闭包提供，不能由远程页面自行指定；子 frame 不创建宿主桥接。
+  if (typeof aiCanvasComfyOrigin !== 'string'
+    || window.location.origin !== aiCanvasComfyOrigin || window.top !== window) return;
   if (window.__AI_CANVAS_COMFY__) return;
 
   const WINDOW_DRAG_HEIGHT = 32;

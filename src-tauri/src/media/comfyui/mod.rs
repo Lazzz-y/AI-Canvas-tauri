@@ -203,6 +203,15 @@ fn is_same_comfyui_origin(left: &Url, right: &Url) -> bool {
         && left.port_or_known_default() == right.port_or_known_default()
 }
 
+/// 初始化脚本可能在导航后再次执行；工作流正文与桥接都只交给配置的顶层页面。
+fn scope_comfyui_script(url: &Url, script: &str) -> String {
+    let origin = serde_json::to_string(&url.origin().ascii_serialization())
+        .expect("URL origin can be serialized");
+    format!(
+        "(() => {{ const aiCanvasComfyOrigin = {origin}; if (window.top !== window || window.location.origin !== aiCanvasComfyOrigin) return;\n{script}\n}})();"
+    )
+}
+
 fn comfyui_socket_endpoint(url: &Url) -> Result<(String, u16), String> {
     let host = url
         .host_str()
@@ -729,13 +738,7 @@ pub async fn open_comfyui_window(
 ) -> Result<Option<ComfyUIWorkflowOpenResult>, String> {
     crate::path_policy::ensure_trusted_caller(&webview)?;
     let url = parse_comfyui_url(&comfy_url)?;
-    let use_local_bridge = is_local_comfyui_url(&url);
-    if api_json.is_some() && !use_local_bridge {
-        return Err(
-            "远程 ComfyUI 当前不支持自动载入编辑工作流，请在该服务器页面手动导入 JSON".to_string(),
-        );
-    }
-    if use_local_bridge {
+    if is_local_comfyui_url(&url) {
         // 服务短暂离线只返回错误，不能关闭还保存着未提交草稿的编辑窗口。
         ensure_local_comfyui_reachable(&url).await?;
     }
@@ -755,12 +758,9 @@ pub async fn open_comfyui_window(
             .url()
             .is_ok_and(|current| is_same_comfyui_origin(&current, &url))
         {
-            window
-                .set_decorations(!use_local_bridge)
-                .map_err(|e| format!("更新 ComfyUI 标题栏失败: {e}"))?;
             if let Some(script) = editor_script {
                 window
-                    .eval(&script)
+                    .eval(scope_comfyui_script(&url, &script))
                     .map_err(|e| format!("载入 ComfyUI 工作流失败: {e}"))?;
             }
             let _ = window.unminimize();
@@ -783,10 +783,7 @@ pub async fn open_comfyui_window(
             .map_err(|e| format!("关闭旧 ComfyUI 窗口失败: {e}"))?;
     }
 
-    let mut initialization_script = String::new();
-    if use_local_bridge {
-        initialization_script.push_str(COMFYUI_BRIDGE_SCRIPT);
-    }
+    let mut initialization_script = COMFYUI_BRIDGE_SCRIPT.to_string();
     if let Some(script) = editor_script {
         initialization_script.push_str(&script);
     }
@@ -803,7 +800,7 @@ pub async fn open_comfyui_window(
     .min_inner_size(900.0, 600.0)
     .center()
     .resizable(true)
-    // 本地页面加载完成前保留原生标题栏；连接异常时窗口仍有系统关闭按钮。
+    // 页面加载完成前保留原生标题栏；连接异常时窗口仍有系统关闭按钮。
     .decorations(true)
     // Tauri 默认的原生拖放处理会吞掉 HTML5 drag 事件，ComfyUI 就收不到拖进来的
     // 工作流 JSON / 图片；关掉它交还给页面自己处理
@@ -817,15 +814,26 @@ pub async fn open_comfyui_window(
         true
     })
     .visible(true);
-    if use_local_bridge {
+    {
         let navigation_app = app.clone();
         builder = builder.on_navigation(move |navigation_url| {
             let Some(action) = parse_comfyui_window_action(navigation_url, &action_origin) else {
-                return true;
+                return is_same_comfyui_origin(navigation_url, &action_origin);
             };
             let action_app = navigation_app.clone();
+            let expected_origin = action_origin.clone();
             let _ = navigation_app.run_on_main_thread(move || {
-                let _ = handle_comfyui_window_action(&action_app, action);
+                // 校验动作发起页面，而不只校验导航目标；排队期间窗口也可能被替换。
+                if action_app
+                    .get_webview_window(COMFYUI_WINDOW_LABEL)
+                    .is_some_and(|window| {
+                        window.url().is_ok_and(|current| {
+                            is_same_comfyui_origin(&current, &expected_origin)
+                        })
+                    })
+                {
+                    let _ = handle_comfyui_window_action(&action_app, action);
+                }
             });
             false
         });
@@ -847,9 +855,7 @@ pub async fn open_comfyui_window(
             }
         });
     }
-    if !initialization_script.is_empty() {
-        builder = builder.initialization_script(&initialization_script);
-    }
+    builder = builder.initialization_script(scope_comfyui_script(&url, &initialization_script));
     let window = builder
         .build()
         .map_err(|e| format!("创建 ComfyUI 窗口失败: {e}"))?;
@@ -869,7 +875,7 @@ mod tests {
         build_editor_script, comfyui_socket_endpoint, ensure_local_comfyui_reachable,
         is_local_comfyui_url, is_same_comfyui_origin, parse_comfyui_url,
         parse_comfyui_window_action, parse_editor_load_result, parse_workflow_save_payload,
-        ComfyUIWindowAction, COMFY_ARGS,
+        scope_comfyui_script, ComfyUIWindowAction, COMFY_ARGS,
     };
     use std::net::TcpListener;
 
@@ -912,7 +918,7 @@ mod tests {
     }
 
     #[test]
-    fn enables_bridge_only_for_loopback_urls() {
+    fn probes_connectivity_only_for_loopback_urls() {
         assert!(is_local_comfyui_url(
             &parse_comfyui_url("http://127.0.0.1:8188").unwrap()
         ));
@@ -1022,6 +1028,42 @@ mod tests {
         assert_eq!(
             parse_comfyui_window_action(&unknown_action, &comfy_url),
             None
+        );
+    }
+
+    #[test]
+    fn remote_window_actions_require_the_configured_origin() {
+        let configured = parse_comfyui_url("https://comfy.example.com/comfy/").unwrap();
+        let save =
+            parse_comfyui_url("https://comfy.example.com/__ai_canvas_comfy_action__?action=save")
+                .unwrap();
+        assert_eq!(
+            parse_comfyui_window_action(&save, &configured),
+            Some(ComfyUIWindowAction::Save)
+        );
+        for other in [
+            "https://other.example.com/__ai_canvas_comfy_action__?action=save",
+            "http://comfy.example.com/__ai_canvas_comfy_action__?action=save",
+            "https://comfy.example.com:8443/__ai_canvas_comfy_action__?action=save",
+        ] {
+            assert_eq!(
+                parse_comfyui_window_action(&parse_comfyui_url(other).unwrap(), &configured),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn scopes_bridge_and_workflow_payload_to_the_configured_top_level_origin() {
+        let url = parse_comfyui_url("https://comfy.example.com/comfy/?token=private").unwrap();
+        let script = scope_comfyui_script(&url, "window.__AI_CANVAS_PENDING_WORKFLOW__ = {};");
+        assert!(script.contains("const aiCanvasComfyOrigin = \"https://comfy.example.com\""));
+        assert!(script.contains("window.top !== window"));
+        assert!(script.contains("window.location.origin !== aiCanvasComfyOrigin) return;"));
+        assert!(!script.contains("token=private"));
+        assert!(
+            script.find("return;").unwrap()
+                < script.find("window.__AI_CANVAS_PENDING_WORKFLOW__").unwrap()
         );
     }
 

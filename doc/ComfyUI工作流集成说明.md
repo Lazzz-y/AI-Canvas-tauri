@@ -1,7 +1,7 @@
 # ComfyUI 工作流集成说明
 
 > 本文档描述 AI Canvas 如何导入、管理和执行 ComfyUI 工作流，包括 IO 节点识别、内容与参数注入规则、结果取回和编辑回写链路。
-> 最后更新：2026-09-15。范围、验证与回滚见[可靠性修复](./plans/2026-09-08-comfyui-reliability.md)、[助手多服务器支持](./plans/2026-09-08-comfyui-assistant-servers.md)和[打开与编辑体验](./plans/2026-09-08-comfyui-editor-experience.md)。
+> 最后更新：2026-09-17。范围、验证与回滚见[可靠性修复](./plans/2026-09-08-comfyui-reliability.md)、[助手多服务器支持](./plans/2026-09-08-comfyui-assistant-servers.md)和[打开与编辑体验](./plans/2026-09-08-comfyui-editor-experience.md)。
 
 ## 1. 概览
 
@@ -302,7 +302,7 @@ Qwen 验证入口为 `builtinWorkflows.test.ts`、`audioSpeechSettings.test.ts` 
 
 1. **检查数据与缺失节点** —— 先校验 API JSON；`findMissingNodeClasses` 比对 `/object_info`，最多等待 4 秒。缺失检查仅作提示，不阻止 ComfyUI 显示缺失节点；
 2. **开窗与载入** —— `open_comfyui_window` 接收请求 ID 和两份 JSON。`bridge.js` 等待画布与前端启动恢复完成，实际载入已有标签的当前草稿，或为新工作流载入编辑布局。空白、损坏或载入失败的布局尝试从 API 重建；新载入的节点居中，已有草稿保留视口；
-3. **确认结果** —— 原生端最多等待 60 秒，校验同源页面、请求 ID 和非空画布回执后才返回成功。打开请求串行，重复请求合并；面板显示检查、载入、成功或失败状态，失败可重试。桥接**只对 loopback 地址注入**，远程工作流自动载入明确报错，普通远程页面仍可打开；
+3. **确认结果** —— 原生端最多等待 60 秒，校验同源页面、请求 ID 和非空画布回执后才返回成功。打开请求串行，重复请求合并；面板显示检查、载入、成功或失败状态，失败可重试。本地与远程 HTTP(S) ComfyUI 均支持自动载入；桥接和工作流正文只注入配置地址同源的顶层页面，窗口拒绝跨来源导航；
 4. **保存** —— 桥接脚本把两种格式的 JSON 打包放到 `window.__AI_CANVAS_PENDING_SAVE_PAYLOAD__`，Rust 用 `eval_with_callback` 取回来、校验（分类合法、两份 JSON 都能解析、都不超 16 MiB），再 `emit` 出 `comfyui-workflow-save` 事件；
 5. **落库** —— 前端 `initComfyUIWindowBridge` 收到事件后再校验一次，已存在就更新（重新识别 IO 节点、剪掉失效的默认节点），不存在就新建。
 
@@ -331,7 +331,7 @@ Qwen 验证入口为 `builtinWorkflows.test.ts`、`audioSpeechSettings.test.ts` 
 - **有秒数节点时帧率不生效**，见 [§8.4](#84-视频参数)。
 - **字段名不在表里的工作流不会被注入** —— 比如用 `video_length`、`seconds` 之类自定义命名的节点。
 - **浏览器开发模式下**编辑窗口、保存回写、本地启动 ComfyUI 都不可用（依赖 Tauri）。
-- **远程编辑窗口不注入保存桥接**，远程服务可执行工作流，但不具备与本地窗口相同的自动载入、保存回写能力。
+- **远程编辑依赖可访问的 ComfyUI 前端**。配置地址须直接指向目标服务；跨来源登录或跳转不会在编辑窗口放行。桥接不授予远程页面通用 Tauri IPC 权限。既有工作流保存保留服务器绑定；另存的新工作流仍需在列表中选择服务器。
 - **多结果尚未批量交付**：当前返回首个匹配媒体；参数面板、运行前体检和多结果管理属于后续扩展。
 
 ## 13. 相关文件

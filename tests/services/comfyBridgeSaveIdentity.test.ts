@@ -8,7 +8,7 @@ interface GraphNode { id: number; type: string; content: string; pos: number[]; 
 interface Tab { filename: string; content: string; activeState?: { nodes: GraphNode[] } }
 interface SavePayload { requestId: string; workflowId: string; name: string; fileContent: string }
 
-function createBridge() {
+function createBridge(pageUrl = 'http://127.0.0.1:8188', configuredUrl = pageUrl, isTopFrame = true) {
   const store = { openWorkflows: [] as Tab[], activeWorkflow: null as Tab | null, openWorkflow: vi.fn(async (tab: Tab) => { store.activeWorkflow = tab; }) };
   const toast = vi.fn();
   const prompt = vi.fn(async () => '新工作流');
@@ -42,7 +42,8 @@ function createBridge() {
   let nextId = 0;
   const window = {
     app,
-    location: { hostname: '127.0.0.1', origin: 'http://127.0.0.1:8188', assign: vi.fn() },
+    location: { hostname: new URL(pageUrl).hostname, origin: new URL(pageUrl).origin, assign: vi.fn() },
+    top: undefined as unknown,
     localStorage: { getItem: () => null, setItem: vi.fn() },
     addEventListener: vi.fn(), setTimeout: vi.fn(() => 1), clearTimeout: vi.fn(),
     __AI_CANVAS_PENDING_SAVE_PAYLOAD__: undefined as SavePayload | undefined,
@@ -55,7 +56,9 @@ function createBridge() {
     },
     __AI_CANVAS_PENDING_WORKFLOW__: undefined as unknown,
   };
+  window.top = isTopFrame ? window : {};
   runInNewContext(source, {
+    aiCanvasComfyOrigin: new URL(configuredUrl).origin,
     window, navigator: { userAgent: 'Windows' },
     document: { readyState: 'loading', addEventListener: vi.fn() },
     URL, console, setTimeout, clearTimeout, crypto: { randomUUID: () => `id-${++nextId}` },
@@ -70,6 +73,33 @@ function createBridge() {
 }
 
 describe('ComfyUI 桥接真实标签保存身份', () => {
+  it.each(['http://192.168.1.20:8188', 'https://comfy.example.com/comfy/'])('远程服务 %s 支持载入与保存回写', async (url) => {
+    const h = createBridge(url);
+    await h.load('wf-remote');
+    expect(h.app.loadApiJson).toHaveBeenCalledTimes(1);
+    await h.bridge.saveToAICanvas();
+    expect(h.window.__AI_CANVAS_PENDING_SAVE_PAYLOAD__).toMatchObject({ workflowId: 'wf-remote' });
+    expect(h.window.location.assign).toHaveBeenCalledWith(`${new URL(url).origin}/__ai_canvas_comfy_action__?action=save`);
+    h.complete();
+    expect(h.window.__AI_CANVAS_PENDING_SAVE_PAYLOAD__).toBeUndefined();
+  });
+
+  it.each([
+    'https://other.example.com',
+    'http://comfy.example.com',
+    'https://comfy.example.com:8443',
+  ])('页面跳转到不同来源 %s 时不初始化桥接', (url) => {
+    const h = createBridge(url, 'https://comfy.example.com');
+    expect(h.bridge).toBeUndefined();
+    expect(h.window.localStorage.setItem).not.toHaveBeenCalled();
+    expect(h.window.addEventListener).not.toHaveBeenCalled();
+  });
+
+  it('同源子 frame 不能初始化桥接', () => {
+    const h = createBridge('https://comfy.example.com', 'https://comfy.example.com', false);
+    expect(h.bridge).toBeUndefined();
+  });
+
   it('打开 A、B 后手动切回 A，只导出并保存 A', async () => {
     const h = createBridge();
     await h.load('wf-a');
