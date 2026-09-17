@@ -16,6 +16,11 @@
  */
 export async function parseResponseError(response: Response, defaultMsg: string): Promise<never> {
   const errorBody = await response.text().catch(() => '');
+  const isHtml = /text\/html/i.test(response.headers.get('Content-Type') ?? '')
+    || /^\s*(?:<!doctype\s+html\b|<html\b)/i.test(errorBody);
+  if (response.status === 504 && (isHtml || !errorBody.trim())) {
+    throw new Error(`${defaultMsg}：网关等待上游响应超时（HTTP 504）。本次生成结果尚未确认，请先检查服务商任务记录，再决定是否重新生成。`);
+  }
   let errorMsg = defaultMsg;
   try {
     const payload = JSON.parse(errorBody) as unknown;

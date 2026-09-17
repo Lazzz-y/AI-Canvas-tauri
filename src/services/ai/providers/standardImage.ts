@@ -16,6 +16,7 @@ import { runBatchTasks } from '../batchUtils';
 import type { ImageReferenceRequestMode } from '../../../types';
 import type { BatchImageResult, ImageGenerationResult } from '../../../types/aiTypes';
 import { buildStandardImageRequestBody } from '../imageParameterMappings';
+import { prepareReferenceImageUpload } from '../referenceImageUpload';
 
 export interface StandardImageParams {
   apiKey: string;
@@ -76,15 +77,20 @@ async function buildImageEditsBody(
   signal?: AbortSignal,
 ): Promise<FormData> {
   const imageUrls = params.imageUrls ?? [];
-  const files = await Promise.all(
-    imageUrls.map((url, index) => loadReferenceImage(url, index, signal)),
-  );
   const formData = new FormData();
   formData.append('model', params.modelName);
   formData.append('prompt', params.prompt);
   formData.append('n', String(count));
   formData.append('size', size);
-  for (const file of files) formData.append('image[]', file.blob, file.filename);
+  // 大参考图逐张解码，避免多张 4K PNG 同时占用解码与画布内存。
+  for (const [index, url] of imageUrls.entries()) {
+    signal?.throwIfAborted();
+    const file = await loadReferenceImage(url, index, signal);
+    const blob = isOpenAIGptImageModel(params.modelName)
+      ? await prepareReferenceImageUpload(file.blob, signal) : file.blob;
+    const filename = blob === file.blob ? file.filename : `reference-${index + 1}.jpg`;
+    formData.append('image[]', blob, filename);
+  }
   return formData;
 }
 
@@ -112,12 +118,21 @@ async function requestStandardImages(
   const sizeStr = formatImageSizeForModel(modelName, dimensions);
   if (imageUrls.length > 0 && params.imageReferenceRequestMode === 'edits-multipart') {
     const apiUrl = baseUrl.replace(/\/+$/, '') + '/images/edits';
-    return corsSafeFetch(apiUrl, {
-      method: 'POST',
-      headers: buildMultipartAuthHeaders(apiKey),
-      body: await buildImageEditsBody(params, count, sizeStr, signal),
-      signal,
-    });
+    const body = await buildImageEditsBody(params, count, sizeStr, signal);
+    const files = body.getAll('image[]') as File[];
+    const bytes = files.reduce((total, file) => total + file.size, 0);
+    const startedAt = Date.now();
+    try {
+      const response = await corsSafeFetch(apiUrl, {
+        method: 'POST', headers: buildMultipartAuthHeaders(apiKey), body, signal,
+      });
+      if (response.status === 504) await parseResponseError(response, '图片生成失败 (504)');
+      return response;
+    } catch (error) {
+      if (signal?.aborted || (error instanceof Error && error.name === 'AbortError')) throw error;
+      const message = error instanceof Error ? error.message : '图片请求传输失败';
+      throw new Error(`${message}\n提交信息：模型 ${modelName}；参考图 ${files.length} 张，共 ${(bytes / 1048576).toFixed(2)} MiB；输出 ${sizeStr}；等待 ${Math.round((Date.now() - startedAt) / 1000)} 秒。`, { cause: error });
+    }
   }
 
   const apiUrl = baseUrl.replace(/\/+$/, '') + '/images/generations';

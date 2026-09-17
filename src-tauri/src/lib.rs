@@ -478,6 +478,29 @@ enum ProxyFetchStreamEvent {
     Done,
 }
 
+fn proxy_transport_error(error: reqwest::Error) -> String {
+    let kind = if error.is_timeout() {
+        "网络请求超时"
+    } else if error.is_connect() {
+        "无法建立网络连接"
+    } else if error.is_body() {
+        "请求体传输失败"
+    } else {
+        "发送请求或等待响应时连接失败"
+    };
+    // 只提取系统错误类别和错误码，不把 URL、查询参数或凭据写入历史。
+    let mut source = std::error::Error::source(&error);
+    let mut detail = String::new();
+    while let Some(cause) = source {
+        if let Some(io) = cause.downcast_ref::<std::io::Error>() {
+            detail = format!("（{:?}，系统错误码 {:?}）", io.kind(), io.raw_os_error());
+            break;
+        }
+        source = cause.source();
+    }
+    format!("请求失败：{kind}{detail}。未收到有效 HTTP 响应，提交结果尚未确认，请先检查服务商任务记录。")
+}
+
 async fn send_proxy_request(
     client: &reqwest::Client,
     req: &ProxyFetchRequest,
@@ -497,7 +520,7 @@ async fn send_proxy_request(
         }
     }
 
-    request.send().await.map_err(|e| format!("请求失败: {e}"))
+    request.send().await.map_err(proxy_transport_error)
 }
 
 fn ensure_content_length_within_limit(
@@ -719,6 +742,21 @@ async fn fetch_image_data_url(
 #[cfg(test)]
 mod proxy_http_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn transport_errors_do_not_expose_request_url_or_credentials() {
+        let error = reqwest::Client::new()
+            .get("http://user:secret@127.0.0.1:1/?api_key=private-key")
+            .header("invalid header", "value")
+            .send()
+            .await
+            .unwrap_err();
+        let message = proxy_transport_error(error);
+        assert!(message.contains("提交结果尚未确认"));
+        assert!(!message.contains("secret"));
+        assert!(!message.contains("private-key"));
+        assert!(!message.contains("127.0.0.1"));
+    }
 
     #[test]
     fn response_size_limit_accepts_exact_limit_and_rejects_overflow() {

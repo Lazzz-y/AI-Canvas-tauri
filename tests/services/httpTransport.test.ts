@@ -49,6 +49,40 @@ beforeEach(() => {
 });
 
 describe('CORS-safe AI HTTP transport', () => {
+  it.each(['text/html', 'text/plain'])('explains gateway 504 pages without rendering HTML (%s)', async (contentType) => {
+    const response = new Response('<html><head><title>504 Gateway Time-out</title></head><body>nginx</body></html>', {
+      status: 504, headers: { 'Content-Type': contentType },
+    });
+    const error = await parseResponseError(response, '图片生成失败 (504)').catch((cause: Error) => cause);
+    expect(error.message).toContain('网关等待上游响应超时');
+    expect(error.message).toContain('结果尚未确认');
+    expect(error.message).not.toContain('<html>');
+  });
+
+  it('preserves provider JSON diagnostics for a 504', async () => {
+    const response = new Response(JSON.stringify({ error: { message: 'request abc timed out' } }), {
+      status: 504, headers: { 'Content-Type': 'application/json' },
+    });
+    await expect(parseResponseError(response, '图片生成失败 (504)')).rejects.toThrow('request abc timed out');
+  });
+
+  it('preserves all four multipart files and their order through native encoding', async () => {
+    vi.stubGlobal('window', { __TAURI_INTERNALS__: {} });
+    mockNativeStream([Buffer.from('{}')]);
+    const body = new FormData();
+    for (let index = 0; index < 4; index++) {
+      body.append('image[]', new Blob([`image-${index}`], { type: 'image/png' }), `reference-${index}.png`);
+    }
+    await corsSafeFetch('https://gateway.example/images/edits', { method: 'POST', body });
+    const req = invokeMock.mock.calls[0][1].req as { body: string; headers: [string, string][] };
+    const headers = new Headers(req.headers);
+    const decoded = await new Response(Buffer.from(req.body, 'base64'), { headers }).formData();
+    const files = decoded.getAll('image[]') as File[];
+    expect(files).toHaveLength(4);
+    expect(await Promise.all(files.map((file) => file.text()))).toEqual(['image-0', 'image-1', 'image-2', 'image-3']);
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+  });
+
   it('preserves upstream failure status and permits the next request without resetting the transport', async () => {
     vi.stubGlobal('window', { __TAURI_INTERNALS__: {} });
     mockNativeStream([Buffer.from(JSON.stringify({ error: { message: 'Upstream request failed' } }))], {

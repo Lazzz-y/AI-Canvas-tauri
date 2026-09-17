@@ -33,6 +33,72 @@ afterEach(() => {
 });
 
 describe('model request transport boundary', () => {
+  it('deduplicates repeated node references: A B B uploads two images, A B C uploads three', async () => {
+    useAppStore.setState((state) => ({ config: {
+      ...state.config,
+      providers: { ...state.config.providers, cccapi: { name: 'CCC', apiKey: 'secret', baseUrl: 'https://cccapi.cn/v1' } },
+    }, nodes: ['a', 'b', 'c'].map((id) => ({
+      id, type: 'ai-image', position: { x: 0, y: 0 },
+      data: { type: 'ai-image', label: id, imageUrl: `asset://localhost/${id}.png` },
+    })) }));
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response('png', { headers: { 'Content-Type': 'image/png' } }));
+    transportMocks.corsSafeFetch.mockImplementation(async () => jsonResponse({ data: [{ url: 'https://cdn.example/result.png' }] }));
+    for (const [prompt, count] of [['@{a:a}@{b:b}@{b:b}', 2], ['@{a:a}@{b:b}@{c:c}', 3]] as const) {
+      await generateImagesBatch({ provider: 'cccapi', model: 'cccapi/gpt-image-2', prompt: `${prompt} 合影` }, 1);
+      const body = transportMocks.corsSafeFetch.mock.calls.at(-1)![1].body as FormData;
+      expect(body.getAll('image[]')).toHaveLength(count);
+    }
+  });
+
+  it('includes actual model, reference count, transfer size and elapsed time on transport failure', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('image', { headers: { 'Content-Type': 'image/png' } }));
+    transportMocks.corsSafeFetch.mockRejectedValue(new Error('connection reset'));
+    const error = await generateImageStandard({
+      apiKey: 'secret', baseUrl: 'https://gateway.example/v1', modelName: 'gpt-image-2', prompt: 'private prompt',
+      dimensions: { width: 1024, height: 1024 }, imageReferenceRequestMode: 'edits-multipart',
+      imageUrls: ['asset://localhost/private.png'],
+    }).catch((cause: Error) => cause);
+    expect(error).toBeInstanceOf(Error);
+    const message = (error as Error).message;
+    expect(message).toContain('connection reset');
+    expect(message).toContain('模型 gpt-image-2；参考图 1 张，共 0.00 MiB；输出 1024x1024；等待');
+    expect(message).not.toContain('secret');
+    expect(message).not.toContain('private');
+    expect(transportMocks.corsSafeFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('submits four CCC prompt references once in order and does not retry a gateway 504', async () => {
+    useAppStore.setState((state) => ({ config: {
+      ...state.config,
+      providers: { ...state.config.providers, cccapi: { name: 'CCC', apiKey: 'secret', baseUrl: 'https://cccapi.cn/v1' } },
+      generalModels: [{ id: 'ccc-four', name: 'GPT Image 2', modelId: 'gpt-image-2', category: 'image', providerConfigId: 'cccapi' }],
+    }, nodes: Array.from({ length: 4 }, (_, index) => ({
+      id: `ref-${index}`, type: 'ai-image', position: { x: 0, y: 0 },
+      data: { type: 'ai-image', label: `参考${index}`, imageUrl: `asset://localhost/reference-${index}.png`, sourceUrl: `https://expired.example/${index}.png` },
+    })) }));
+    const localFetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => (
+      new Response(String(url), { headers: { 'Content-Type': 'image/png' } })
+    ));
+    transportMocks.corsSafeFetch.mockResolvedValue(new Response('<html><body>504 Gateway Time-out nginx</body></html>', {
+      status: 504, headers: { 'Content-Type': 'text/html' },
+    }));
+    await expect(generateImagesBatch({
+      provider: 'general', model: 'general/ccc-four',
+      prompt: '@{ref-0:参考0}@{ref-1:参考1}@{ref-2:参考2}@{ref-3:参考3} 他们两个人一起合影',
+    }, 1)).rejects.toThrow('网关等待上游响应超时');
+    expect(localFetch).toHaveBeenCalledTimes(4);
+    expect(transportMocks.corsSafeFetch).toHaveBeenCalledTimes(1);
+    const [url, init] = transportMocks.corsSafeFetch.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('https://cccapi.cn/v1/images/edits');
+    const body = init.body as FormData;
+    const files = body.getAll('image[]') as File[];
+    expect(files).toHaveLength(4);
+    expect(await Promise.all(files.map((file) => file.text()))).toEqual(
+      Array.from({ length: 4 }, (_, index) => `asset://localhost/reference-${index}.png`),
+    );
+    expect(body.get('n')).toBe('1');
+  });
+
   it.each(['cccapi', 'legacy-ccc', 'general'])('uses CCC catalog multipart before uploading references (%s)', async (provider) => {
     const connectionId = provider === 'general' ? 'legacy-ccc' : provider;
     useAppStore.setState((state) => ({ config: {
