@@ -8,11 +8,11 @@ const { ensureGroupFolder, renameGroupFolder, moveProjectFileToFolder } = vi.hoi
   ensureGroupFolder: vi.fn(async () => null),
   renameGroupFolder: vi.fn(async () => true),
   // 假磁盘：只按目标目录算出新路径，已在目标目录时返回 null（不移动）
-  moveProjectFileToFolder: vi.fn(async (filePath: string | undefined, dir: string, folder: string | null) => {
+  moveProjectFileToFolder: vi.fn(async (filePath: string | undefined, dir: string, folder: string | null, options?: { preserveSource?: boolean; forceCopy?: boolean }) => {
     if (!filePath) return null;
-    const name = filePath.split('/').pop()!;
+    const name = filePath.replaceAll('\\', '/').split('/').pop()!;
     const target = folder ? `${dir}/${folder}/${name}` : `${dir}/${name}`;
-    return target === filePath ? null : target;
+    return target === filePath && !options?.forceCopy ? null : target;
   }),
 }));
 
@@ -22,6 +22,7 @@ vi.mock('../../src/services/fileService', () => ({
   ensureGroupFolder,
   renameGroupFolder,
   moveProjectFileToFolder,
+  copyFileToProjectData: vi.fn(async (_path: string, _project: string) => ({ filePath: 'D:/data/proj-1/copied.png', assetUrl: 'asset://D:/data/proj-1/copied.png', fileName: 'copied.png' })),
   getProjectDataDir: vi.fn(async () => PROJECT_DIR),
   getAssetUrlFromPath: vi.fn(async (p: string) => `asset://${p}`),
   sanitizeFolderName: (name: string) => name.replace(/[<>:"|?*/\\]/g, '_'),
@@ -58,28 +59,27 @@ beforeEach(() => {
 });
 
 describe('分组与本地文件夹同步', () => {
-  it('复制节点入组不搬走共用原图，重新生成后只搬独立文件', async () => {
+  it('复制节点使用独立文件，入组和重新生成不影响另一节点', async () => {
     const original = `${PROJECT_DIR}/original.png`;
     useAppStore.setState({ nodes: [{
       ...node('a'), type: 'ai-image',
       data: { label: 'image', type: 'ai-image', filePath: original, imageUrl: `asset://${original}` },
     }, node('b')] });
-    useAppStore.getState().duplicateNode('a');
+    await useAppStore.getState().duplicateNode('a');
     const clone = useAppStore.getState().nodes.find((n) => n.id !== 'a' && n.id !== 'b')!;
     createGroup(['a', 'b']);
     await useAppStore.getState().syncGroupFiles();
-    expect(moveProjectFileToFolder.mock.calls.some(([path]) => path === original)).toBe(false);
-    expect(useAppStore.getState().nodes.find((n) => n.id === clone.id)?.data.filePath).toBe(original);
+    expect(useAppStore.getState().nodes.find((n) => n.id === clone.id)?.data.filePath).toBe(`${PROJECT_DIR}/copied.png`);
 
     const regenerated = `${PROJECT_DIR}/regenerated.png`;
     useAppStore.getState().updateNodeData('a', { filePath: regenerated, imageUrl: `asset://${regenerated}` });
     await useAppStore.getState().syncGroupFiles();
     expect(useAppStore.getState().nodes.find((n) => n.id === 'a')?.data.filePath)
       .toBe(`${PROJECT_DIR}/分组/regenerated.png`);
-    expect(useAppStore.getState().nodes.find((n) => n.id === clone.id)?.data.imageUrl).toBe(`asset://${original}`);
+    expect(useAppStore.getState().nodes.find((n) => n.id === clone.id)?.data.imageUrl).toBe(`asset://${PROJECT_DIR}/copied.png`);
   });
 
-  it('分镜格与图片节点共用文件时也保留原位置', async () => {
+  it('旧分镜格与图片共用文件时，归档要求独立副本并保留源文件', async () => {
     const path = `${PROJECT_DIR}/shared.png`;
     useAppStore.setState({ nodes: [
       { ...node('a'), data: { ...node('a').data, filePath: path, imageUrl: `asset://${path}` } },
@@ -87,7 +87,9 @@ describe('分组与本地文件夹同步', () => {
     ] });
     createGroup(['a', 'b']);
     await useAppStore.getState().syncGroupFiles();
-    expect(moveProjectFileToFolder.mock.calls.filter(([file]) => !!file)).toHaveLength(0);
+    const calls = moveProjectFileToFolder.mock.calls.filter(([file]) => !!file);
+    expect(calls).toHaveLength(2);
+    expect(calls.every((call) => call[3]?.forceCopy && call[3]?.preserveSource)).toBe(true);
   });
 
   it('文件移动期间切换项目，不把旧结果写入新项目的同名节点', async () => {
@@ -121,7 +123,8 @@ describe('分组与本地文件夹同步', () => {
 
     useAppStore.getState().renameGroup(groupId, '镜头一');
 
-    expect(renameGroupFolder).toHaveBeenCalledWith('p1', '分组', '镜头一');
+    expect(ensureGroupFolder).toHaveBeenCalledWith('p1', '镜头一');
+    expect(renameGroupFolder).not.toHaveBeenCalled();
     expect(useAppStore.getState().groups[0].name).toBe('镜头一');
     expect(useAppStore.getState().nodes.find((n) => n.id === groupId)?.data.label).toBe('镜头一');
   });
@@ -170,6 +173,7 @@ describe('分组与本地文件夹同步', () => {
       nodes: [{
         id: 'a',
         type: 'ai-image',
+        parentId: 'g1',
         position: { x: 0, y: 0 },
         data: {
           label: 'a',

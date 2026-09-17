@@ -32,6 +32,8 @@ import { cancelNodePolling } from '../services/pollManager';
 import { applyProjectDefaultsToNodeData } from '../services/projectSettingsService';
 import { getCanvasPointerPosition } from '../services/canvasPointerService';
 import { resolveDirectorRuntime } from '../services/directorRuntimeRegistry';
+import { copyNodeMedia, needsNodeMediaCopy, discardCopiedNodeMedia } from '../services/nodeMediaCopy';
+import { registerCanvasDerivation, isCanvasDerivationFresh, completeCanvasDerivation } from '../services/canvasDerivationGuard';
 
 interface GroupNodeDataAccess {
   groupId: string;
@@ -283,8 +285,8 @@ export interface NodeSlice {
     position?: { x: number; y: number },
   ) => string;
   /** 在原位复制一个节点，并让拖出的副本继承入口边——用于 Ctrl 拖拽复制。 */
-  duplicateNode: (nodeId: string) => void;
-  duplicateCanvasNote: (nodeId: string) => string | null;
+  duplicateNode: (nodeId: string) => Promise<string | undefined>;
+  duplicateCanvasNote: (nodeId: string) => string | null | Promise<string | null>;
   convertImageNodeKind: (nodeId: string) => 'to-note' | 'to-node' | 'connected' | null;
   updateCanvasNote: (nodeId: string, patch: CanvasNotePatch) => boolean;
   updateCanvasNoteTransient: (nodeId: string, patch: CanvasNotePatch) => boolean;
@@ -673,24 +675,42 @@ export const createNodeSlice: StateCreator<AppState, [], [], NodeSlice> = (set, 
     return restoredNodeIds;
   },
 
-  duplicateNode: (nodeId) => {
+  duplicateNode: async (nodeId) => {
     const state = get();
     const src = state.nodes.find((n) => n.id === nodeId);
     // 分组节点暂不支持拖拽复制（涉及子节点/边重映射）
     if (!src || src.type === 'group') return;
-    state.commitToHistory();
+    let duplicateData = src.data;
+    if (needsNodeMediaCopy(src.data)) {
+      const guard = registerCanvasDerivation(state, nodeId);
+      if (!guard) { state.showToast('请先创建项目再复制媒体', 'error'); return; }
+      state.showToast('正在复制素材…');
+      try {
+        duplicateData = await copyNodeMedia(src.data, guard.projectId);
+        if (!isCanvasDerivationFresh(guard, get())
+          || get().nodes.find((node) => node.id === nodeId)?.data !== src.data) {
+          await discardCopiedNodeMedia(duplicateData, src.data);
+          get().showToast('画布已变化，请重新复制');
+          return;
+        }
+      } catch {
+        if (get().currentProjectId === guard.projectId) get().showToast('素材复制失败，请重试', 'error');
+        return;
+      } finally { completeCanvasDerivation(guard); }
+    }
+    get().commitToHistory();
 
     // 身份对调：克隆留在原位并承接原节点的边与编号；被拖动的节点
     // 改成新编号，同时额外继承一份入口边。
     const cloneId = `node-${generateId()}`;
-    const newDisplayId = getNextDisplayId(state.nodes);
+    const newDisplayId = getNextDisplayId(get().nodes);
 
     set((s) => {
       const clone = {
         ...src,
         id: cloneId,
         position: { ...src.position },
-        data: prepareDuplicateNodeData(src.data, src.type, cloneId),
+        data: prepareDuplicateNodeData(duplicateData, src.type, cloneId),
         selected: false,
         dragging: false,
       } as Node<BaseNodeData>;
@@ -711,12 +731,36 @@ export const createNodeSlice: StateCreator<AppState, [], [], NodeSlice> = (set, 
         .map((edge) => ({ ...edge, id: `edge-${generateId()}` }));
       return { nodes, edges: [...remappedEdges, ...inheritedIncomingEdges] };
     });
+    return cloneId;
   },
 
   duplicateCanvasNote: (nodeId) => {
     const state = get();
     const source = state.nodes.find((node) => node.id === nodeId && node.type === 'canvas-note');
     if (!source?.data.note) return null;
+    if (needsNodeMediaCopy(source.data)) {
+      const guard = registerCanvasDerivation(state, nodeId);
+      if (!guard) return null;
+      return (async () => {
+        try {
+          const data = await copyNodeMedia(source.data, guard.projectId);
+          if (!isCanvasDerivationFresh(guard, get())
+            || get().nodes.find((node) => node.id === nodeId)?.data !== source.data) {
+            await discardCopiedNodeMedia(data, source.data);
+            return null;
+          }
+          const cloneId = `node-${generateId()}`;
+          get().commitToHistory();
+          get().addNodeTransient({ ...source, id: cloneId,
+            position: { x: source.position.x + 24, y: source.position.y + 24 },
+            data, selected: false, dragging: false });
+          return cloneId;
+        } catch {
+          if (get().currentProjectId === guard.projectId) get().showToast('素材复制失败，请重试', 'error');
+          return null;
+        } finally { completeCanvasDerivation(guard); }
+      })();
+    }
     state.commitToHistory();
     const cloneId = `node-${generateId()}`;
     const clone = {

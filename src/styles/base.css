@@ -1133,11 +1133,17 @@ select option:disabled {
    Reduced Motion — accessibility / 减少动效 — 无障碍
    ════════════════════════════════════════════════════════════════════════ */
 @media (prefers-reduced-motion: reduce) {
-  *,
+  /* 保留加载指示器的旋转，避免等待状态看起来像卡住。 */
+  *:not(.animate-spin):not([class*='spinner']),
   *::before,
   *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
+  }
+
+  *,
+  *::before,
+  *::after {
     scroll-behavior: auto !important;
     transition-duration: 0.01ms !important;
   }

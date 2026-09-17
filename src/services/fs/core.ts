@@ -4,6 +4,7 @@
  * 同名加序号、文件分类与目录列举。被 fs 下其它模块及 fileService 共用。
  */
 import {
+  copyFile,
   exists,
   mkdir,
   readDir,
@@ -401,12 +402,14 @@ export async function renameGroupFolder(
  * 把项目目录内的文件移动到分组文件夹（groupFolder 为 null 表示移回项目根目录）。
  * 仅处理项目根目录或其一级子文件夹中的文件；外部引用文件、更深的嵌套、
  * .trash/AppData 内的文件以及已在目标目录的文件一律不动，返回 null。
+ * preserveSource 用于画布归档：保留旧路径供历史引用；forceCopy 拆分旧共享文件。
  * @returns 新的绝对路径，未移动或失败时为 null
  */
 export async function moveProjectFileToFolder(
   filePath: string | undefined,
   projectDir: string,
   groupFolder: string | null,
+  options: { preserveSource?: boolean; forceCopy?: boolean } = {},
 ): Promise<string | null> {
   if (!isTauriEnv() || !filePath) return null;
   const root = projectDir.replace(/\\/g, '/').replace(/\/+$/, '');
@@ -416,7 +419,7 @@ export async function moveProjectFileToFolder(
   if (segments.length > 2) return null;
   const currentFolder = segments.length === 2 ? segments[0] : null;
   if (currentFolder === '.trash' || currentFolder === 'AppData') return null;
-  if (currentFolder === groupFolder) return null;
+  if (currentFolder === groupFolder && !options.forceCopy) return null;
 
   const fileName = segments[segments.length - 1];
   const targetDir = groupFolder ? joinPath(root, groupFolder) : root;
@@ -425,7 +428,8 @@ export async function moveProjectFileToFolder(
     if (!(await exists(normalized))) return null;
     if (groupFolder && !(await exists(targetDir))) await mkdir(targetDir, { recursive: true });
     const destPath = await resolveUniqueDestPath(targetDir, fileName);
-    await rename(normalized, destPath);
+    if (options.preserveSource || options.forceCopy) await copyFile(normalized, destPath);
+    else await rename(normalized, destPath);
     return destPath;
   } catch (err) {
     console.warn('[fileService] moveProjectFileToFolder failed:', normalized, '→', targetDir, err);

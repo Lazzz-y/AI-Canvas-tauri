@@ -1508,7 +1508,6 @@ select:not(.ui-select__control):not(.ui-select__native):disabled {
   .ui-icon-btn:active:not(:disabled) { transform: none; }
   .ui-card--interactive:hover { transform: none; }
   .ui-slider::-webkit-slider-thumb:hover { transform: none; }
-  .ui-spinner,
   .ui-skeleton,
   .ui-progress--indeterminate .ui-progress__bar {
     animation-duration: 0.01ms;

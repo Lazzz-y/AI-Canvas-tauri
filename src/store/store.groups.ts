@@ -6,12 +6,13 @@ import type { AppState } from './useAppStore';
 import type { BaseNodeData, NodeGroup, StoryboardCellOverride } from '../types';
 import { GROUP_COLOR_PALETTE } from '../types';
 import { generateId } from './store.utils';
+import { isNodeMediaCopySource } from '../services/nodeMediaCopy';
+import { registerCanvasImport, isCanvasDerivationFresh, completeCanvasDerivation } from '../services/canvasDerivationGuard';
 import {
   ensureGroupFolder,
   getAssetUrlFromPath,
   getProjectDataDir,
   moveProjectFileToFolder,
-  renameGroupFolder,
   sanitizeFolderName,
 } from '../services/fileService';
 
@@ -49,26 +50,17 @@ async function moveFile(
   filePath: string | undefined,
   projectDir: string,
   folder: string | null,
+  forceCopy = false,
 ): Promise<MovedFile | null> {
-  const moved = await moveProjectFileToFolder(filePath, projectDir, folder);
+  const moved = await moveProjectFileToFolder(filePath, projectDir, folder, { preserveSource: true, forceCopy });
   return moved ? describeFile(moved, folder) : null;
-}
-
-/** 文件夹整体改名后，把仍指向旧文件夹的路径改写到新文件夹（文件本身已随文件夹一起搬走） */
-function repointToRenamedFolder(
-  filePath: string | undefined,
-  oldPrefix: string,
-  newPrefix: string,
-): string | null {
-  if (!filePath) return null;
-  const normalized = filePath.replace(/\\/g, '/');
-  return normalized.startsWith(oldPrefix) ? newPrefix + normalized.slice(oldPrefix.length) : null;
 }
 
 /** 把移动结果回填到节点数据；期间 filePath 已被改写时保持原样（新文件由下一轮搬运） */
 function applyNodeMove(data: BaseNodeData, expectedPath: string | undefined, moved: MovedFile): BaseNodeData {
   if (data.filePath !== expectedPath) return data;
-  const next: BaseNodeData = { ...data, filePath: moved.filePath, relativePath: moved.relativePath };
+  const next: BaseNodeData = { ...data, filePath: moved.filePath, relativePath: moved.relativePath,
+    fileName: moved.filePath.replace(/\\/g, '/').split('/').pop(), assetId: undefined };
   if (next.thumbnailUrl && next.thumbnailUrl === next.imageUrl) next.thumbnailUrl = moved.assetUrl;
   if (next.imageUrl) next.imageUrl = moved.assetUrl;
   if (next.videoUrl) next.videoUrl = moved.assetUrl;
@@ -92,61 +84,6 @@ export const COLLAPSED_GROUP_SIZE = { width: 220, height: 152 };
 let syncingGroupFiles = false;
 
 export const createGroupSlice: StateCreator<AppState, [], [], GroupSlice> = (set, get) => {
-  /**
-   * 分组文件夹整体改名后，把节点里仍指向旧文件夹的路径改写过去。
-   * 不做则所有 filePath 立刻失效：搬运找不到源文件，保存时 stat 直接抛错。
-   */
-  const repointGroupPaths = async (projectId: string, oldName: string, newName: string) => {
-    const oldFolder = sanitizeFolderName(oldName);
-    const newFolder = sanitizeFolderName(newName);
-    if (oldFolder === newFolder) return;
-    const projectDir = await getProjectDataDir(projectId);
-    if (!projectDir || get().currentProjectId !== projectId) return;
-
-    const root = projectDir.replace(/\\/g, '/').replace(/\/+$/, '');
-    const oldPrefix = `${root}/${oldFolder}/`;
-    const newPrefix = `${root}/${newFolder}/`;
-
-    // getAssetUrlFromPath 是异步的，先把改写计划算好，再一次性回填
-    const patches: { nodeId: string; index: number | null; oldPath: string; moved: MovedFile }[] = [];
-    for (const node of get().nodes) {
-      const data = node.data as BaseNodeData;
-      const repointed = repointToRenamedFolder(data.filePath, oldPrefix, newPrefix);
-      if (repointed) {
-        patches.push({ nodeId: node.id, index: null, oldPath: data.filePath!, moved: await describeFile(repointed, newFolder) });
-      }
-      const overrides = data.storyboardOverrides;
-      if (!Array.isArray(overrides)) continue;
-      for (let i = 0; i < overrides.length; i++) {
-        const cellPath = repointToRenamedFolder(overrides[i]?.filePath, oldPrefix, newPrefix);
-        if (cellPath) {
-          patches.push({ nodeId: node.id, index: i, oldPath: overrides[i]!.filePath!, moved: await describeFile(cellPath, newFolder) });
-        }
-      }
-    }
-    if (patches.length === 0) return;
-
-    set((s) => ({
-      nodes: s.nodes.map((n) => {
-        const own = patches.filter((p) => p.nodeId === n.id);
-        if (own.length === 0) return n;
-        let data = n.data as BaseNodeData;
-        for (const patch of own) {
-          if (patch.index === null) {
-            data = applyNodeMove(data, patch.oldPath, patch.moved);
-            continue;
-          }
-          const list = data.storyboardOverrides;
-          if (!Array.isArray(list) || !list[patch.index]) continue;
-          const next = [...list];
-          next[patch.index] = applyOverrideMove(list[patch.index]!, patch.oldPath, patch.moved);
-          if (next[patch.index] !== list[patch.index]) data = { ...data, storyboardOverrides: next };
-        }
-        return data === n.data ? n : { ...n, data };
-      }),
-    }));
-  };
-
   return {
   groups: [],
 
@@ -411,6 +348,10 @@ export const createGroupSlice: StateCreator<AppState, [], [], GroupSlice> = (set
   renameGroup: (id, name) => {
     const oldName = get().groups.find((g) => g.id === id)?.name;
     if (!oldName || oldName === name) return;
+    if (get().groups.some((group) => group.id !== id && sanitizeFolderName(group.name) === sanitizeFolderName(name))) {
+      get().showToast('分组名称已存在', 'error');
+      return;
+    }
 
     get().commitToHistory();
     set((s) => ({
@@ -420,12 +361,9 @@ export const createGroupSlice: StateCreator<AppState, [], [], GroupSlice> = (set
     }));
 
     const projectId = get().currentProjectId;
-    void renameGroupFolder(projectId, oldName, name).then((ok) => {
-      if (!ok) {
-        get().showToast(`分组文件夹「${name}」已存在，未同步改名`, 'error');
-        return;
-      }
-      if (projectId) return repointGroupPaths(projectId, oldName, name);
+    // 不重命名旧目录：撤销、输出历史仍可能引用其中的文件。
+    void ensureGroupFolder(projectId, name).then(() => {
+      if (get().currentProjectId === projectId) return get().syncGroupFiles();
     });
   },
 
@@ -433,14 +371,15 @@ export const createGroupSlice: StateCreator<AppState, [], [], GroupSlice> = (set
     if (syncingGroupFiles) return;
     const projectId = get().currentProjectId;
     if (!projectId) return;
+    const guard = registerCanvasImport(get());
+    if (!guard) return;
     syncingGroupFiles = true;
     try {
       const projectDir = await getProjectDataDir(projectId);
-      if (!projectDir || get().currentProjectId !== projectId) return;
+      if (!projectDir || !isCanvasDerivationFresh(guard, get())) return;
       const { nodes, groups } = get();
       const folderOfGroup = new Map(groups.map((g) => [g.id, sanitizeFolderName(g.name)]));
-      // 复制节点和分镜格可能共用原文件。移动只回填单个引用，故共享文件保留
-      // 原位置；重新生成得到独立文件后，下一轮再按所属分组搬运。
+      // 旧项目共享引用在归档时拆成独立文件，原路径保留给输出历史和撤销。
       const pathKey = (path: string) => path.replace(/\\/g, '/');
       const referenceCounts = new Map<string, number>();
       for (const { data } of nodes) {
@@ -453,18 +392,18 @@ export const createGroupSlice: StateCreator<AppState, [], [], GroupSlice> = (set
         }
       }
       const moveUnsharedFile = (path: string | undefined, folder: string | null) =>
-        path && (referenceCounts.get(pathKey(path)) ?? 0) > 1
+        path && isNodeMediaCopySource(path)
           ? Promise.resolve(null)
-          : moveFile(path, projectDir, folder);
+          : moveFile(path, projectDir, folder, !!path && (referenceCounts.get(pathKey(path)) ?? 0) > 1);
 
       for (const node of nodes) {
         if (node.type === 'group') continue;
-        if (get().currentProjectId !== projectId) return;   // 项目已切换，停手
+        if (!isCanvasDerivationFresh(guard, get())) return;
         const folder = node.parentId ? folderOfGroup.get(node.parentId) ?? null : null;
         const data = node.data as BaseNodeData;
 
         const moved = await moveUnsharedFile(data.filePath, folder);
-        if (get().currentProjectId !== projectId) return;
+        if (!isCanvasDerivationFresh(guard, get())) return;
         if (moved) {
           set((s) => ({
             nodes: s.nodes.map((n) => (
@@ -478,7 +417,7 @@ export const createGroupSlice: StateCreator<AppState, [], [], GroupSlice> = (set
         for (let i = 0; i < overrides.length; i++) {
           const override = overrides[i];
           const movedCell = override ? await moveUnsharedFile(override.filePath, folder) : null;
-          if (get().currentProjectId !== projectId) return;
+          if (!isCanvasDerivationFresh(guard, get())) return;
           if (!movedCell) continue;
           set((s) => ({
             nodes: s.nodes.map((n) => {
@@ -493,6 +432,7 @@ export const createGroupSlice: StateCreator<AppState, [], [], GroupSlice> = (set
         }
       }
     } finally {
+      completeCanvasDerivation(guard);
       syncingGroupFiles = false;
     }
   },

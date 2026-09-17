@@ -4,6 +4,7 @@ import type { BaseNodeData, NodeGroup } from '../../src/types';
 import { createCanvasNoteData } from '../../src/types';
 
 const fileMocks = vi.hoisted(() => ({
+  copyFileToProjectData: vi.fn(async () => ({ filePath: 'project/copy.png', assetUrl: 'asset://project/copy.png' })),
   collectNodeFileReferences: vi.fn((data: BaseNodeData) => {
     const references = new Set<string>();
     if (data.filePath) references.add(data.filePath);
@@ -124,6 +125,20 @@ beforeEach(() => {
 });
 
 describe('batch canvas history', () => {
+  it('undo and redo preserve the independent file created by media duplication', async () => {
+    useAppStore.setState({ currentProjectId: 'p', nodes: [{ ...node('source'), type: 'ai-image',
+      data: { type: 'ai-image', label: 'image', filePath: 'project/original.png', imageUrl: 'asset://project/original.png' } }],
+      history: [], historyIndex: -1 });
+    await useAppStore.getState().duplicateNode('source');
+    const clone = useAppStore.getState().nodes.find((item) => item.id !== 'source')!;
+    expect(clone.data.filePath).toBe('project/copy.png');
+    expect(await useAppStore.getState().undo()).toBe(true);
+    expect(useAppStore.getState().nodes.map((item) => item.id)).toEqual(['source']);
+    expect(await useAppStore.getState().redo()).toBe(true);
+    expect(useAppStore.getState().nodes.find((item) => item.id === clone.id)?.data.filePath).toBe('project/copy.png');
+    expect(useAppStore.getState().nodes.find((item) => item.id === 'source')?.data.filePath).toBe('project/original.png');
+  });
+
   it('restores the first deleted batch with one undo and supports redo', async () => {
     const nodes = [
       node('node-a', { filePath: 'project/node-a.png' }),

@@ -1365,10 +1365,9 @@ export function registerCanvasAgentTools(): Array<() => void> {
         const store = useAppStore.getState();
         const node = store.nodes.find((item) => item.id === input.nodeId);
         if (!node || node.type === 'group') return { status: 'error', summary: '节点不存在或分组节点不可复制', modelContent: '节点不存在或分组节点不可复制' };
-        const before = new Set(store.nodes.map((item) => item.id));
-        const noteCloneId = node.type === 'canvas-note' ? store.duplicateCanvasNote(node.id) : null;
-        if (node.type !== 'canvas-note') store.duplicateNode(node.id);
-        const cloneId = noteCloneId ?? useAppStore.getState().nodes.find((item) => !before.has(item.id))?.id;
+        const cloneId = node.type === 'canvas-note'
+          ? await store.duplicateCanvasNote(node.id)
+          : await store.duplicateNode(node.id);
         if (!cloneId) return { status: 'error', summary: '节点复制失败', modelContent: '节点复制失败' };
         useAppStore.getState().incrementRevision();
         return { status: 'success', summary: `已复制节点“${node.data.label}”`, modelContent: JSON.stringify({ sourceNodeId: node.id, cloneNodeId: cloneId, revision: useAppStore.getState().getCurrentRevision() }) };

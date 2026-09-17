@@ -4,6 +4,7 @@ import type { BaseNodeData } from '../../src/types';
 
 const fileMocks = vi.hoisted(() => ({
   copyFileToProjectData: vi.fn(),
+  moveToUndoTrash: vi.fn(async () => undefined),
 }));
 
 vi.mock('../../src/services/fileService', () => ({
@@ -186,6 +187,32 @@ describe('canvas clipboard', () => {
 });
 
 describe('control-drag duplication', () => {
+  it('does not publish a late copy into a different project', async () => {
+    let finish!: (value: unknown) => void;
+    fileMocks.copyFileToProjectData.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    useAppStore.setState({ currentProjectId: 'a', nodes: [mediaNode('source', 'a')], showToast: vi.fn() });
+    const pending = useAppStore.getState().duplicateNode('source');
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+    useAppStore.setState({ currentProjectId: 'b', nodes: [] });
+    finish({ filePath: '/data/a/copy.png', assetUrl: 'asset:///data/a/copy.png' });
+    await pending;
+    expect(useAppStore.getState().nodes).toHaveLength(0);
+    expect(fileMocks.moveToUndoTrash).toHaveBeenCalledWith('/data/a/copy.png');
+  });
+
+  it('does not replace a newly generated result while an older copy is pending', async () => {
+    let finish!: (value: unknown) => void;
+    fileMocks.copyFileToProjectData.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    useAppStore.setState({ currentProjectId: 'a', nodes: [mediaNode('source', 'a')], showToast: vi.fn() });
+    const pending = useAppStore.getState().duplicateNode('source');
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+    useAppStore.getState().updateNodeData('source', { filePath: '/data/a/new.png', imageUrl: 'asset:///data/a/new.png' });
+    finish({ filePath: '/data/a/copy.png', assetUrl: 'asset:///data/a/copy.png' });
+    await pending;
+    expect(useAppStore.getState().nodes).toHaveLength(1);
+    expect(useAppStore.getState().nodes[0].data.filePath).toBe('/data/a/new.png');
+  });
+
   it('keeps incoming connections on both nodes without inheriting outgoing connections', () => {
     const incomingEdge: Edge = {
       id: 'edge-source-dragged',
@@ -273,7 +300,7 @@ describe('cross-project paste (跨项目粘贴)', () => {
 
     await vi.waitFor(() => expect(fileMocks.copyFileToProjectData).toHaveBeenCalledTimes(1));
     expect(fileMocks.copyFileToProjectData)
-      .toHaveBeenCalledWith('/data/project-a/original.png', 'project-b');
+      .toHaveBeenCalledWith('/data/project-a/original.png', 'project-b', { redactErrors: true });
     await vi.waitFor(() => {
       expect(useAppStore.getState().nodes[0].data.filePath).toBe('/data/project-b/copied.png');
     });
@@ -286,7 +313,7 @@ describe('cross-project paste (跨项目粘贴)', () => {
     expect(pasted.data.thumbnailUrl).toBe('asset:///data/project-b/copied.png');
   });
 
-  it('复制失败时清掉本地引用，绝不留下指向源项目的路径', async () => {
+  it('复制失败时不插入共享源文件的副本', async () => {
     fileMocks.copyFileToProjectData.mockResolvedValue(null);
     const showToast = vi.fn();
     useAppStore.setState({
@@ -299,15 +326,12 @@ describe('cross-project paste (跨项目粘贴)', () => {
     useAppStore.getState().copySelectedNodes();
 
     useAppStore.setState({ currentProjectId: 'project-b', nodes: [], edges: [], showToast });
-    useAppStore.getState().pasteNodes({ x: 30, y: 30 });
-
-    await vi.waitFor(() => {
-      expect(useAppStore.getState().nodes[0].data.filePath).toBeUndefined();
-    });
+    await useAppStore.getState().pasteNodes({ x: 30, y: 30 });
+    expect(useAppStore.getState().nodes).toHaveLength(0);
     expect(showToast).toHaveBeenCalledWith(expect.stringContaining('复制失败'), 'error');
   });
 
-  it('同项目内粘贴不复制文件，仍与原节点共用素材', async () => {
+  it('同项目内粘贴也复制独立文件', async () => {
     useAppStore.setState({
       currentProjectId: 'project-a',
       nodes: [mediaNode('media', 'project-a')],
@@ -316,12 +340,10 @@ describe('cross-project paste (跨项目粘贴)', () => {
       showToast: vi.fn(),
     });
     useAppStore.getState().copySelectedNodes();
-    useAppStore.getState().pasteNodes({ x: 30, y: 30 });
-
-    await Promise.resolve();
-    expect(fileMocks.copyFileToProjectData).not.toHaveBeenCalled();
+    await useAppStore.getState().pasteNodes({ x: 30, y: 30 });
+    expect(fileMocks.copyFileToProjectData).toHaveBeenCalledTimes(1);
     const pasted = useAppStore.getState().nodes.find((item) => item.id !== 'media');
-    expect(pasted?.data.filePath).toBe('/data/project-a/original.png');
+    expect(pasted?.data.filePath).toBe('/data/project-a/copied.png');
   });
 
   it('复制后编辑源节点不会改到剪贴板内容', () => {
