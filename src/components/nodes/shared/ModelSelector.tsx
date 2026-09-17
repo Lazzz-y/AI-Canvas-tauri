@@ -20,7 +20,7 @@ import {
 import { useAppStore } from '../../../store/useAppStore';
 import { useT } from '../../../i18n';
 import ProviderBadge from '../../shared/ProviderBadge';
-import { probeComfyServer } from '../../../services/comfyServers';
+import { comfyBaseUrlFor, DEFAULT_COMFY_URL, probeComfyServer } from '../../../services/comfyServers';
 
 const MODEL_PREF_KEY = 'canvas-model-prefs';
 
@@ -87,6 +87,8 @@ export default function ModelSelector({
 }: ModelSelectorProps) {
   const t = useT();
   const [open, setOpen] = useState(false);
+  const [editorOpening, setEditorOpening] = useState(false);
+  const editorOpeningRef = useRef(false);
   const [workflowsCollapsed, setWorkflowsCollapsed] = useState(true);
   const [availableComfyUrls, setAvailableComfyUrls] = useState<Record<string, boolean>>({});
   const modelNodeType = MODEL_TYPE_FALLBACK[nodeType] ?? nodeType;
@@ -313,6 +315,31 @@ export default function ModelSelector({
   const currentWorkflow = selectedWorkflowId
     ? matchingWorkflows.find((w) => w.id === selectedWorkflowId)
     : undefined;
+  const canEditWorkflow = !!currentWorkflow
+    && (!currentWorkflow.adapterType || currentWorkflow.adapterType === 'comfyui');
+  const editWorkflow = async () => {
+    if (!currentWorkflow || !canEditWorkflow || editorOpeningRef.current) return;
+    editorOpeningRef.current = true;
+    setEditorOpening(true);
+    setOpen(false);
+    try {
+      const { openComfyUIWorkflowEditor } = await import('../../../services/comfyUIWindowService');
+      const result = await openComfyUIWorkflowEditor(
+        comfyBaseUrlFor(currentWorkflow.id) || DEFAULT_COMFY_URL,
+        currentWorkflow,
+      );
+      if (result.missingNodeClasses.length > 0) {
+        useAppStore.getState().showToast(`已打开，但 ComfyUI 缺少这些节点：${result.missingNodeClasses.join('、')}`, 'error');
+      }
+    } catch (error) {
+      const message = typeof error === 'string' ? error
+        : error instanceof Error ? error.message : '无法在 ComfyUI 中打开工作流';
+      useAppStore.getState().showToast(message, 'error');
+    } finally {
+      editorOpeningRef.current = false;
+      setEditorOpening(false);
+    }
+  };
 
   const displayLabel = currentWorkflow
     ? currentWorkflow.name
@@ -333,7 +360,7 @@ export default function ModelSelector({
     <div className="model-selector" ref={ref}>
       <button
         type="button"
-        className={`model-selector-trigger${selectedWorkflowId ? ' has-workflow' : ''}${currentModel ? ' has-model' : ''}`}
+        className={`model-selector-trigger${selectedWorkflowId ? ' has-workflow' : ''}${currentModel ? ' has-model' : ''}${canEditWorkflow ? ' has-workflow-editor' : ''}`}
         onClick={(e) => {
           e.stopPropagation();
           if (!open) setAvailableComfyUrls({});
@@ -353,6 +380,27 @@ export default function ModelSelector({
           <polyline points="6 9 12 15 18 9" />
         </svg>
       </button>
+
+      {canEditWorkflow && (
+        <button
+          type="button"
+          className="ui-icon-btn model-workflow-edit nodrag nopan"
+          aria-label={t('在 ComfyUI 中编辑')}
+          data-tooltip={t('在 ComfyUI 中编辑')}
+          aria-busy={editorOpening}
+          disabled={editorOpening}
+          onClick={(event) => {
+            event.stopPropagation();
+            void editWorkflow();
+          }}
+        >
+          {editorOpening ? <span className="ui-spinner" /> : (
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+              <path d="m16 3 5 5M4 20l4-1L21 6a2.8 2.8 0 0 0-4-4L4 15l-1 6 6-1" />
+            </svg>
+          )}
+        </button>
+      )}
 
       {open && (
         <div

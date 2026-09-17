@@ -6,14 +6,14 @@ const driver = vi.hoisted(() => ({
   states: [] as unknown[], stateIndex: 0, effectIndex: 0,
   effects: [] as Array<{ deps: readonly unknown[]; cleanup?: () => void }>,
   pending: [] as Array<() => void>,
-  probe: vi.fn(),
+  probe: vi.fn(), editor: vi.fn(), toast: vi.fn(), resolveUrl: vi.fn(),
   config: { providers: {}, comfyUIUrl: 'http://localhost:8188', comfyServers: [{ id: 'remote', name: '远程', url: 'https://comfy.example.com' }] },
 }));
 vi.mock('react', async () => ({
   ...await vi.importActual<typeof import('react')>('react'),
   useMemo: <T,>(fn: () => T) => fn(),
   useCallback: <T,>(fn: T) => fn,
-  useRef: () => ({ current: null }),
+  useRef: <T,>(initial: T) => ({ current: initial }),
   useLayoutEffect: () => {},
   useState: <T,>(initial: T | (() => T)) => {
     const index = driver.stateIndex++;
@@ -32,9 +32,15 @@ vi.mock('react', async () => ({
     });
   },
 }));
-vi.mock('../../src/store/useAppStore', () => ({ useAppStore: (select: (state: unknown) => unknown) => select({ config: driver.config }) }));
+vi.mock('../../src/store/useAppStore', () => ({ useAppStore: Object.assign(
+  (select: (state: unknown) => unknown) => select({ config: driver.config }),
+  { getState: () => ({ showToast: driver.toast }) },
+) }));
 vi.mock('../../src/i18n', () => ({ useT: () => (text: string) => text }));
-vi.mock('../../src/services/comfyServers', () => ({ probeComfyServer: driver.probe }));
+vi.mock('../../src/services/comfyServers', () => ({
+  probeComfyServer: driver.probe, comfyBaseUrlFor: driver.resolveUrl, DEFAULT_COMFY_URL: 'http://127.0.0.1:8188',
+}));
+vi.mock('../../src/services/comfyUIWindowService', () => ({ openComfyUIWorkflowEditor: driver.editor }));
 vi.mock('../../src/components/nodes/shared/defaultModels', () => ({
   defaultModelGroups: [], getConfiguredModelGroups: () => [], getGeneralModelGroups: () => [],
 }));
@@ -72,6 +78,8 @@ beforeEach(() => {
   vi.useFakeTimers();
   driver.states = []; driver.effects = []; driver.pending = [];
   driver.probe.mockReset().mockResolvedValue(false);
+  driver.editor.mockReset().mockResolvedValue({ missingNodeClasses: [] });
+  driver.resolveUrl.mockReset().mockReturnValue('https://comfy.example.com');
   driver.config.comfyServers = [{ id: 'remote', name: '远程', url: 'https://comfy.example.com' }];
   vi.stubGlobal('window', { addEventListener: vi.fn(), removeEventListener: vi.fn() });
   vi.stubGlobal('document', { addEventListener: vi.fn(), removeEventListener: vi.fn() });
@@ -82,6 +90,40 @@ afterEach(() => {
 });
 
 describe('模型选择器工作流可用性', () => {
+  it('编辑按钮打开当前工作流绑定的服务器，不展开菜单且防止重复打开', async () => {
+    const flow = workflow('remote', { serverId: 'remote' });
+    let complete!: (value: { missingNodeClasses: string[] }) => void;
+    driver.editor.mockReturnValue(new Promise((resolve) => { complete = resolve; }));
+    const button = render([flow], flow.id).find((element) => element.props['aria-label'] === '在 ComfyUI 中编辑')!;
+    click(button);
+    click(button);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(driver.resolveUrl).toHaveBeenCalledWith(flow.id);
+    expect(driver.editor).toHaveBeenCalledExactlyOnceWith('https://comfy.example.com', flow);
+    const elements = render([flow], flow.id);
+    expect(elements.find((element) => element.props['aria-label'] === '在 ComfyUI 中编辑')?.props.disabled).toBe(true);
+    expect(elements.some((element) => String(element.props.className).startsWith('model-dropdown'))).toBe(false);
+    complete({ missingNodeClasses: [] });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(render([flow], flow.id).find((element) => element.props['aria-label'] === '在 ComfyUI 中编辑')?.props.disabled).toBe(false);
+  });
+
+  it('打开失败提示错误并恢复按钮', async () => {
+    const flow = workflow('local');
+    driver.editor.mockRejectedValue(new Error('服务未启动'));
+    click(render([flow], flow.id).find((element) => element.props['aria-label'] === '在 ComfyUI 中编辑')!);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(driver.toast).toHaveBeenCalledWith('服务未启动', 'error');
+    expect(render([flow], flow.id).find((element) => element.props['aria-label'] === '在 ComfyUI 中编辑')?.props.disabled).toBe(false);
+  });
+
+  it('普通模型与云端工作流不显示 ComfyUI 编辑按钮', () => {
+    const flows = [workflow('cloud', { adapterType: 'runninghub' }), workflow('api', { adapterType: 'workflow-api' })];
+    for (const id of [undefined, 'cloud', 'api']) {
+      expect(render(flows, id).some((element) => element.props['aria-label'] === '在 ComfyUI 中编辑')).toBe(false);
+    }
+  });
+
   it('关闭菜单不探测，未就绪时隐藏整个分组且不清除当前选择', async () => {
     const flows = [workflow('local')];
     render(flows);
