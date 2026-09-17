@@ -184,7 +184,7 @@ const BUILT_IN_PROVIDER_DEFINITIONS: ProviderDefinition[] = [
   {
     id: 'apimart',
     name: 'APIMart',
-    description: 'OpenAI 兼容的多类型模型服务',
+    description: '模型覆盖全面，价格适中。注册需使用境外网络，日常生成在国内网络环境下即可使用。',
     badgeText: 'AM',
     authType: 'api-key',
     catalogAdapter: 'openai-compatible',
