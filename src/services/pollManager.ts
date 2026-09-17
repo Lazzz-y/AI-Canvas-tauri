@@ -1186,6 +1186,20 @@ async function resumeWorkflowApi(task: PendingTask): Promise<void> {
       mediaStatus: 'failed', mediaError: error instanceof Error ? error.message : '工作流查询失败，任务已保留',
     });
   } finally {
+    // 过期结果不能回填，但原任务的 loading 必须结束，才能显示继续查询入口。
+    const current = useAppStore.getState();
+    const node = current.nodes.find((item) => item.id === task.nodeId);
+    if (!messageOnly && !signal.aborted && current.currentProjectId === task.projectId
+      && node?.data.status === 'loading' && node.data.type === task.nodeType
+      && node.data.workflowId === task.workflowApi?.workflowId
+      && !isCurrent()
+      && getPendingTasksForProject(task.projectId).some((item) => item.nodeId === task.nodeId
+        && item.taskType === 'workflow-api' && item.taskId === task.taskId
+        && item.workflowApi?.attemptId === task.workflowApi?.attemptId)) {
+      current.updateNodeDataTransient(task.nodeId, {
+        status: 'error', error: '画布已变化，工作流任务已保留，请继续查询 / 保存', workflowApiStage: '查询已停止',
+      });
+    }
     if (guard) completeCanvasDerivation(guard);
     cleanupNodePolling(task.nodeId, signal);
   }

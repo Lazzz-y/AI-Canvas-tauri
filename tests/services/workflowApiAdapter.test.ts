@@ -275,4 +275,62 @@ describe('AutoDL 提交、查询及恢复', () => {
     expect(pending()).toHaveLength(1);
     expect(useAppStore.getState().nodes[0].data.videoUrl).toBeUndefined();
   });
+
+  it('画布版本变化后结束生成中状态，保留任务供继续查询，无须重启', async () => {
+    const original = mocks.fetch.getMockImplementation()!;
+    mocks.fetch.mockImplementation(async (url: string, init: RequestInit) => {
+      if (init.method === 'GET') useAppStore.getState().incrementRevision();
+      return original(url, init);
+    });
+    await expect(generate()).rejects.toThrow('画布');
+    expect(useAppStore.getState().nodes[0].data.status).toBe('error');
+    expect(useAppStore.getState().nodes[0].data.workflowApiStage).toBe('查询已停止');
+    expect(pending()[0]?.taskId).toBe(taskId);
+    expect(mocks.persist).not.toHaveBeenCalled();
+
+    mocks.fetch.mockImplementation(original);
+    await resumeWorkflowApiNodeTask('n1');
+    expect(useAppStore.getState().nodes[0].data.status).toBe('success');
+    expect(useAppStore.getState().nodes[0].data.videoUrl).toBe('asset://localhost/result.mp4');
+    expect(pending()).toEqual([]);
+    expect(submissions()).toHaveLength(1);
+  });
+
+  it('恢复查询期间版本变化也不能留下永久生成中状态', async () => {
+    await generate();
+    const original = mocks.fetch.getMockImplementation()!;
+    mocks.fetch.mockImplementation(async (url: string, init: RequestInit) => {
+      useAppStore.getState().incrementRevision();
+      return original(url, init);
+    });
+    await resumeWorkflowApiNodeTask('n1');
+    expect(useAppStore.getState().nodes[0].data.status).toBe('error');
+    expect(useAppStore.getState().nodes[0].data.error).toContain('继续查询');
+    expect(pending()[0]?.taskId).toBe(taskId);
+  });
+
+  it.each(['generate', 'resume'])('%s 的过期任务不能修改新任务或其他项目的状态', async (mode) => {
+    if (mode === 'resume') await generate();
+    const original = mocks.fetch.getMockImplementation()!;
+    mocks.fetch.mockImplementation(async (url: string, init: RequestInit) => {
+      if (init.method === 'GET') {
+        const task = pending()[0];
+        savePendingTask({ ...task, workflowApi: { ...task.workflowApi!, attemptId: 'new-attempt' } });
+        useAppStore.getState().incrementRevision();
+      }
+      return original(url, init);
+    });
+    if (mode === 'generate') await expect(generate()).rejects.toThrow('画布');
+    else await resumeWorkflowApiNodeTask('n1');
+    expect(useAppStore.getState().nodes[0].data.status).toBe('loading');
+    expect(pending()[0]?.workflowApi?.attemptId).toBe('new-attempt');
+
+    mocks.fetch.mockImplementation(async (url: string, init: RequestInit) => {
+      useAppStore.setState({ currentProjectId: 'p2' });
+      return original(url, init);
+    });
+    await resumeWorkflowApiNodeTask('n1');
+    expect(useAppStore.getState().nodes[0].data.status).toBe('loading');
+    expect(pending()).toHaveLength(1);
+  });
 });

@@ -78,7 +78,7 @@ export function createWorkflowApiDraft(template: 'blank' | 'autodl' = 'blank'): 
       submit: { method: 'POST', path: '/workflows/run', body: { prompt: '{{prompt}}', images: '{{imageUrls}}' } },
       response: { type: 'json', taskIdPath: 'data.task_id', errorPath: 'message' },
       poll: { method: 'GET', path: '/tasks/{{submit.data.task_id}}', intervalMs: 3000, maxDurationMs: 7200000,
-        response: { statusPath: 'data.status', successValues: ['completed', 'success'], failureValues: ['failed', 'error', 'cancelled'], errorPath: 'message', result: { urlPath: 'data.results[*].url' } } } },
+        response: { statusPath: 'data.status', successValues: ['completed', 'success'], failureValues: ['failed', 'error', 'cancelled'], errorPath: 'message', result: { urlPath: 'data.results.0.url' } } } },
   };
   if (template === 'autodl') {
     const protocol = parseModelExecutionProtocol(manifest.protocol);

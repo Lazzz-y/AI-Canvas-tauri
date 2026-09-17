@@ -19,6 +19,8 @@ import {
   runConfiguredModelProtocol,
 } from '../../src/services/ai/modelProtocolRuntime';
 import { useAppStore } from '../../src/store/useAppStore';
+import { createWorkflowApiDraft } from '../../src/services/workflowApi/workflowApiDefinition';
+import { readModelProtocolPathValues } from '../../src/services/ai/modelProtocolResponse';
 
 const jsonResponse = (
   payload: unknown,
@@ -34,6 +36,35 @@ beforeEach(() => {
 });
 
 describe('declarative model execution protocol', () => {
+  it.each([
+    ['data.results.0.url', ['https://cdn.example/first.mp4']],
+    ['data.results[0].url', ['https://cdn.example/first.mp4']],
+    ['data.results.*.url', ['https://cdn.example/first.mp4', 'https://cdn.example/second.mp4']],
+    ['data.results[*].url', ['https://cdn.example/first.mp4', 'https://cdn.example/second.mp4']],
+  ])('previews workflow result path %s', (path, expected) => {
+    const protocol = parseModelExecutionProtocol(createWorkflowApiDraft().manifest.protocol);
+    expect(protocol.poll!.response.result.urlPath).toBe('data.results.0.url');
+    protocol.poll!.response.result.urlPath = path;
+    expect(validateModelExecutionProtocol(protocol)).toEqual([]);
+    const preview = previewModelProtocolResponse(protocol, {
+      data: { status: 'completed', results: [
+        { url: 'https://cdn.example/first.mp4' },
+        { url: 'https://cdn.example/second.mp4' },
+      ] },
+    });
+    expect(preview.find((entry) => entry.id === 'poll-result-url')).toMatchObject({
+      matchCount: expected.length, values: expected,
+    });
+  });
+
+  it('keeps missing and unsafe bracket paths from matching', () => {
+    const payload = { data: { results: [{ url: 'https://cdn.example/first.mp4' }] } };
+    expect(readModelProtocolPathValues(payload, 'data.results[9].url')).toEqual([]);
+    expect(readModelProtocolPathValues({ data: { results: [] } }, 'data.results[*].url')).toEqual([]);
+    expect(readModelProtocolPathValues(payload, 'data.results[*].constructor')).toEqual([]);
+    expect(readModelProtocolPathValues(payload, 'data.results[0].__proto__')).toEqual([]);
+  });
+
   it('does not invent an endpoint for a new custom video protocol', () => {
     const protocol = getDefaultCustomProtocol('video');
     expect(protocol.submit.path).toBe('');

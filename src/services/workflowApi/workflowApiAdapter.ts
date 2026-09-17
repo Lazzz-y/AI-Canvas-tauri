@@ -396,7 +396,12 @@ export async function executeWorkflowApi(params: {
     return saved;
   } catch (error) {
     if (manifest.version === 2 && error instanceof Error) error.message = responseMessage(error.message, connection.apiKey || '\u0000');
-    const canReport = fresh();
+    // 结束旧任务的等待状态不回填媒体；revision 变化不能把节点永久留在 loading。
+    const current = useAppStore.getState();
+    const canReport = !signal.aborted && current.currentProjectId === projectId
+      && (!submitting || ownsRecord())
+      && current.nodes.some((item) => item.id === params.nodeId && item.data.type === nodeType
+        && item.data.workflowId === workflow.id && item.data.status === 'loading');
     if (ownsRecord() && (error instanceof WorkflowApiTaskFailed || (submitting && !taskId && error instanceof WorkflowApiRequestError && error.rejected))) removePendingTask(trackingId, taskId);
     if (params.nodeId && canReport) useAppStore.getState().updateNodeDataTransient(params.nodeId, {
       status: 'error', error: error instanceof Error ? error.message : '工作流执行失败',
