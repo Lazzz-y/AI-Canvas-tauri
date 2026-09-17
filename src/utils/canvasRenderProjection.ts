@@ -138,13 +138,13 @@ function createRenderData(data: BaseNodeData): BaseNodeData {
 }
 
 function applyCanvasNodeRenderLayout(node: CanvasNode, data: BaseNodeData): CanvasNode {
-  const renderNode = node.type === 'canvas-note'
+  const renderNode = node.type === 'canvas-note' || (node.type === 'group' && !node.data.groupCollapsed)
     ? {
         ...node,
         data,
         style: {
           ...node.style,
-          // 笔记的透明外接矩形不能遮挡下方节点；可见内容由笔记样式恢复命中。
+          // 笔记外接矩形与展开分组的空白区透传事件；内容、标题和控件自行恢复命中。
           pointerEvents: 'none' as const,
         },
       }
@@ -167,6 +167,7 @@ export function projectCanvasNodesForReactFlow(
     if (
       cached
       && hasSameNodeFieldsExceptData(cached.source, node)
+      && cached.source.data.groupCollapsed === node.data.groupCollapsed
       && hasSameRenderFallbackData(cached.renderData, node.data)
     ) {
       cached.source = node;

@@ -17,6 +17,12 @@ const { ensureGroupFolder, renameGroupFolder, moveProjectFileToFolder } = vi.hoi
 }));
 
 vi.mock('../../src/services/fileService', () => ({
+  waitForPendingNodeFileDeletions: vi.fn(async () => undefined),
+  resolveGroupUndoTrashPaths: vi.fn(async () => []),
+  resolveNodeUndoTrashPaths: vi.fn(async () => []),
+  collectNodeFileReferences: vi.fn(() => new Set<string>()),
+  deletedGroupFolderNames: vi.fn(() => []),
+  deleteNodeFiles: vi.fn(async () => undefined),
   setBaseDataDir: vi.fn(),
   syncAuthorizedDirectories: vi.fn(async () => undefined),
   ensureGroupFolder,
@@ -69,6 +75,90 @@ beforeEach(() => {
   renameGroupFolder.mockClear();
   moveProjectFileToFolder.mockClear();
   vi.mocked(finishProjectFileRelocation).mockClear();
+});
+
+describe('展开分组内创建和拖入空节点', () => {
+  function setup() {
+    const group: Node<BaseNodeData> = {
+      id: 'group-test', type: 'group', position: { x: 100, y: 100 },
+      data: { label: '分组', type: 'comment', groupId: 'group-test' },
+      style: { width: 300, height: 200 },
+      width: 1000, height: 700, measured: { width: 1000, height: 700 },
+    };
+    const empty: Node<BaseNodeData> = {
+      id: 'empty', type: 'ai-image', position: { x: 700, y: 400 },
+      data: { label: '空图像', type: 'ai-image', status: 'idle', nodeWidth: 280, nodeHeight: 160 },
+    };
+    useAppStore.setState({
+      nodes: [group], edges: [],
+      groups: [{ id: group.id, name: '分组', nodeIds: [], color: '#888888', createdAt: 0 }],
+    });
+    return { group, empty };
+  }
+
+  it('在扩大后的分组空白区新建无内容节点，位置和成员关系一起撤销', async () => {
+    const { group, empty } = setup();
+    useAppStore.getState().addNode(empty);
+    expect(useAppStore.getState().nodes[1]).toMatchObject({ parentId: group.id, position: { x: 600, y: 300 } });
+    expect(useAppStore.getState().groups[0].nodeIds).toEqual(['empty']);
+    await useAppStore.getState().undo();
+    expect(useAppStore.getState().nodes.map((n) => n.id)).toEqual([group.id]);
+    expect(useAppStore.getState().groups[0].nodeIds).toEqual([]);
+    await useAppStore.getState().redo();
+    expect(useAppStore.getState().nodes[1].parentId).toBe(group.id);
+  });
+
+  it('连线创建节点时同时入组，一次撤销清除节点、连线和成员关系', async () => {
+    const { group, empty } = setup();
+    useAppStore.setState({ nodes: [group, node('source')] });
+    useAppStore.getState().addNodeWithEdge(empty, { id: 'edge', source: 'source', target: 'empty' });
+    expect(useAppStore.getState().nodes[2].parentId).toBe(group.id);
+    expect(useAppStore.getState().edges).toHaveLength(1);
+    await useAppStore.getState().undo();
+    expect(useAppStore.getState().nodes).toHaveLength(2);
+    expect(useAppStore.getState().edges).toEqual([]);
+    expect(useAppStore.getState().groups[0].nodeIds).toEqual([]);
+  });
+
+  it('空节点早于分组创建，拖入后父节点在前，且保留其他空分组', () => {
+    const { group, empty } = setup();
+    const other = { ...group, id: 'other', position: { x: 2000, y: 0 }, data: { ...group.data, groupId: 'other' } };
+    useAppStore.setState({ nodes: [empty, group, other], groups: [
+      ...useAppStore.getState().groups,
+      { id: 'other', name: '空分组', nodeIds: [], color: '#888888', createdAt: 0 },
+    ] });
+    useAppStore.getState().settleNodeGroupingOnDragStop(empty);
+    const state = useAppStore.getState();
+    expect(state.nodes.find((n) => n.id === 'empty')).toMatchObject({ parentId: group.id, position: { x: 600, y: 300 } });
+    expect(state.nodes.findIndex((n) => n.id === group.id)).toBeLessThan(state.nodes.findIndex((n) => n.id === 'empty'));
+    expect(state.groups.find((g) => g.id === 'other')).toBeDefined();
+  });
+
+  it('拖动使用节点实际尺寸，不因历史业务尺寸过大误判在组外', () => {
+    const { group, empty } = setup();
+    const dragged = { ...empty, measured: { width: 100, height: 100 }, position: { x: 1000, y: 600 }, data: { ...empty.data, nodeWidth: 1000 } };
+    useAppStore.setState({ nodes: [group, dragged] });
+    useAppStore.getState().settleNodeGroupingOnDragStop(dragged);
+    expect(useAppStore.getState().nodes[1].parentId).toBe(group.id);
+  });
+
+  it('拖出分组还原绝对坐标，不影响其他分组的成员', () => {
+    const { group, empty } = setup();
+    useAppStore.getState().addNode(empty);
+    const moved = { ...useAppStore.getState().nodes[1], position: { x: 1400, y: 900 } };
+    useAppStore.getState().settleNodeGroupingOnDragStop(moved);
+    expect(useAppStore.getState().nodes.find((n) => n.id === empty.id)).toMatchObject({ parentId: undefined, position: { x: 1500, y: 1000 } });
+    expect(useAppStore.getState().groups.some((g) => g.id === group.id)).toBe(false);
+  });
+
+  it('新建节点不会自动藏进折叠分组，显式父节点保持原坐标', () => {
+    const { group, empty } = setup();
+    useAppStore.setState({ nodes: [{ ...group, data: { ...group.data, groupCollapsed: true } }] });
+    useAppStore.getState().addNode(empty);
+    expect(useAppStore.getState().nodes[1].parentId).toBeUndefined();
+    useAppStore.getState().addNode({ ...empty, id: 'child', parentId: group.id, position: { x: 20, y: 30 } });
+    expect(useAppStore.getState().nodes[2]).toMatchObject({ parentId: group.id, position: { x: 20, y: 30 } });
+  });
 });
 
 describe('分组与本地文件夹同步', () => {

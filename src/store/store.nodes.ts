@@ -118,6 +118,60 @@ function prepareNodeForInsertion(
   return { ...node, data: { ...prepared, displayId } } as Node<BaseNodeData>;
 }
 
+function absoluteNodePosition(node: Node<BaseNodeData>, nodes: Node<BaseNodeData>[]) {
+  const position = { ...node.position };
+  const visited = new Set([node.id]);
+  let parentId = node.parentId;
+  while (parentId && !visited.has(parentId)) {
+    visited.add(parentId);
+    const parent = nodes.find((candidate) => candidate.id === parentId);
+    if (!parent) break;
+    position.x += parent.position.x;
+    position.y += parent.position.y;
+    parentId = parent.parentId;
+  }
+  return position;
+}
+
+function nodeSize(node: Node<BaseNodeData>) {
+  return {
+    width: node.measured?.width ?? node.width ?? (Number(node.style?.width) || node.data.nodeWidth || 280),
+    height: node.measured?.height ?? node.height ?? (Number(node.style?.height) || node.data.nodeHeight || 160),
+  };
+}
+
+function groupContainsPoint(group: Node<BaseNodeData>, point: { x: number; y: number }, nodes: Node<BaseNodeData>[]) {
+  const position = absoluteNodePosition(group, nodes);
+  const size = nodeSize(group);
+  return point.x >= position.x && point.x <= position.x + size.width
+    && point.y >= position.y && point.y <= position.y + size.height;
+}
+
+function nodeCenter(node: Node<BaseNodeData>, nodes: Node<BaseNodeData>[]) {
+  const position = absoluteNodePosition(node, nodes);
+  const size = nodeSize(node);
+  return { x: position.x + size.width / 2, y: position.y + size.height / 2 };
+}
+
+/** 新建节点按画布位置加入展开分组，与插入本身共用一次历史快照。 */
+function insertNodeInGroup(state: Pick<AppState, 'nodes' | 'groups'>, node: Node<BaseNodeData>) {
+  const center = nodeCenter(node, state.nodes);
+  const parent = node.parentId || node.type === 'group' ? undefined : state.nodes.find((candidate) => (
+    candidate.type === 'group' && !candidate.hidden && !candidate.data.groupCollapsed
+    && groupContainsPoint(candidate, center, state.nodes)
+  ));
+  if (!parent) return { nodes: [...state.nodes, node], groups: state.groups };
+  const position = absoluteNodePosition(parent, state.nodes);
+  return {
+    nodes: [...state.nodes, {
+      ...node, parentId: parent.id,
+      position: { x: node.position.x - position.x, y: node.position.y - position.y },
+    }],
+    groups: state.groups.map((group) => group.id === parent.data.groupId
+      ? { ...group, nodeIds: [...new Set([...group.nodeIds, node.id])] } : group),
+  };
+}
+
 function prepareDuplicateNodeData(
   data: BaseNodeData,
   nodeType: string | undefined,
@@ -340,9 +394,7 @@ export const createNodeSlice: StateCreator<AppState, [], [], NodeSlice> = (set, 
       const displayId = getNextDisplayId(state.nodes);
       const settings = state.projects.find((project) => project.id === state.currentProjectId)?.settings;
       const data = applyProjectDefaultsToNodeData(node.data, settings);
-      return {
-        nodes: [...state.nodes, prepareNodeForInsertion(node, data, displayId)],
-      };
+      return insertNodeInGroup(state, prepareNodeForInsertion(node, data, displayId));
     });
   },
 
@@ -353,7 +405,7 @@ export const createNodeSlice: StateCreator<AppState, [], [], NodeSlice> = (set, 
       const settings = state.projects.find((project) => project.id === state.currentProjectId)?.settings;
       const data = applyProjectDefaultsToNodeData(node.data, settings);
       return {
-        nodes: [...state.nodes, prepareNodeForInsertion(node, data, displayId)],
+        ...insertNodeInGroup(state, prepareNodeForInsertion(node, data, displayId)),
         edges: [...state.edges, edge],
       };
     });
@@ -1165,93 +1217,37 @@ export const createNodeSlice: StateCreator<AppState, [], [], NodeSlice> = (set, 
 
     if (node.type === 'group') return;
 
-    const absPos = { x: node.position.x, y: node.position.y };
-    let pid = node.parentId;
-    while (pid) {
-      const p = allNodes.find((n) => n.id === pid);
-      if (!p) break;
-      absPos.x += p.position.x;
-      absPos.y += p.position.y;
-      pid = p.parentId;
-    }
+    if (!allNodes.some((candidate) => candidate.id === node.id)) return;
+    const groupNodes = allNodes.filter((candidate) => candidate.type === 'group' && !candidate.hidden);
+    const oldParent = groupNodes.find((candidate) => candidate.id === node.parentId);
+    // 分镜等非普通分组的父子关系由对应业务入口管理。
+    if (node.parentId && !oldParent) return;
+    const center = nodeCenter(node, allNodes);
+    const parent = oldParent && groupContainsPoint(oldParent, center, allNodes)
+      ? oldParent
+      : groupNodes.find((candidate) => groupContainsPoint(candidate, center, allNodes));
+    if (parent?.id === node.parentId) return;
 
-    const nodeWidth = (node.data?.nodeWidth as number) || node.measured?.width || 280;
-    const nodeHeight = (node.data?.nodeHeight as number) || node.measured?.height || 160;
-    const nodeCenter = {
-      x: absPos.x + nodeWidth / 2,
-      y: absPos.y + nodeHeight / 2,
-    };
-
-    const groupNodes = allNodes.filter((n) => n.type === 'group');
-    let newNodes = allNodes.map((n) => ({ ...n, position: { ...n.position } }));
-    let newGroups = [...state.groups];
-    let changed = false;
-
-    if (node.parentId) {
-      const parentNode = groupNodes.find((g) => g.id === node.parentId);
-      if (parentNode) {
-        const pw = (parentNode.style?.width as number) || 400;
-        const ph = (parentNode.style?.height as number) || 300;
-        const inside =
-          nodeCenter.x >= parentNode.position.x &&
-          nodeCenter.x <= parentNode.position.x + pw &&
-          nodeCenter.y >= parentNode.position.y &&
-          nodeCenter.y <= parentNode.position.y + ph;
-        if (!inside) {
-          newNodes = newNodes.map((n) => {
-            if (n.id !== node.id) return n;
-            return { ...n, position: absPos, parentId: undefined };
-          });
-          const gId = (parentNode.data as unknown as GroupNodeDataAccess).groupId;
-          newGroups = newGroups.map((g) =>
-            g.id === gId
-              ? { ...g, nodeIds: g.nodeIds.filter((id) => id !== node.id) }
-              : g,
-          );
-          changed = true;
-        }
+    const absPos = absoluteNodePosition(node, allNodes);
+    const parentPos = parent ? absoluteNodePosition(parent, allNodes) : { x: 0, y: 0 };
+    let newNodes = allNodes.map((candidate) => candidate.id === node.id ? {
+      ...candidate,
+      parentId: parent?.id,
+      position: { x: absPos.x - parentPos.x, y: absPos.y - parentPos.y },
+    } : candidate);
+    let newGroups = state.groups.map((group) => {
+      if (group.id === parent?.data.groupId) {
+        return { ...group, nodeIds: [...new Set([...group.nodeIds, node.id])] };
       }
-    }
-
-    const updatedNode = newNodes.find((n) => n.id === node.id);
-    if (updatedNode && !updatedNode.parentId) {
-      for (const gn of groupNodes) {
-        const pw = (gn.style?.width as number) || 400;
-        const ph = (gn.style?.height as number) || 300;
-        if (
-          nodeCenter.x >= gn.position.x &&
-          nodeCenter.x <= gn.position.x + pw &&
-          nodeCenter.y >= gn.position.y &&
-          nodeCenter.y <= gn.position.y + ph
-        ) {
-          newNodes = newNodes.map((n) => {
-            if (n.id !== node.id) return n;
-            return {
-              ...n,
-              position: {
-                x: absPos.x - gn.position.x,
-                y: absPos.y - gn.position.y,
-              },
-              parentId: gn.id,
-            };
-          });
-          const gId = (gn.data as unknown as GroupNodeDataAccess).groupId;
-          newGroups = newGroups.map((g) =>
-            g.id === gId
-              ? { ...g, nodeIds: [...new Set([...g.nodeIds, node.id])] }
-              : g,
-          );
-          changed = true;
-          break;
-        }
+      if (group.id === oldParent?.data.groupId) {
+        return { ...group, nodeIds: group.nodeIds.filter((id) => id !== node.id) };
       }
-    }
-
-    if (!changed) return;
+      return group;
+    });
 
     const emptyGroupIds = new Set(
       groupNodes
-        .filter((gn) => newNodes.filter((n) => n.parentId === gn.id).length === 0)
+        .filter((gn) => gn.id === oldParent?.id && !newNodes.some((n) => n.parentId === gn.id))
         .map((gn) => gn.id),
     );
     if (emptyGroupIds.size > 0) {
@@ -1265,6 +1261,8 @@ export const createNodeSlice: StateCreator<AppState, [], [], NodeSlice> = (set, 
       newGroups = newGroups.filter((g) => !emptyDataIds.has(g.id));
     }
 
+    // React Flow 要求父节点排在子节点之前，旧空节点拖入后也必须满足。
+    newNodes = [...newNodes.filter((n) => n.type === 'group'), ...newNodes.filter((n) => n.type !== 'group')];
     state.commitToHistory();
     set({ nodes: newNodes, groups: newGroups });
   },

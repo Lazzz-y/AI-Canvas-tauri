@@ -25,7 +25,12 @@ function findSelectedNodeAtPoint(clientX: number, clientY: number): string | nul
     document.querySelectorAll<HTMLElement>('.react-flow__node.selected'),
   );
   const hit = selected.find((candidate) => {
-    const rect = candidate.getBoundingClientRect();
+    // 展开分组的内部是画布空白；几何回查不能重新把它吞成分组菜单。
+    const target = candidate.querySelector<HTMLElement>('.canvas-group-node-wrapper')
+      ? candidate.querySelector<HTMLElement>('.canvas-group-title')
+      : candidate;
+    if (!target) return false;
+    const rect = target.getBoundingClientRect();
     return clientX >= rect.left && clientX <= rect.right
       && clientY >= rect.top && clientY <= rect.bottom;
   });

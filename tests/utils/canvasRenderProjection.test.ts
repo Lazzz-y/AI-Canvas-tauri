@@ -35,6 +35,17 @@ function makeNode(
 }
 
 describe('canvas render projection', () => {
+  it('passes expanded group background events through and invalidates the cache when collapsed', () => {
+    const cache = createCanvasNodeProjectionCache();
+    const group = makeNode('group', { type: 'group', selected: true });
+    const expanded = projectCanvasNodesForReactFlow([group], cache)[0];
+    expect(expanded.style?.pointerEvents).toBe('none');
+    const collapsed = { ...group, data: { ...group.data, groupCollapsed: true } };
+    expect(projectCanvasNodesForReactFlow([collapsed], cache)[0].style?.pointerEvents).not.toBe('none');
+    expect(projectCanvasNodesForReactFlow([group], cache)[0].style?.pointerEvents).toBe('none');
+    expect(group.style?.pointerEvents).toBeUndefined();
+  });
+
   it('keeps full Store data while React Flow receives a lightweight data shell', () => {
     const source = makeNode('far-node', { position: { x: 1_000_000, y: 1_000_000 } });
     const projected = projectCanvasNodesForReactFlow(
