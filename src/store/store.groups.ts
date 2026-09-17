@@ -433,13 +433,29 @@ export const createGroupSlice: StateCreator<AppState, [], [], GroupSlice> = (set
     if (syncingGroupFiles) return;
     const projectId = get().currentProjectId;
     if (!projectId) return;
-    const projectDir = await getProjectDataDir(projectId);
-    if (!projectDir) return;
-
     syncingGroupFiles = true;
     try {
+      const projectDir = await getProjectDataDir(projectId);
+      if (!projectDir || get().currentProjectId !== projectId) return;
       const { nodes, groups } = get();
       const folderOfGroup = new Map(groups.map((g) => [g.id, sanitizeFolderName(g.name)]));
+      // 复制节点和分镜格可能共用原文件。移动只回填单个引用，故共享文件保留
+      // 原位置；重新生成得到独立文件后，下一轮再按所属分组搬运。
+      const pathKey = (path: string) => path.replace(/\\/g, '/');
+      const referenceCounts = new Map<string, number>();
+      for (const { data } of nodes) {
+        const paths = [data.filePath, ...(data.storyboardOverrides ?? []).map((cell) => cell?.filePath),
+          ...(data.directorCaptureFilePaths ?? [])];
+        for (const path of paths) {
+          if (!path) continue;
+          const key = pathKey(path);
+          referenceCounts.set(key, (referenceCounts.get(key) ?? 0) + 1);
+        }
+      }
+      const moveUnsharedFile = (path: string | undefined, folder: string | null) =>
+        path && (referenceCounts.get(pathKey(path)) ?? 0) > 1
+          ? Promise.resolve(null)
+          : moveFile(path, projectDir, folder);
 
       for (const node of nodes) {
         if (node.type === 'group') continue;
@@ -447,7 +463,8 @@ export const createGroupSlice: StateCreator<AppState, [], [], GroupSlice> = (set
         const folder = node.parentId ? folderOfGroup.get(node.parentId) ?? null : null;
         const data = node.data as BaseNodeData;
 
-        const moved = await moveFile(data.filePath, projectDir, folder);
+        const moved = await moveUnsharedFile(data.filePath, folder);
+        if (get().currentProjectId !== projectId) return;
         if (moved) {
           set((s) => ({
             nodes: s.nodes.map((n) => (
@@ -460,7 +477,8 @@ export const createGroupSlice: StateCreator<AppState, [], [], GroupSlice> = (set
         if (!Array.isArray(overrides)) continue;
         for (let i = 0; i < overrides.length; i++) {
           const override = overrides[i];
-          const movedCell = override ? await moveFile(override.filePath, projectDir, folder) : null;
+          const movedCell = override ? await moveUnsharedFile(override.filePath, folder) : null;
+          if (get().currentProjectId !== projectId) return;
           if (!movedCell) continue;
           set((s) => ({
             nodes: s.nodes.map((n) => {

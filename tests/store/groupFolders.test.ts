@@ -58,6 +58,52 @@ beforeEach(() => {
 });
 
 describe('分组与本地文件夹同步', () => {
+  it('复制节点入组不搬走共用原图，重新生成后只搬独立文件', async () => {
+    const original = `${PROJECT_DIR}/original.png`;
+    useAppStore.setState({ nodes: [{
+      ...node('a'), type: 'ai-image',
+      data: { label: 'image', type: 'ai-image', filePath: original, imageUrl: `asset://${original}` },
+    }, node('b')] });
+    useAppStore.getState().duplicateNode('a');
+    const clone = useAppStore.getState().nodes.find((n) => n.id !== 'a' && n.id !== 'b')!;
+    createGroup(['a', 'b']);
+    await useAppStore.getState().syncGroupFiles();
+    expect(moveProjectFileToFolder.mock.calls.some(([path]) => path === original)).toBe(false);
+    expect(useAppStore.getState().nodes.find((n) => n.id === clone.id)?.data.filePath).toBe(original);
+
+    const regenerated = `${PROJECT_DIR}/regenerated.png`;
+    useAppStore.getState().updateNodeData('a', { filePath: regenerated, imageUrl: `asset://${regenerated}` });
+    await useAppStore.getState().syncGroupFiles();
+    expect(useAppStore.getState().nodes.find((n) => n.id === 'a')?.data.filePath)
+      .toBe(`${PROJECT_DIR}/分组/regenerated.png`);
+    expect(useAppStore.getState().nodes.find((n) => n.id === clone.id)?.data.imageUrl).toBe(`asset://${original}`);
+  });
+
+  it('分镜格与图片节点共用文件时也保留原位置', async () => {
+    const path = `${PROJECT_DIR}/shared.png`;
+    useAppStore.setState({ nodes: [
+      { ...node('a'), data: { ...node('a').data, filePath: path, imageUrl: `asset://${path}` } },
+      { ...node('b'), data: { ...node('b').data, storyboardOverrides: [{ filePath: path.replaceAll('/', '\\'), url: `asset://${path}` }] } },
+    ] });
+    createGroup(['a', 'b']);
+    await useAppStore.getState().syncGroupFiles();
+    expect(moveProjectFileToFolder.mock.calls.filter(([file]) => !!file)).toHaveLength(0);
+  });
+
+  it('文件移动期间切换项目，不把旧结果写入新项目的同名节点', async () => {
+    const path = `${PROJECT_DIR}/a.png`;
+    useAppStore.setState({ nodes: [{ ...node('a'), data: { ...node('a').data, filePath: path } }, node('b')] });
+    createGroup(['a', 'b']);
+    let finish!: (path: string) => void;
+    moveProjectFileToFolder.mockImplementationOnce(() => new Promise<string>((resolve) => { finish = resolve; }));
+    const syncing = useAppStore.getState().syncGroupFiles();
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+    useAppStore.setState({ currentProjectId: 'p2', nodes: [{ ...node('a'), data: { ...node('a').data, filePath: path } }] });
+    finish(`${PROJECT_DIR}/分组/a.png`);
+    await syncing;
+    expect(useAppStore.getState().nodes[0].data.filePath).toBe(path);
+  });
+
   it('创建分组时用不重名的分组名建文件夹', () => {
     createGroup(['a', 'b']);
     createGroup(['c', 'd']);
