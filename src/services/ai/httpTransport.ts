@@ -1,6 +1,7 @@
 /** Fetch-compatible AI transport with a Tauri-native streaming path that bypasses WebView CORS. */
 import { isLocalMediaUrl, isRemoteMediaUrl, isTauriAssetUrl } from '../../utils/mediaUrl';
 import { Channel, invoke } from '@tauri-apps/api/core';
+import { bytePartsToBase64Async } from '../fs/core';
 
 type ProxyFetchStreamEvent =
   | { event: 'meta'; status: number; headers: [string, string][] }
@@ -153,14 +154,6 @@ function createAbortError(): DOMException {
   return new DOMException('请求已取消', 'AbortError');
 }
 
-function encodeBytesBase64(bytes: Uint8Array): string {
-  let binary = '';
-  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
-    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
-  }
-  return btoa(binary);
-}
-
 interface EncodedRequestBody {
   body: string | null;
   contentType?: string;
@@ -168,29 +161,31 @@ interface EncodedRequestBody {
 
 async function encodeRequestBody(
   body: BodyInit | null | undefined,
+  signal?: AbortSignal,
 ): Promise<EncodedRequestBody> {
+  const encode = (bytes: Uint8Array) => bytePartsToBase64Async([bytes], signal);
   if (body === undefined || body === null) return { body: null };
   if (typeof body === 'string') {
-    return { body: encodeBytesBase64(new TextEncoder().encode(body)) };
+    return { body: await encode(new TextEncoder().encode(body)) };
   }
   if (body instanceof URLSearchParams) {
-    return { body: encodeBytesBase64(new TextEncoder().encode(body.toString())) };
+    return { body: await encode(new TextEncoder().encode(body.toString())) };
   }
   if (body instanceof Blob) {
-    return { body: encodeBytesBase64(new Uint8Array(await body.arrayBuffer())) };
+    return { body: await encode(new Uint8Array(await body.arrayBuffer())) };
   }
   if (body instanceof ArrayBuffer) {
-    return { body: encodeBytesBase64(new Uint8Array(body)) };
+    return { body: await encode(new Uint8Array(body)) };
   }
   if (ArrayBuffer.isView(body)) {
     return {
-      body: encodeBytesBase64(new Uint8Array(body.buffer, body.byteOffset, body.byteLength)),
+      body: await encode(new Uint8Array(body.buffer, body.byteOffset, body.byteLength)),
     };
   }
   if (body instanceof FormData) {
     const request = new Request('http://localhost', { method: 'POST', body });
     return {
-      body: encodeBytesBase64(new Uint8Array(await request.arrayBuffer())),
+      body: await encode(new Uint8Array(await request.arrayBuffer())),
       contentType: request.headers.get('Content-Type') || undefined,
     };
   }
@@ -216,7 +211,7 @@ export async function corsSafeFetch(url: string, init: RequestInit = {}): Promis
   if (signal?.aborted) throw createAbortError();
 
   const requestHeaders = new Headers(init.headers);
-  const encodedBody = await encodeRequestBody(init.body);
+  const encodedBody = await encodeRequestBody(init.body, signal);
   if (encodedBody.contentType && !requestHeaders.has('Content-Type')) {
     requestHeaders.set('Content-Type', encodedBody.contentType);
   }

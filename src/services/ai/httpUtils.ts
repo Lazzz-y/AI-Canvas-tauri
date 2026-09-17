@@ -39,6 +39,9 @@ export async function parseResponseError(response: Response, defaultMsg: string)
   if (/\bapi[\s_-]*key\b/i.test(errorMsg)) {
     errorMsg += '（请确认使用模型 API Key，而非账户令牌；若密钥正确，请检查账户权限和积分余额）';
   }
+  if (/^upstream request failed[.!]?$/i.test(errorMsg.trim())) {
+    errorMsg += `（HTTP ${response.status}）`;
+  }
   throw new Error(errorMsg);
 }
 

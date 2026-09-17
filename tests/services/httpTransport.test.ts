@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { corsSafeFetch, logAiRequest } from '../../src/services/ai/httpTransport';
+import { parseResponseError } from '../../src/services/ai/httpUtils';
 
 const invokeMock = vi.hoisted(() => vi.fn());
 
@@ -48,6 +49,59 @@ beforeEach(() => {
 });
 
 describe('CORS-safe AI HTTP transport', () => {
+  it('preserves upstream failure status and permits the next request without resetting the transport', async () => {
+    vi.stubGlobal('window', { __TAURI_INTERNALS__: {} });
+    mockNativeStream([Buffer.from(JSON.stringify({ error: { message: 'Upstream request failed' } }))], {
+      status: 502, headers: [['content-type', 'application/json']],
+    });
+    const failed = await corsSafeFetch('https://gateway.example/images/edits', {
+      method: 'POST', body: 'first',
+    });
+    await expect(parseResponseError(failed, '图片生成失败 (502)')).rejects.toThrow('Upstream request failed（HTTP 502）');
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+    mockNativeStream([Buffer.from('{"result":"ok"}')], { headers: [['content-type', 'application/json']] });
+    const next = await corsSafeFetch('https://gateway.example/images/edits', { method: 'POST', body: 'second' });
+    await expect(next.json()).resolves.toEqual({ result: 'ok' });
+    expect(invokeMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('yields during large request encoding and preserves bytes across consecutive calls', async () => {
+    vi.stubGlobal('window', { __TAURI_INTERNALS__: {} });
+    mockNativeStream([Buffer.from('{}')]);
+    const bytes = Uint8Array.from({ length: 2 * 1024 * 1024 + 5 }, (_, index) => index % 251);
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const sentBefore = invokeMock.mock.calls.length;
+      let yieldedBeforeSend = false;
+      const heartbeat = new Promise<void>((resolve) => setTimeout(() => {
+        yieldedBeforeSend = invokeMock.mock.calls.length === sentBefore;
+        resolve();
+      }, 0));
+      const response = await corsSafeFetch('https://gateway.example/upload', {
+        method: 'POST', body: bytes,
+      });
+      await heartbeat;
+      expect(yieldedBeforeSend).toBe(true);
+      await response.text();
+      const req = invokeMock.mock.calls.at(-1)![1].req as { body: string; requestId: string };
+      expect(Buffer.from(req.body, 'base64').equals(Buffer.from(bytes))).toBe(true);
+    }
+    expect(invokeMock.mock.calls[0][1].req.requestId).not.toBe(invokeMock.mock.calls[1][1].req.requestId);
+  });
+
+  it('cancels large request encoding before sending a native request', async () => {
+    vi.stubGlobal('window', { __TAURI_INTERNALS__: {} });
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 0);
+    try {
+      await expect(corsSafeFetch('https://gateway.example/upload', {
+        method: 'POST', body: new Uint8Array(2 * 1024 * 1024), signal: controller.signal,
+      })).rejects.toMatchObject({ name: 'AbortError' });
+      expect(invokeMock).not.toHaveBeenCalled();
+    } finally {
+      clearTimeout(timer);
+    }
+  });
+
   it('logs readable request parameters without exposing credentials or local media', () => {
     const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
     const formData = new FormData();
