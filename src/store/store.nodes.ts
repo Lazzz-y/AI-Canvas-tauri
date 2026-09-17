@@ -156,12 +156,8 @@ export function collectKeepPaths(
   const keepPaths = new Set<string>();
   for (const node of nodes) {
     const data = node.data as BaseNodeData;
-    if (!idsToDelete.has(node.id)) {
+    if (!idsToDelete.has(node.id) || data.artifactId) {
       fileService.collectNodeFileReferences(data).forEach((reference) => keepPaths.add(reference));
-    }
-    // 宫格格子无论节点存活与否都不删：删除路径只清 filePath，撤销也只还原 filePath
-    for (const override of data.storyboardOverrides ?? []) {
-      if (override?.filePath) keepPaths.add(override.filePath);
     }
   }
   for (const message of messages) {
@@ -909,13 +905,11 @@ export const createNodeSlice: StateCreator<AppState, [], [], NodeSlice> = (set, 
 
     // Delete local files for all affected nodes —— 跳过仍被存活节点引用的共享文件（复制节点场景）
     const keepPaths = collectKeepPaths(nodes, idsToDelete, get().messages);
-    for (const id of idsToDelete) {
-      const n = nodes.find((nn) => nn.id === id);
-      if (n && !n.data.artifactId) {
-        fileService.deleteNodeFile(n.data as BaseNodeData, keepPaths, get().currentProjectId)
-          .catch((e) => console.warn('[删除节点] 文件清理失败:', e));
-      }
-    }
+    void fileService.deleteNodeFiles(
+      nodes.filter((node) => idsToDelete.has(node.id) && !node.data.artifactId).map((node) => node.data),
+      keepPaths, get().currentProjectId,
+      fileService.deletedGroupFolderNames(get().groups, idsToDelete),
+    ).catch((e) => console.warn('[删除节点] 文件清理失败:', e));
 
     // 先播放退场动画，结束后再真正从状态中移除（动画期间历史已提交，撤销仍指向删除前状态）
     playNodeExit([...idsToDelete]).then(() => {
@@ -953,13 +947,11 @@ export const createNodeSlice: StateCreator<AppState, [], [], NodeSlice> = (set, 
 
     // 清理文件
     const keepPaths = collectKeepPaths(nodes, idsToDelete, get().messages);
-    for (const id of idsToDelete) {
-      const n = nodes.find((nn) => nn.id === id);
-      if (n && !n.data.artifactId) {
-        fileService.deleteNodeFile(n.data as BaseNodeData, keepPaths, get().currentProjectId)
-          .catch((e) => console.warn('[批量删除] 文件清理失败:', e));
-      }
-    }
+    void fileService.deleteNodeFiles(
+      nodes.filter((node) => idsToDelete.has(node.id) && !node.data.artifactId).map((node) => node.data),
+      keepPaths, get().currentProjectId,
+      fileService.deletedGroupFolderNames(get().groups, idsToDelete),
+    ).catch((e) => console.warn('[批量删除] 文件清理失败:', e));
 
     // 统一播放退场动画后移除
     playNodeExit([...idsToDelete]).then(() => {

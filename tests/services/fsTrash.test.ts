@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const fsMocks = vi.hoisted(() => ({
   exists: vi.fn(),
+  lstat: vi.fn(async () => ({ isSymlink: false })),
   mkdir: vi.fn(),
   readFile: vi.fn(),
   remove: vi.fn(),
@@ -20,6 +21,7 @@ const projectDirMock = vi.hoisted(() => ({ get: vi.fn() }));
 
 vi.mock('../../src/services/fs/core', () => ({
   getProjectDataDir: projectDirMock.get,
+  sanitizeFolderName: (name: string) => name.replace(/[<>:"|?*/\\]/g, "_"),
   isTauriEnv: () => true,
   joinPath: (...parts: string[]) => parts.join('/'),
   notifyProjectDiskChanged: coreMocks.notifyProjectDiskChanged,
@@ -28,6 +30,8 @@ vi.mock('../../src/services/fs/core', () => ({
 import {
   collectNodeFileReferences,
   deleteNodeFile,
+  deleteNodeFiles,
+  resolveGroupUndoTrashPaths,
   isPathInsideDir,
   isProjectOwnedFile,
   moveToUndoTrash,
@@ -51,7 +55,7 @@ describe('undo trash media moves', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.restoreAllMocks();
-    fsMocks.exists.mockResolvedValue(true);
+    fsMocks.exists.mockImplementation(async (path: string) => !path.includes('/.trash/'));
     fsMocks.mkdir.mockResolvedValue(undefined);
     fsMocks.rename.mockResolvedValue(undefined);
     coreMocks.invoke.mockResolvedValue(undefined);
@@ -67,12 +71,13 @@ describe('undo trash media moves', () => {
     expect(fsMocks.mkdir).toHaveBeenCalledWith('D:/project/media/.trash', { recursive: true });
     expect(fsMocks.rename).toHaveBeenCalledTimes(1);
     const trashPath = fsMocks.rename.mock.calls[0]?.[1] as string;
-    expect(trashPath).toMatch(/^D:\/project\/media\/\.trash\/\d+-generated-video\.mp4$/);
+    expect(trashPath).toMatch(/^D:\/project\/media\/\.trash\/[^/]+-generated-video\.mp4$/);
     expect(fsMocks.readFile).not.toHaveBeenCalled();
     expect(fsMocks.writeFile).not.toHaveBeenCalled();
     expect(fsMocks.remove).not.toHaveBeenCalled();
     expect(coreMocks.notifyProjectDiskChanged).toHaveBeenCalledOnce();
 
+    fsMocks.exists.mockImplementation(async (path: string) => path !== originalPath);
     await expect(restoreFromUndoTrash(originalPath)).resolves.toBe(true);
 
     expect(fsMocks.rename).toHaveBeenNthCalledWith(2, trashPath, originalPath);
@@ -108,6 +113,7 @@ describe('undo trash media moves', () => {
     await waitForPendingNodeFileDeletions();
 
     // 暂存已经落定，此时的还原才能真正把文件搬回来
+    fsMocks.exists.mockImplementation(async (path: string) => path !== originalPath);
     await expect(restoreFromUndoTrash(originalPath)).resolves.toBe(true);
   });
 });
@@ -115,7 +121,7 @@ describe('undo trash media moves', () => {
 describe('删除节点文件的项目归属校验', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    fsMocks.exists.mockResolvedValue(true);
+    fsMocks.exists.mockImplementation(async (path: string) => !path.includes('/.trash/'));
     fsMocks.mkdir.mockResolvedValue(undefined);
     fsMocks.rename.mockResolvedValue(undefined);
     projectDirMock.get.mockResolvedValue('D:/data/project-b');
@@ -146,6 +152,63 @@ describe('删除节点文件的项目归属校验', () => {
     expect(fsMocks.rename).toHaveBeenCalledTimes(1);
   });
 
+  it('整组删除只移动目录到项目根回收站，包含旧的组内回收站', async () => {
+    await deleteNodeFiles([
+      { filePath: 'D:/data/project-b/分组/a.png' },
+      { filePath: 'D:/data/project-b/分组/b.png' },
+    ], new Set(), 'project-b', ['分组']);
+    expect(fsMocks.rename).toHaveBeenCalledTimes(1);
+    expect(fsMocks.rename.mock.calls[0][0]).toBe('D:/data/project-b/分组');
+    expect(fsMocks.rename.mock.calls[0][1]).toMatch(/^D:\/data\/project-b\/\.trash\/[^/]+-分组$/);
+    expect(fsMocks.mkdir).toHaveBeenCalledWith('D:/data/project-b/.trash', { recursive: true });
+    expect(fsMocks.mkdir).not.toHaveBeenCalledWith('D:/data/project-b/分组/.trash', expect.anything());
+    const staged = fsMocks.rename.mock.calls[0][1];
+    fsMocks.exists.mockImplementation(async (path: string) => path !== 'D:/data/project-b/分组');
+    await expect(restoreFromUndoTrash('D:/data/project-b/分组')).resolves.toBe(true);
+    expect(fsMocks.rename).toHaveBeenLastCalledWith(staged, 'D:/data/project-b/分组');
+  });
+
+  it('单独删除组内文件也使用项目根回收站', async () => {
+    await deleteNodeFile({ filePath: 'D:/data/project-b/分组/only.png' }, new Set(), 'project-b');
+    expect(fsMocks.rename.mock.calls[0]).toEqual([
+      'D:/data/project-b/分组/only.png', expect.stringMatching(/^D:\/data\/project-b\/\.trash\/[^/]+-only.png$/),
+    ]);
+  });
+
+  it('同毫秒删除不同分组里的同名文件不会共用回收目标', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(123);
+    await deleteNodeFiles([{ filePath: 'D:/data/project-b/one/a.png' }, { filePath: 'D:/data/project-b/two/a.png' }], undefined, 'project-b');
+    expect(fsMocks.rename.mock.calls[0][1]).not.toBe(fsMocks.rename.mock.calls[1][1]);
+  });
+
+  it('组外仍有引用时保留目录与共享文件，只回收独占文件', async () => {
+    await deleteNodeFiles([
+      { filePath: 'D:/data/project-b/shared/a.png' }, { filePath: 'D:/data/project-b/shared/b.png' },
+    ], new Set(['D:/data/project-b/shared/a.png']), 'project-b', ['shared']);
+    expect(fsMocks.rename).toHaveBeenCalledTimes(1);
+    expect(fsMocks.rename.mock.calls[0][0]).toBe('D:/data/project-b/shared/b.png');
+  });
+
+  it('空分组也整体回收，恢复时不覆盖新建的同名目录', async () => {
+    await deleteNodeFiles([], undefined, 'project-b', ['空组']);
+    expect(fsMocks.rename).toHaveBeenCalledTimes(1);
+    fsMocks.exists.mockResolvedValue(true);
+    await expect(restoreFromUndoTrash('D:/data/project-b/空组')).resolves.toBe(false);
+    expect(fsMocks.rename).toHaveBeenCalledTimes(1);
+  });
+
+  it('拒绝特殊目录及目录穿越，不扩大整组回收范围', async () => {
+    expect(await resolveGroupUndoTrashPaths(['..', '../other', '.trash', '.thumbnail', 'AppData', 'director'], 'project-b')).toEqual([]);
+    await moveToUndoTrash('D:/data/project-b/../private.png', 'project-b');
+    expect(fsMocks.rename).not.toHaveBeenCalled();
+  });
+
+  it('分组目录是符号链接时不移动其中指向的项目外文件', async () => {
+    fsMocks.lstat.mockResolvedValueOnce({ isSymlink: true });
+    await deleteNodeFile({ filePath: 'D:/data/project-b/linked/image.png' }, undefined, 'project-b');
+    expect(fsMocks.rename).not.toHaveBeenCalled();
+  });
+
   it('Blender 导演节点按 scene bundle 目录整体暂存，不重复移动目录内 artifact', async () => {
     await deleteNodeFile({
       filePath: 'D:/data/project-b/director/scenes/scene-main/results/frame.png',
@@ -161,7 +224,7 @@ describe('删除节点文件的项目归属校验', () => {
       'D:/data/project-b/director/scenes/scene-main',
     );
     expect(fsMocks.rename.mock.calls[0]?.[1]).toMatch(
-      /^D:\/data\/project-b\/director\/scenes\/\.trash\/\d+-scene-main$/,
+      /^D:\/data\/project-b\/\.trash\/[^/]+-scene-main$/,
     );
   });
 

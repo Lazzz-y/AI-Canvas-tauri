@@ -16,6 +16,10 @@ const fileMocks = vi.hoisted(() => ({
     return references;
   }),
   deleteNodeFile: vi.fn(async () => undefined),
+  deleteNodeFiles: vi.fn(async () => undefined),
+  deletedGroupFolderNames: (groups: NodeGroup[], deleted: ReadonlySet<string>) => groups.filter((group) =>
+    deleted.has(group.id) || (group.nodeIds.length > 0 && group.nodeIds.every((id) => deleted.has(id)))).map((group) => group.name),
+  resolveGroupUndoTrashPaths: vi.fn(async (names: string[]) => names.map((name) => `project/${name}`)),
   moveToUndoTrash: vi.fn(async () => undefined),
   resolveNodeUndoTrashPaths: vi.fn(async (data: BaseNodeData) => {
     const sceneId = data.directorScene?.sceneId ?? data.directorResultManifest?.sceneId;
@@ -198,7 +202,9 @@ describe('batch canvas history', () => {
 
     expect(useAppStore.getState().nodes.map((item) => item.id)).toEqual(['node-c']);
     expect(useAppStore.getState()).toMatchObject({ historyIndex: 0 });
-    expect(fileMocks.moveToUndoTrash).toHaveBeenCalledWith('project/node-a.png');
+    expect(fileMocks.deleteNodeFiles).toHaveBeenCalledWith(
+      expect.arrayContaining([expect.objectContaining({ filePath: 'project/node-a.png' })]), expect.any(Set), expect.anything(), expect.any(Array),
+    );
     await expect(useAppStore.getState().redo()).resolves.toBe(false);
   });
 
@@ -226,8 +232,8 @@ describe('batch canvas history', () => {
     );
 
     await expect(useAppStore.getState().redo()).resolves.toBe(true);
-    expect(fileMocks.moveToUndoTrash).toHaveBeenCalledWith(
-      'project/director/scenes/scene-history',
+    expect(fileMocks.deleteNodeFiles).toHaveBeenCalledWith(
+      [director.data], expect.any(Set), 'project-1', [],
     );
   });
 
@@ -255,6 +261,7 @@ describe('batch canvas history', () => {
       expect(useAppStore.getState().nodes.map((item) => item.id)).toEqual(['node-b']);
     });
     expect(useAppStore.getState().groups).toEqual([]);
+    expect(fileMocks.deleteNodeFiles).toHaveBeenCalledWith([child.data], expect.any(Set), expect.anything(), ['Group']);
     expect(useAppStore.getState().edges).toEqual([]);
 
     await expect(useAppStore.getState().undo()).resolves.toBe(true);
@@ -265,10 +272,30 @@ describe('batch canvas history', () => {
     ]);
     expect(useAppStore.getState().nodes[0].style).toEqual({ width: 400, height: 300 });
     expect(useAppStore.getState().groups).toEqual(groups);
+    expect(fileMocks.restoreFromUndoTrash).toHaveBeenCalledWith('project/Group');
 
     await expect(useAppStore.getState().redo()).resolves.toBe(true);
     expect(useAppStore.getState().nodes.map((item) => item.id)).toEqual(['node-b']);
     expect(useAppStore.getState().groups).toEqual([]);
+  });
+
+  it.each(['single', 'batch'])('deletes a whole group and restores its folder before files (%s)', async (mode) => {
+    const folder = groupNode('group-folder');
+    const child = { ...node('media-child', { filePath: 'project/Folder/image.png' }), parentId: folder.id };
+    useAppStore.setState({ currentProjectId: 'project-1', nodes: [folder, child],
+      groups: [{ id: folder.id, name: 'Folder', nodeIds: [child.id], color: '#fff', createdAt: 0 }],
+      history: [], historyIndex: -1,
+    });
+    if (mode === 'single') useAppStore.getState().deleteNode(folder.id);
+    else useAppStore.getState().deleteNodesBatch([folder.id, child.id]);
+    await vi.waitFor(() => expect(useAppStore.getState().nodes).toEqual([]));
+    expect(fileMocks.deleteNodeFiles).toHaveBeenLastCalledWith([folder.data, child.data], expect.any(Set), 'project-1', ['Folder']);
+    fileMocks.restoreFromUndoTrash.mockClear();
+    await useAppStore.getState().undo();
+    expect(fileMocks.restoreFromUndoTrash).toHaveBeenNthCalledWith(1, 'project/Folder');
+    expect(fileMocks.restoreFromUndoTrash).toHaveBeenNthCalledWith(2, 'project/Folder/image.png');
+    await useAppStore.getState().redo();
+    expect(fileMocks.deleteNodeFiles).toHaveBeenLastCalledWith([folder.data, child.data], expect.any(Set), 'project-1', ['Folder']);
   });
 
   it('removes an empty group when React Flow removes its last child', () => {

@@ -8,7 +8,7 @@ import {
   normalizeDirectorResultManifestReference,
   normalizeDirectorSceneReference,
 } from '../directorSceneSchema';
-import { isTauriEnv, joinPath, notifyProjectDiskChanged, getProjectDataDir } from './core';
+import { isTauriEnv, joinPath, notifyProjectDiskChanged, getProjectDataDir, sanitizeFolderName } from './core';
 
 /** Explicit history deletion: fail visibly, accept only regular files owned by this project. */
 export async function recycleHistoryFile(projectId: string, filePath: string, assertCurrent: (fileExists: boolean) => void): Promise<void> {
@@ -153,37 +153,55 @@ export async function moveToTrash(filePath: string): Promise<void> {
 
 /** Map: originalFilePath → trashFilePath */
 const undoTrashMap = new Map<string, string>();
+const undoTrashRoots = new Map<string, string>();
 
 /** 进行中的节点文件删除，撤销前要等它们结束 */
 const pendingNodeFileDeletions = new Set<Promise<void>>();
 
-/** Compute the .trash directory for a given file path (same parent dir) */
+/** Legacy callers without project context use the source parent as their staging root. */
 function getUndoTrashDir(filePath: string): string {
   const normalized = filePath.replace(/\\/g, '/');
   const lastSep = normalized.lastIndexOf('/');
   return lastSep >= 0 ? joinPath(normalized.substring(0, lastSep), '.trash') : '.trash';
 }
 
+async function assertTrashParentsSafe(path: string, root: string): Promise<void> {
+  const normalizedRoot = root.replace(/\\/g, '/').replace(/\/+$/, '');
+  if (!isPathInsideDir(path, normalizedRoot)) throw new Error('回收路径不属于项目目录');
+  const parts = path.replace(/\\/g, '/').slice(normalizedRoot.length + 1).split('/').slice(0, -1);
+  let parent = normalizedRoot;
+  for (const part of parts) {
+    parent = joinPath(parent, part);
+    if (await exists(parent) && (await lstat(parent)).isSymlink) throw new Error('回收路径包含符号链接');
+  }
+}
+
 /** Move a file to the project-level .trash staging directory (for undo support) */
-export async function moveToUndoTrash(filePath: string): Promise<void> {
+export async function moveToUndoTrash(filePath: string, projectId?: string | null): Promise<void> {
   if (!isTauriEnv()) return;
   try {
+    const root = projectId ? await getProjectDataDir(projectId) : null;
+    if (projectId !== undefined && (!root || !isPathInsideDir(filePath, root))) return;
+    if (root) await assertTrashParentsSafe(filePath, root);
     const existsFile = await exists(filePath);
     if (!existsFile) return;
-    const trashDir = getUndoTrashDir(filePath);
+    const trashDir = root ? joinPath(root, '.trash') : getUndoTrashDir(filePath);
+    if (isPathInsideDir(filePath, trashDir)) return;
+    if ((await lstat(filePath)).isSymlink) throw new Error('不能回收符号链接');
+    if (await exists(trashDir) && (await lstat(trashDir)).isSymlink) throw new Error('回收目录无效');
     await mkdir(trashDir, { recursive: true });
     const fileName = filePath.split(/[/\\]/).pop() || 'file';
-    const trashPath = joinPath(trashDir, `${Date.now()}-${fileName}`);
-    // .trash is a sibling of the source file, so this stays on one filesystem and avoids
-    // transferring large media buffers through the WebView just to support undo.
+    const trashPath = joinPath(trashDir, `${Date.now()}-${crypto.randomUUID()}-${fileName}`);
+    if (await exists(trashPath)) throw new Error('回收目标已存在');
+    // Rename the entire directory on the same filesystem, without loading media bytes.
     await rename(filePath, trashPath);
     undoTrashMap.set(filePath, trashPath);
+    if (root) undoTrashRoots.set(filePath, root);
     notifyProjectDiskChanged();
-    console.log('[fileService] Staged in undo-trash:', filePath, '→', trashPath);
   } catch (err) {
     // 绝不退回系统回收站：那条路径撤销不回来，节点复活后就成了指向空文件的死节点。
     // 暂存失败时宁可把文件留在原地当孤儿文件，交给存储体检去回收。
-    console.warn('[fileService] Failed to stage in undo-trash, file left in place:', filePath, err);
+    console.warn('[fileService] 回收暂存失败，原文件保留:', err);
   }
 }
 
@@ -204,9 +222,18 @@ export async function restoreFromUndoTrash(filePath: string): Promise<boolean> {
   if (!trashPath) return false;
   try {
     const trashExists = await exists(trashPath);
-    if (!trashExists) { undoTrashMap.delete(filePath); return false; }
+    if (!trashExists) { undoTrashMap.delete(filePath); undoTrashRoots.delete(filePath); return false; }
+    if (await exists(filePath)) return false; // Never overwrite a newly created file/group.
+    const root = undoTrashRoots.get(filePath);
+    if (root) {
+      await assertTrashParentsSafe(filePath, root);
+      await assertTrashParentsSafe(trashPath, root);
+    }
+    const parent = filePath.replace(/\\/g, '/').slice(0, filePath.replace(/\\/g, '/').lastIndexOf('/'));
+    if (parent) await mkdir(parent, { recursive: true });
     await rename(trashPath, filePath);
     undoTrashMap.delete(filePath);
+    undoTrashRoots.delete(filePath);
     notifyProjectDiskChanged();
     console.log('[fileService] Restored from undo-trash:', filePath);
     return true;
@@ -221,8 +248,8 @@ export async function flushUndoTrashDirs(): Promise<void> {
   if (!isTauriEnv()) return;
   // Collect unique .trash directories
   const trashDirs = new Set<string>();
-  for (const [origPath] of undoTrashMap) {
-    trashDirs.add(getUndoTrashDir(origPath));
+  for (const trashPath of undoTrashMap.values()) {
+    trashDirs.add(trashPath.replace(/\\/g, '/').slice(0, trashPath.replace(/\\/g, '/').lastIndexOf('/')));
   }
   for (const dir of trashDirs) {
     try {
@@ -235,6 +262,7 @@ export async function flushUndoTrashDirs(): Promise<void> {
     }
   }
   undoTrashMap.clear();
+  undoTrashRoots.clear();
 }
 
 /** 将目录移至回收站（Tauri 端），trash crate 本身支持直接移动整个目录 */
@@ -266,6 +294,7 @@ export function isPathInsideDir(filePath: string, dirPath: string): boolean {
   const normalizedPath = filePath.replace(/\\/g, '/').toLowerCase();
   const normalizedDir = dirPath.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
   if (!normalizedDir) return false;
+  if (normalizedPath.split('/').some((part) => part === '.' || part === '..')) return false;
   return normalizedPath.startsWith(`${normalizedDir}/`);
 }
 
@@ -294,9 +323,43 @@ export function deleteNodeFile(
   keepPaths?: ReadonlySet<string>,
   projectId?: string | null,
 ): Promise<void> {
+  return deleteNodeFiles([nodeData], keepPaths, projectId);
+}
+
+/** Removed group folders include groups emptied by deleting their last children. */
+export function deletedGroupFolderNames(
+  groups: ReadonlyArray<{ id: string; name: string; nodeIds: string[] }>,
+  deletedIds: ReadonlySet<string>,
+): string[] {
+  return groups.filter((group) => deletedIds.has(group.id)
+    || (group.nodeIds.length > 0 && group.nodeIds.every((id) => deletedIds.has(id)))).map((group) => group.name);
+}
+
+export async function resolveGroupUndoTrashPaths(
+  names: readonly string[], projectId: string | null | undefined, keepPaths?: ReadonlySet<string>,
+): Promise<string[]> {
+  if (!names.length || !projectId) return [];
+  const root = await getProjectDataDir(projectId);
+  if (!root) return [];
+  return [...new Set(names.map((name) => sanitizeFolderName(name)))].filter((name) =>
+    !!name && !name.startsWith('.') && !['appdata', 'director'].includes(name.toLowerCase()))
+    .map((name) => joinPath(root, name))
+    .filter((path) => ![...(keepPaths ?? [])].some((reference) =>
+      reference.replace(/\\/g, '/').toLowerCase() === path.replace(/\\/g, '/').toLowerCase()
+      || isPathInsideDir(reference, path)));
+}
+
+/** Stage groups first as complete folders; never also stage their child files. */
+export function deleteNodeFiles(
+  nodeData: readonly NodeFileReferences[], keepPaths?: ReadonlySet<string>,
+  projectId?: string | null, groupNames: readonly string[] = [],
+): Promise<void> {
   const operation = (async () => {
-    const paths = await resolveNodeUndoTrashPaths(nodeData, projectId, keepPaths);
-    await Promise.all(paths.map((path) => moveToUndoTrash(path)));
+    const folders = await resolveGroupUndoTrashPaths(groupNames, projectId, keepPaths);
+    const files = (await Promise.all(nodeData.map((data) => resolveNodeUndoTrashPaths(data, projectId, keepPaths)))).flat();
+    const paths = [...new Set([...folders, ...files])].filter((path) =>
+      !folders.some((folder) => isPathInsideDir(path, folder)));
+    for (const path of paths) await moveToUndoTrash(path, projectId);
   })();
   // 删除是即发即忘的（节点退场动画不等文件系统），撤销必须能等它落定，
   // 否则还原会跑在暂存前面：节点回来了，文件随后才被搬进 .trash，成了死节点

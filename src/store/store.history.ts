@@ -309,6 +309,13 @@ export const createHistorySlice: StateCreator<AppState, [], [], HistorySlice> = 
 
     // Restore files BEFORE updating state so React renders with files already on disk.
     const currentNodeIds = new Set(nodes.map((node) => node.id));
+    const currentGroupIds = new Set(groups.map((group) => group.id));
+    const revivedFolders = await fileService.resolveGroupUndoTrashPaths(
+      entry.groups.filter((group) => !currentGroupIds.has(group.id)).map((group) => group.name),
+      get().currentProjectId,
+    );
+    // Restore parent folders first, including empty groups and legacy nested trash content.
+    for (const folder of revivedFolders) await fileService.restoreFromUndoTrash(folder);
     const revivedPathGroups = await Promise.all(entry.nodes.map((node) => (
       currentNodeIds.has(node.id)
         ? Promise.resolve([])
@@ -363,16 +370,14 @@ export const createHistorySlice: StateCreator<AppState, [], [], HistorySlice> = 
       const filePath = message.mediaResult?.filePath;
       if (filePath) keepReferences.add(filePath);
     });
-    // 只回收本项目目录内的文件：跨项目粘贴的副本 filePath 仍指向源项目，误删会丢源项目素材
-    const trashPathGroups = await Promise.all(nodes.map((node) => (
-      targetNodeIds.has(node.id)
-        ? Promise.resolve([])
-        : fileService.resolveNodeUndoTrashPaths(node.data, projectId, keepReferences)
-    )));
-    const trashPaths = [...new Set(trashPathGroups.flat())];
-    if (trashPaths.length > 0) {
-      await Promise.allSettled(trashPaths.map((filePath) => fileService.moveToUndoTrash(filePath)));
-    }
+    const removedNodes = nodes.filter((node) => !targetNodeIds.has(node.id));
+    removedNodes.filter((node) => node.data.artifactId).forEach((node) => {
+      fileService.collectNodeFileReferences(node.data).forEach((path) => keepReferences.add(path));
+    });
+    await fileService.deleteNodeFiles(
+      removedNodes.filter((node) => !node.data.artifactId).map((node) => node.data), keepReferences, projectId,
+      fileService.deletedGroupFolderNames(groups, new Set(removedNodes.map((node) => node.id))),
+    );
 
     const latest = get();
     const latestSnapshot = createSnapshot(latest.nodes, latest.edges, latest.groups);
