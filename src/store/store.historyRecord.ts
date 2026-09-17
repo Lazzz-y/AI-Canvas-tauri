@@ -22,7 +22,8 @@ import {
 import type { HistoryPageCursor, HistoryQuery } from '../services/indexedDbService';
 import { tagGeneratedProjectAssetSafely } from '../services/fs/generatedAssetTags';
 import { getAssetUrlFromPath, getProjectDataDir } from '../services/fs/core';
-import { isTransientMediaUrl, persistMediaUrlToProjectData } from '../services/fileService';
+import { isTransientMediaUrl, persistMediaUrlToProjectData, recycleHistoryFile, collectNodeFileReferences } from '../services/fileService';
+import { localMediaUrlToPath } from '../utils/mediaUrl';
 import { exists } from '@tauri-apps/plugin-fs';
 
 const HISTORY_PAGE_SIZE = 16;
@@ -173,6 +174,7 @@ export interface HistoryRecordSlice {
   ) => Promise<void>;
   /** 删除某条历史 */
   deleteHistoryEntry: (nodeId: string, entryId: string) => Promise<void>;
+  deleteHistoryEntryFile: (projectId: string, entryId: string) => Promise<void>;
   /** 清空指定节点的全部历史 */
   clearNodeHistory: (nodeId: string) => Promise<void>;
   /** 清空所有节点的全部历史 */
@@ -353,10 +355,40 @@ export const createHistoryRecordSlice: StateCreator<AppState, [], [], HistoryRec
     });
   },
 
+  deleteHistoryEntryFile: async (projectId, entryId) => {
+    const records = await getHistoryEntriesForExport(projectId);
+    const entry = records.find((record) => record.id === entryId);
+    if (!entry) throw new Error('历史记录不存在，请刷新');
+    const filePath = entry.filePath || localMediaUrlToPath(entry.mediaUrl) || localMediaUrlToPath(entry.output);
+    const key = (path: string | undefined) => path?.replace(/\\/g, '/').toLowerCase();
+    const assertCurrent = (checkReferences: boolean) => {
+      const state = get();
+      if (state.currentProjectId !== projectId) throw new Error('项目已切换，请重新操作');
+      if (!filePath || !checkReferences) return;
+      const same = (path: string | undefined) => !!path && key(path) === key(filePath);
+      if (state.nodes.some(({ data }) => [...collectNodeFileReferences(data),
+        ...[data.imageUrl, data.videoUrl, data.audioUrl, data.thumbnailUrl].map(localMediaUrlToPath),
+        ...(data.storyboardOverrides ?? []).map((cell) => localMediaUrlToPath(cell?.url)),
+      ].some(same)) || state.messages.some((message) => same(message.mediaResult?.filePath))) {
+        throw new Error('文件仍被画布或对话使用，不能删除；可仅删除历史记录');
+      }
+      if (records.some((record) => record.id !== entryId && same(record.filePath || localMediaUrlToPath(record.mediaUrl) || localMediaUrlToPath(record.output)))) {
+        throw new Error('其他历史记录仍使用此文件，可先仅删除本条记录');
+      }
+    };
+    assertCurrent(false);
+    if (filePath) await recycleHistoryFile(projectId, filePath, assertCurrent);
+    await deleteHistoryEntryFromDb(projectId, entryId);
+    set((state) => state.currentProjectId === projectId && state.historyProjectId === projectId ? {
+      outputHistoryRecords: state.outputHistoryRecords.filter((record) => record.id !== entryId),
+      historyTotalCount: Math.max(0, state.historyTotalCount - 1),
+    } : {});
+  },
+
   deleteHistoryEntry: async (_nodeId, entryId) => {
     const projectId = get().currentProjectId;
     if (!projectId) return;
-    await deleteHistoryEntryFromDb(projectId, entryId).catch(() => {});
+    await deleteHistoryEntryFromDb(projectId, entryId);
     set((state) => (
       state.currentProjectId === projectId && state.historyProjectId === projectId
         ? {

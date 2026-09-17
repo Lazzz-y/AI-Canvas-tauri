@@ -14,6 +14,9 @@ import FullscreenOverlay from '../../../shared/FullscreenOverlay';
 import ZoomableImage from '../../../shared/ZoomableImage';
 import ViewportImage from '../../../shared/ViewportImage';
 import { useT } from '../../../../i18n';
+import { localMediaUrlToPath } from '../../../../utils/mediaUrl';
+
+const hasLocalFile = (entry: HistoryRecord) => !!(entry.filePath || localMediaUrlToPath(entry.mediaUrl) || localMediaUrlToPath(entry.output));
 
 interface ImageGenerationHistoryDialogProps {
   isOpen: boolean;
@@ -115,6 +118,24 @@ export default function ImageGenerationHistoryDialog({
   const [error, setError] = useState('');
   const [loadRevision, setLoadRevision] = useState(0);
   const [preview, setPreview] = useState<PreviewImage | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+  const handleDelete = async (entry: HistoryRecord, withFile: boolean) => {
+    if (deleting || !currentProjectId || recordsProjectId !== currentProjectId) return;
+    const store = useAppStore.getState();
+    if (store.currentProjectId !== currentProjectId) return;
+    setDeleting(true);
+    try {
+      if (withFile) await store.deleteHistoryEntryFile(currentProjectId, entry.id);
+      else await store.deleteHistoryEntry(nodeId, entry.id);
+      setRecords((current) => current.filter((record) => record.id !== entry.id));
+      setDeleteTarget(null);
+      store.showToast(t(withFile && hasLocalFile(entry) ? '文件及历史记录已清理' : '历史记录已删除'));
+    } catch (error) {
+      store.showToast(error instanceof Error ? error.message : t('删除失败，请重试'), 'error');
+    } finally { setDeleting(false); }
+  };
 
   useEffect(() => {
     if (!isOpen || !currentProjectId) return;
@@ -225,6 +246,27 @@ export default function ImageGenerationHistoryDialog({
                     <p className="whitespace-pre-wrap break-words text-xs leading-5 text-canvas-text-secondary">
                       {entry.prompt.trim() || t('未记录提示词')}
                     </p>
+                    {deleteTarget === entry.id ? (
+                      <div className="space-y-2 text-xs text-canvas-text-secondary">
+                        <p>{t(hasLocalFile(entry)
+                          ? '本地文件将移入系统回收站，并删除本条历史；文件已丢失时仅清理记录。'
+                          : '此记录只有媒体链接，删除记录不会删除服务器上的文件。')}</p>
+                        <div className="flex flex-wrap gap-2">
+                          <button type="button" className="ui-btn ui-btn--sm ui-btn--danger" disabled={deleting}
+                            onClick={() => void handleDelete(entry, true)}>{t(deleting ? '正在删除…' : hasLocalFile(entry) ? '确认删除文件' : '确认删除记录')}</button>
+                          <button type="button" className="ui-btn ui-btn--sm" disabled={deleting}
+                            onClick={() => void handleDelete(entry, false)}>{t('仅删除记录')}</button>
+                          <button type="button" className="ui-btn ui-btn--sm" disabled={deleting}
+                            onClick={() => setDeleteTarget(null)}>{t('取消')}</button>
+                        </div>
+                      </div>
+                    ) : (
+                      <button type="button" className="ui-btn ui-btn--sm ui-btn--danger" disabled={deleting}
+                        onClick={() => setDeleteTarget(entry.id)}>
+                        <Icon icon="mdi:trash-can-outline" width={14} aria-hidden="true" />
+                        {t(hasLocalFile(entry) ? '删除文件及记录' : '删除记录')}
+                      </button>
+                    )}
                   </div>
                 </article>
               ))}

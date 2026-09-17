@@ -3,6 +3,7 @@ import type { OutputHistoryEntry } from '../../src/types';
 import type { HistoryPage, HistoryRecord } from '../../src/services/indexedDbService';
 
 const fileServiceMocks = vi.hoisted(() => ({
+  recycleHistoryFile: vi.fn(async (_project: string, _path: string, check: (exists: boolean) => void) => { check(true); }),
   exists: vi.fn(async () => true),
   persistMediaUrlToProjectData: vi.fn(async (_source: string) => ({
     filePath: '/project/data/generated.png',
@@ -18,7 +19,7 @@ const historyMocks = vi.hoisted(() => ({
   getHistoryEntriesPage: vi.fn(async (): Promise<HistoryPage> => ({
     records: [], nextCursor: null, hasMore: false,
   })),
-  getHistoryEntriesForExport: vi.fn(async () => []),
+  getHistoryEntriesForExport: vi.fn(async (): Promise<HistoryRecord[]> => []),
   getHistoryEntryCount: vi.fn(async () => 0),
   hasCompletedHistoryMigration: vi.fn(async () => true),
   markHistoryMigrationCompleted: vi.fn(async () => undefined),
@@ -39,6 +40,8 @@ vi.mock('@tauri-apps/plugin-fs', () => ({
   exists: fileServiceMocks.exists,
 }));
 vi.mock('../../src/services/fileService', () => ({
+  recycleHistoryFile: fileServiceMocks.recycleHistoryFile,
+  collectNodeFileReferences: (data: { filePath?: string }) => new Set(data.filePath ? [data.filePath] : []),
   isTransientMediaUrl: (url?: string) => Boolean(url && (/^data:/i.test(url) || /^blob:/i.test(url))),
   persistMediaUrlToProjectData: fileServiceMocks.persistMediaUrlToProjectData,
 }));
@@ -61,6 +64,7 @@ function historyEntry(index: number): Omit<OutputHistoryEntry, 'id' | 'projectId
 
 beforeEach(() => {
   vi.clearAllMocks();
+  fileServiceMocks.recycleHistoryFile.mockImplementation(async (_project, _path, check) => { check(true); });
   fileServiceMocks.exists.mockResolvedValue(true);
   fileServiceMocks.persistMediaUrlToProjectData.mockResolvedValue({
     filePath: '/project/data/generated.png',
@@ -72,6 +76,57 @@ beforeEach(() => {
 });
 
 describe('project output history', () => {
+  const mediaRecord = (): OutputHistoryEntry => ({ ...historyEntry(1), id: 'delete-me', projectId: 'project-a',
+    nodeType: 'ai-image', filePath: '/project/data/old.png' });
+
+  it('recycles the file before deleting the history record', async () => {
+    historyMocks.getHistoryEntriesForExport.mockResolvedValueOnce([mediaRecord()]);
+    useAppStore.setState({ currentProjectId: 'project-a', historyProjectId: 'project-a', outputHistoryRecords: [mediaRecord()], historyTotalCount: 1 });
+    await useAppStore.getState().deleteHistoryEntryFile('project-a', 'delete-me');
+    expect(fileServiceMocks.recycleHistoryFile).toHaveBeenCalled();
+    expect(historyMocks.deleteHistoryEntryFromDb).toHaveBeenCalledWith('project-a', 'delete-me');
+    expect(useAppStore.getState().outputHistoryRecords).toHaveLength(0);
+  });
+
+  it('retains the record when file recycling fails', async () => {
+    historyMocks.getHistoryEntriesForExport.mockResolvedValueOnce([mediaRecord()]);
+    fileServiceMocks.recycleHistoryFile.mockRejectedValueOnce(new Error('failed'));
+    useAppStore.setState({ currentProjectId: 'project-a' });
+    await expect(useAppStore.getState().deleteHistoryEntryFile('project-a', 'delete-me')).rejects.toThrow('failed');
+    expect(historyMocks.deleteHistoryEntryFromDb).not.toHaveBeenCalled();
+  });
+
+  it('blocks files still used by canvas nodes', async () => {
+    historyMocks.getHistoryEntriesForExport.mockResolvedValueOnce([mediaRecord()]);
+    useAppStore.setState({ currentProjectId: 'project-a', nodes: [{ id: 'n', type: 'ai-image', position: { x: 0, y: 0 },
+      data: { type: 'ai-image', label: 'image', filePath: '/project/data/old.png' } }] });
+    await expect(useAppStore.getState().deleteHistoryEntryFile('project-a', 'delete-me')).rejects.toThrow('仍被画布');
+    expect(historyMocks.deleteHistoryEntryFromDb).not.toHaveBeenCalled();
+  });
+
+  it('cleans a missing file record even when its old path remains on canvas', async () => {
+    historyMocks.getHistoryEntriesForExport.mockResolvedValueOnce([mediaRecord()]);
+    fileServiceMocks.recycleHistoryFile.mockImplementationOnce(async (_project, _path, check) => { check(false); });
+    useAppStore.setState({ currentProjectId: 'project-a', nodes: [{ id: 'missing', type: 'ai-image', position: { x: 0, y: 0 },
+      data: { type: 'ai-image', label: 'missing', filePath: '/project/data/old.png' } }] });
+    await useAppStore.getState().deleteHistoryEntryFile('project-a', 'delete-me');
+    expect(historyMocks.deleteHistoryEntryFromDb).toHaveBeenCalled();
+  });
+
+  it('blocks a file referenced by another history record', async () => {
+    historyMocks.getHistoryEntriesForExport.mockResolvedValueOnce([mediaRecord(), { ...mediaRecord(), id: 'other' }]);
+    useAppStore.setState({ currentProjectId: 'project-a' });
+    await expect(useAppStore.getState().deleteHistoryEntryFile('project-a', 'delete-me')).rejects.toThrow('其他历史');
+    expect(historyMocks.deleteHistoryEntryFromDb).not.toHaveBeenCalled();
+  });
+
+  it('rejects a stale project request', async () => {
+    historyMocks.getHistoryEntriesForExport.mockResolvedValueOnce([mediaRecord()]);
+    useAppStore.setState({ currentProjectId: 'project-b' });
+    await expect(useAppStore.getState().deleteHistoryEntryFile('project-a', 'delete-me')).rejects.toThrow('项目已切换');
+    expect(fileServiceMocks.recycleHistoryFile).not.toHaveBeenCalled();
+  });
+
   it('loads and counts only the current project', async () => {
     const record: OutputHistoryEntry = {
       ...historyEntry(1),

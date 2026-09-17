@@ -2,13 +2,30 @@
  * fs/trash — 文件/目录删除域
  * 系统回收站、项目级 .trash 暂存（支持撤销）、项目数据目录删除、节点文件删除。
  */
-import { mkdir, exists, rename } from '@tauri-apps/plugin-fs';
+import { mkdir, exists, rename, lstat } from '@tauri-apps/plugin-fs';
 import { invoke } from '@tauri-apps/api/core';
 import {
   normalizeDirectorResultManifestReference,
   normalizeDirectorSceneReference,
 } from '../directorSceneSchema';
 import { isTauriEnv, joinPath, notifyProjectDiskChanged, getProjectDataDir } from './core';
+
+/** Explicit history deletion: fail visibly, accept only regular files owned by this project. */
+export async function recycleHistoryFile(projectId: string, filePath: string, assertCurrent: (fileExists: boolean) => void): Promise<void> {
+  if (!isTauriEnv()) throw new Error('删除本地文件需要桌面环境');
+  const root = await getProjectDataDir(projectId);
+  const segments = filePath.replace(/\\/g, '/').split('/');
+  if (!root || !isPathInsideDir(filePath, root) || segments.some((part) => part === '..' || part === '.')) {
+    throw new Error('不能从生成历史删除项目目录以外的文件');
+  }
+  if (!await exists(filePath)) { assertCurrent(false); return; }
+  const info = await lstat(filePath);
+  if (!info.isFile || info.isSymlink) throw new Error('历史记录未指向普通文件');
+  assertCurrent(true);
+  try { await invoke('move_to_trash', { path: filePath }); }
+  catch { throw new Error('文件移入回收站失败，请重试'); }
+  notifyProjectDiskChanged();
+}
 
 interface NodeFileReferences {
   filePath?: unknown;
