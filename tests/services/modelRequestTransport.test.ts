@@ -33,6 +33,56 @@ afterEach(() => {
 });
 
 describe('model request transport boundary', () => {
+  it.each([false, true])('submits the current ratio after editing an image node (drag duplicate: %s)', async (duplicate) => {
+    const reference = 'data:image/png;base64,iVBORw==';
+    useAppStore.setState((state) => ({
+      config: { ...state.config,
+        providers: { ...state.config.providers, ccc: {
+          name: 'CCC', apiKey: 'secret', baseUrl: 'https://cccapi.cn/v1', catalogId: 'cccapi',
+        } },
+        generalModels: [{ id: 'ccc-image', name: 'GPT Image 2', modelId: 'gpt-image-2',
+          category: 'image', providerConfigId: 'ccc', imageReferenceRequestMode: 'edits-multipart',
+        }],
+      },
+      nodes: [
+        { id: 'reference', type: 'ai-image', position: { x: 0, y: 0 },
+          data: { type: 'ai-image', label: '参考图', imageUrl: reference } },
+        { id: 'image', type: 'ai-image', position: { x: 300, y: 0 },
+          data: { type: 'ai-image', label: '生成图', model: 'general/ccc-image', provider: 'general',
+            prompt: '@{reference:参考图} 新场景', imageSize: '2K', aspectRatio: '16:9',
+            imageUrl: reference, imageWidth: 1024, imageHeight: 1024, nodeWidth: 280, nodeHeight: 280,
+          } },
+      ],
+    }));
+    if (duplicate) useAppStore.getState().duplicateNode('image');
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(
+      Uint8Array.from([137, 80, 78, 71]), { headers: { 'Content-Type': 'image/png' } },
+    ));
+    transportMocks.corsSafeFetch.mockImplementation(async () => jsonResponse({
+      data: [{ url: 'https://cdn.example/result.png' }],
+    }));
+    for (const [ratio, size, orientation] of [['16:9', '3648x2048', '横屏'], ['9:16', '2048x3648', '竖屏'], ['3:4', '2048x2736', '竖屏'], ['1:1', '2048x2048', '正方形']]) {
+      useAppStore.getState().updateNodeData('image', { aspectRatio: ratio, prompt: '@{reference:参考图} 修改后的场景' });
+      const data = useAppStore.getState().nodes.find((node) => node.id === 'image')!.data;
+      await generateImagesBatch({ prompt: data.prompt!, model: data.model!, provider: data.provider!,
+        imageSize: data.imageSize, aspectRatio: data.aspectRatio, nodeId: 'image',
+      }, 1);
+      const [url, init] = transportMocks.corsSafeFetch.mock.calls.at(-1)! as [string, RequestInit];
+      expect(url).toBe('https://cccapi.cn/v1/images/edits');
+      const body = init.body as FormData;
+      expect(body.get('size')).toBe(size);
+      expect(body.getAll('image[]')).toHaveLength(1);
+      expect(body.get('prompt')).toContain(`${ratio}（${orientation}，宽:高）`);
+      expect(body.get('prompt')).toContain('不继承参考图或旧图的宽高比');
+      expect(body.get('prompt')).not.toContain('复制版式、构图与设计语言时以对应参考图为准');
+    }
+    await generateImagesBatch({ prompt: '@{reference:参考图} 修改后的场景',
+      model: 'general/ccc-image', provider: 'general', aspectRatio: '自适应', nodeId: 'image',
+    }, 1);
+    const adaptive = transportMocks.corsSafeFetch.mock.calls.at(-1)![1].body as FormData;
+    expect(adaptive.get('prompt')).not.toContain('【输出画幅】');
+  });
+
   it.each([true, false])('preserves a custom multipart endpoint and response mapping (explicit mode: %s)', async (explicitMode) => {
     const imported = analyzeModelProtocolExamples({
       submitRequest: `curl https://gateway.example/v1/custom/images/edit

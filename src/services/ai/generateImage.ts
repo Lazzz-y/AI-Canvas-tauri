@@ -76,6 +76,7 @@ function enrichPromptWithReferenceHints(
   prompt: string,
   totalRefCount: number,
   styleAsFirst: boolean,
+  aspectRatio: string,
 ): string {
   if (totalRefCount <= 0) return prompt;
   const lines: string[] = [];
@@ -92,10 +93,16 @@ function enrichPromptWithReferenceHints(
   } else {
     lines.push(
       `【参考图输入】本次请求附带 ${totalRefCount} 张参考图（按顺序为 图片1…图片${totalRefCount}）。`,
-      '请严格依据参考图进行图生/参考编辑：复制版式、构图与设计语言时以对应参考图为准，不要忽略参考图只按文字自由发挥。',
+      '请依据参考图和本轮提示词进行图生/参考编辑，保持需要延续的主体、风格与细节。',
     );
   }
   lines.push('', prompt);
+  const ratio = /^(\d+(?:\.\d+)?):(\d+(?:\.\d+)?)$/.exec(aspectRatio);
+  if (ratio && Number(ratio[1]) > 0 && Number(ratio[2]) > 0) {
+    const orientation = Number(ratio[1]) > Number(ratio[2]) ? '横屏'
+      : Number(ratio[1]) < Number(ratio[2]) ? '竖屏' : '正方形';
+    lines.push('', `【输出画幅】本次界面选择为 ${aspectRatio}（${orientation}，宽:高），以此作为最终输出比例。请按目标画幅重新构图，不继承参考图或旧图的宽高比。`);
+  }
   return lines.join('\n');
 }
 
@@ -138,6 +145,7 @@ export async function generateImagesBatch(
     resolvedPrompt,
     allImageUrls.length,
     styleAsFirst,
+    aspectRatio,
   );
   warnIfTooManyReferences({ image: allImageUrls.length });
 
