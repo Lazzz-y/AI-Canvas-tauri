@@ -74,26 +74,24 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: 'AI Canvas v0.9.11 - 全屏音乐播放器与 Qwen3 语音工作流'
+          releaseName: 'AI Canvas v0.9.12 - ComfyUI 远程服务与模型选择器优化'
           releaseBody: |
             ## ✨ 版本摘要
 
-            AI Canvas v0.9.11 新增全屏音乐播放器与实时频谱可视化，并内置三项 Qwen3 语音工作流（声音克隆、声音设计、参考语音设计）与配套语音参数面板；同时新增 ComfyUI 节点分类 tab，优化快捷菜单图标与侧边栏信息展示。
+            AI Canvas v0.9.12 增强 ComfyUI 远程服务体验：支持远程服务自动载入与保存工作流，并在模型选择器中按 ComfyUI 服务器可用性过滤工作流；同时优化模型选择器默认收起所有分组，修复工作流 API 的方括号路径解析与任务永久停留在加载中的问题，并更新 APIMart 供应商描述。
 
-            ## 🎵 全屏音乐播放与频谱
+            ## 🧩 ComfyUI 远程服务
 
-            - 新增全屏音乐播放器，支持实时频谱可视化与画布音频预览切换。
-            - 音频节点支持更直观的播放控制与频谱展示。
+            - 支持远程 ComfyUI 服务自动载入与保存工作流。
+            - 模型选择器按 ComfyUI 服务器可用性过滤可用工作流，仅在服务可达时展示对应选项。
 
-            ## 🎙️ Qwen3 语音工作流
+            ## 🎛️ 模型选择器
 
-            - 内置三项 Qwen3 语音工作流：声音克隆（voice-clone）、声音设计（voice-design）、参考语音设计（reference-voice-design）。
-            - 新增语音参数面板，支持 Qwen 语音模型的声音设计与克隆参数配置。
+            - 模型选择器默认收起所有分组，移除通用模型的自动展开，界面更聚焦。
 
-            ## 🧩 ComfyUI 与界面
+            ## 🐛 修复
 
-            - 新增 ComfyUI 节点分类 tab，便于在提及（@）时按分类检索节点。
-            - 为 ComfyUI 快捷操作使用内联 SVG 图标，优化快捷菜单图标与侧边栏信息展示。
+            - 修复工作流 API 对方括号路径的支持，并避免任务永久停留在加载中。
 
             ## ⚠️ 升级与兼容性
 
