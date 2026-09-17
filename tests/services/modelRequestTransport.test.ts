@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const transportMocks = vi.hoisted(() => ({
   corsSafeFetch: vi.fn(),
@@ -13,6 +13,7 @@ import { parseResponseError } from '../../src/services/ai/httpUtils';
 import { resolveImageDataUrlArray } from '../../src/services/ai/imageUtils';
 import { getProviderDefinition } from '../../src/services/ai/providerCatalogService';
 import { generateImageStandard } from '../../src/services/ai/providers/standardImage';
+import { analyzeModelProtocolExamples } from '../../src/services/ai/modelProtocolImport';
 import { useAppStore } from '../../src/store/useAppStore';
 
 function jsonResponse(payload: unknown): Response {
@@ -27,7 +28,59 @@ beforeEach(() => {
   useAppStore.setState(useAppStore.getInitialState(), true);
 });
 
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 describe('model request transport boundary', () => {
+  it.each([true, false])('preserves a custom multipart endpoint and response mapping (explicit mode: %s)', async (explicitMode) => {
+    const imported = analyzeModelProtocolExamples({
+      submitRequest: `curl https://gateway.example/v1/custom/images/edit
+        -H 'Authorization: Bearer sk-placeholder'
+        -F 'model=custom-image' -F 'prompt=edit'
+        -F 'images=@/private/reference.png'`,
+      submitResponse: '{"output":{"url":"https://cdn.example/custom-result.png"}}',
+    });
+    useAppStore.setState((state) => ({ config: {
+      ...state.config,
+      providers: { ...state.config.providers, custom: {
+        name: '自定义接口', apiKey: 'secret', baseUrl: imported.baseUrl!, catalogId: 'custom-openai',
+      } },
+      generalModels: [{ id: 'custom-image', name: '自定义图片', modelId: 'custom-image',
+        category: 'image', providerConfigId: 'custom',
+        imageReferenceRequestMode: explicitMode ? 'edits-multipart' : undefined,
+        executionProfile: { preset: 'custom', protocol: imported.protocol! },
+      }],
+    } }));
+    const nativeFetch = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('Unexpected upload'));
+    transportMocks.corsSafeFetch.mockImplementation(async (url: string) => {
+      if (url === 'https://cdn.example/reference.png') return new Response(
+        Uint8Array.from([137, 80, 78, 71]), { headers: { 'Content-Type': 'image/png' } },
+      );
+      if (url === 'https://gateway.example/v1/custom/images/edit') return jsonResponse({
+        output: { url: 'https://cdn.example/custom-result.png' },
+      });
+      throw new Error('Unexpected endpoint');
+    });
+    const controller = new AbortController();
+    const params = { provider: 'general', model: 'general/custom-image', prompt: 'edit',
+      image_urls: ['data:image/jpeg;base64,aGVsbG8=', 'https://cdn.example/reference.png'] };
+    await expect(generateImagesBatch(params, 1, controller.signal)).resolves.toMatchObject({
+      results: [{ url: 'https://cdn.example/custom-result.png' }],
+    });
+    expect(nativeFetch).not.toHaveBeenCalled();
+    expect(transportMocks.corsSafeFetch).toHaveBeenCalledTimes(2);
+    const init = transportMocks.corsSafeFetch.mock.calls[1][1] as RequestInit;
+    expect(init.signal).toBe(controller.signal);
+    const body = new TextDecoder().decode(init.body as ArrayBuffer);
+    expect(body.split('name="images"; filename=')).toHaveLength(3);
+    expect(body).toContain('Content-Type: image/jpeg');
+    expect(body).toContain('Content-Type: image/png');
+    controller.abort();
+    await expect(generateImagesBatch(params, 1, controller.signal)).rejects.toThrow();
+    expect(transportMocks.corsSafeFetch).toHaveBeenCalledTimes(2);
+  });
+
   it('adds actionable guidance to ambiguous API Key errors', async () => {
     const response = new Response(JSON.stringify({
       error: { message: 'apikey error' },
@@ -369,6 +422,36 @@ describe('model request transport boundary', () => {
     ) as [string, RequestInit] | undefined;
     expect(editsCall?.[1].body).toBeInstanceOf(FormData);
     expect((editsCall?.[1].body as FormData).getAll('image[]')).toHaveLength(1);
+
+    // 本地图片应直接读取后随 multipart 提交，不上传第三方图床。
+    const localReference = 'data:image/png;base64,iVBORw==';
+    const localFetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      if (input !== localReference) throw new Error('Unexpected external upload');
+      return new Response(Uint8Array.from([137, 80, 78, 71]), {
+        headers: { 'Content-Type': 'image/png' },
+      });
+    });
+    transportMocks.corsSafeFetch.mockClear();
+    await expect(generateImagesBatch({
+      provider: 'general',
+      model: `general/cccapi-${modelId}`,
+      prompt: '结合本地和远程参考图生成场景',
+      imageSize: '1K',
+      aspectRatio: '1:1',
+      image_urls: [localReference, 'https://cdn.example/reference.png'],
+    }, 1)).resolves.toMatchObject({ results: [{ url: 'https://cdn.example/edited.png' }] });
+    expect(localFetch).toHaveBeenCalledTimes(1);
+    expect(localFetch).toHaveBeenCalledWith(localReference, expect.any(Object));
+    expect(transportMocks.corsSafeFetch.mock.calls.map(([url]) => url)).toEqual([
+      'https://cdn.example/reference.png',
+      'https://cccapi.cn/v1/images/edits',
+    ]);
+    const mixedBody = transportMocks.corsSafeFetch.mock.calls[1][1].body as FormData;
+    const files = mixedBody.getAll('image[]') as File[];
+    expect(files).toHaveLength(2);
+    expect(files.map((file) => [file.type, file.size])).toEqual([
+      ['image/png', 4], ['image/png', 4],
+    ]);
 
     await expect(generateImagesBatch({
       provider: 'general',

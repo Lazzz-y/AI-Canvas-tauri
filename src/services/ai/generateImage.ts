@@ -32,6 +32,15 @@ import { generateImageStandardBatch } from './providers/standardImage';
 import { generateVolcengineImagesBatch } from './providers/volcengineImage';
 import { runConfiguredModelProtocol } from './modelProtocolRuntime';
 import { mediaProviderRegistry } from './mediaProviderRegistry';
+import { modelProtocolUsesVariable, resolveModelExecutionProfile } from './modelProtocol';
+
+function hasReferenceImageFile(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false;
+  if ('$file' in value && modelProtocolUsesVariable(JSON.stringify(value.$file) ?? '', 'imageUrls')) {
+    return true;
+  }
+  return Object.values(value).some(hasReferenceImageFile);
+}
 
 export async function generateImage(
   params: AIImageGenParams,
@@ -145,6 +154,9 @@ export async function generateImagesBatch(
   }
   const usesImageDataUrls = !params.workflowId
     && generalModel?.imageReferenceRequestMode === 'generation-json-image-data-urls';
+  const usesImageMultipart = !params.workflowId
+    && generalModel?.executionProfile?.preset !== 'custom'
+    && generalModel?.imageReferenceRequestMode === 'edits-multipart';
 
   // ComfyUI 工作流执行路径：参考图由 ComfyUI 自己的 /upload 收，不必先过图床
   if (params.workflowId) {
@@ -178,10 +190,17 @@ export async function generateImagesBatch(
     throw new Error('未选择 ComfyUI 工作流\n请在模型选择器中导入并选择工作流');
   }
 
+  const customProtocol = generalModel?.executionProfile?.preset === 'custom'
+    ? resolveModelExecutionProfile(generalModel.executionProfile)
+    : undefined;
+  const usesCustomImageFiles = customProtocol?.submit.bodyEncoding === 'multipart'
+    && hasReferenceImageFile(customProtocol.submit.body);
+
   // 参考图传输格式由通用模型配置决定；其他 Provider 保持上传图床的既有行为。
   const referenceMedia = provider === 'runninghub' ? mergeMediaReferences(collectPromptNodeMediaUrls(rawPrompt).references, collectConnectedReferenceMedia(params.nodeId).references) : undefined;
   if (referenceMedia) allImageUrls = mergeImageUrls(allImageUrls, getMediaReferenceUrls(referenceMedia, 'image', 'local'));
-  allImageUrls = provider === 'runninghub' ? allImageUrls : usesImageDataUrls
+  // multipart 直接读取原始参考图，避免本地图片先上传图床再下载回来的额外网络依赖。
+  allImageUrls = provider === 'runninghub' || usesImageMultipart ? allImageUrls : usesImageDataUrls || usesCustomImageFiles
     ? await resolveImageDataUrlArray(allImageUrls, signal)
     : await resolveImageUrlArray(allImageUrls, provider, signal);
   if (signal?.aborted) throw new DOMException('请求已取消', 'AbortError');
@@ -215,10 +234,7 @@ export async function generateImagesBatch(
       const dimensions = mapImageDimensions(imageSize, aspectRatio);
       const hasExplicitStandardRequestMode = allImageUrls.length > 0
         && gm.imageReferenceRequestMode !== undefined
-        && !(
-          gm.imageReferenceRequestMode === 'generation-json-image-data-urls'
-          && gm.executionProfile?.preset === 'custom'
-        );
+        && gm.executionProfile?.preset !== 'custom';
       if (gm.executionProfile && !hasExplicitStandardRequestMode) {
         const urls = await runConfiguredModelProtocol({
           model: gm,

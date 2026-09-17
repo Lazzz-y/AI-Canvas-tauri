@@ -1216,6 +1216,31 @@ describe('declarative model execution protocol', () => {
     })).rejects.toThrow('multipart 文件只支持 data URL');
   });
 
+  it('encodes file arrays and redacts every file in multipart previews', () => {
+    const protocol = {
+      version: 1, mode: 'sync',
+      submit: { method: 'POST', path: '/edit', bodyEncoding: 'multipart',
+        body: { 'image[]': { $file: '{{imageUrls}}', filename: 'reference.png' } },
+      },
+      resultUrlPath: 'url',
+    } as unknown as ModelExecutionProtocol;
+    const options = { baseUrl: 'https://gateway.example', protocol, variables: {
+      imageUrls: ['data:image/png;base64,aGVsbG8=', 'data:image/jpeg;base64,d29ybGQ='],
+    } };
+    const preview = previewModelProtocolRequest(options);
+    expect(preview.body).toEqual({ 'image[]': [
+      { $file: '[data URL image/png, 5 bytes]', filename: 'reference.png' },
+      { $file: '[data URL image/jpeg, 5 bytes]', filename: 'reference.png' },
+    ] });
+    expect(JSON.stringify(preview)).not.toContain('aGVsbG8=');
+    expect(JSON.stringify(preview)).not.toContain('d29ybGQ=');
+    expect(() => buildModelProtocolRequest({ ...options, apiKey: 'secret',
+      variables: { imageUrls: ['data:image/png;base64,aGVsbG8=', '/private/image.png'] },
+    })).toThrow('multipart 文件只支持 data URL');
+    const empty = buildModelProtocolRequest({ ...options, apiKey: 'secret', variables: { imageUrls: [] } });
+    expect(new TextDecoder().decode(empty.init.body as ArrayBuffer)).not.toContain('filename=');
+  });
+
   it('extracts a configured JSON base64 result as a data URL', async () => {
     const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse({
       output: { image: 'aGVsbG8=' },

@@ -86,6 +86,10 @@ function serializeMultipartBody(body: Record<string, ProtocolJsonValue>, boundar
     const safeName = sanitizeMultipartToken(name, 'field');
     if (value && typeof value === 'object' && !Array.isArray(value) && Object.hasOwn(value, '$file')) {
       const fileSource = value.$file;
+      if (Array.isArray(fileSource)) {
+        fileSource.forEach((source) => appendPart(name, { ...value, $file: source }));
+        return;
+      }
       if (typeof fileSource !== 'string') throw new Error(`multipart 文件字段 ${name} 的 $file 必须是字符串`);
       const parsed = parseBase64DataUrl(fileSource);
       const configuredMime = value.contentType;
@@ -146,6 +150,9 @@ export function serializeModelProtocolBody(
 export function redactModelProtocolMultipartPreview(value: ProtocolJsonValue): ProtocolJsonValue {
   if (Array.isArray(value)) return value.map(redactModelProtocolMultipartPreview);
   if (value && typeof value === 'object') {
+    if (Object.hasOwn(value, '$file') && Array.isArray(value.$file)) {
+      return value.$file.map((source) => redactModelProtocolMultipartPreview({ ...value, $file: source }));
+    }
     if (Object.hasOwn(value, '$file') && typeof value.$file === 'string') {
       const parsed = parseBase64DataUrl(value.$file);
       return {

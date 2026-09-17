@@ -490,6 +490,7 @@ export default function ProviderConnectionDialog({
       category: result.category,
       provider: connectionId || definition.id,
       executionProfile: { preset: 'custom', protocol: result.protocol },
+      imageReferenceRequestMode: result.imageReferenceRequestMode,
       categoryManual: true,
     };
     setBaseUrl(result.baseUrl);
@@ -497,7 +498,8 @@ export default function ProviderConnectionDialog({
       const existing = current.find((model) => model.id === modelId);
       if (!existing) return [...current, importedModel];
       return current.map((model) => model.id === modelId
-        ? { ...model, category: importedModel.category, executionProfile: importedModel.executionProfile, categoryManual: true }
+        ? { ...model, category: importedModel.category, executionProfile: importedModel.executionProfile,
+            imageReferenceRequestMode: importedModel.imageReferenceRequestMode, categoryManual: true }
         : model);
     });
     setSelectedIds((current) => new Set(current).add(modelId));
