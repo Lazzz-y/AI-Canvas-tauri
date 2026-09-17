@@ -20,6 +20,7 @@ import {
 import { useAppStore } from '../../../store/useAppStore';
 import { useT } from '../../../i18n';
 import ProviderBadge from '../../shared/ProviderBadge';
+import { probeComfyServer } from '../../../services/comfyServers';
 
 const MODEL_PREF_KEY = 'canvas-model-prefs';
 
@@ -86,6 +87,8 @@ export default function ModelSelector({
 }: ModelSelectorProps) {
   const t = useT();
   const [open, setOpen] = useState(false);
+  const [workflowsCollapsed, setWorkflowsCollapsed] = useState(true);
+  const [availableComfyUrls, setAvailableComfyUrls] = useState<Record<string, boolean>>({});
   const modelNodeType = MODEL_TYPE_FALLBACK[nodeType] ?? nodeType;
 
   // 读取配置 — 判断哪些 provider 有 API Key
@@ -271,6 +274,42 @@ export default function ModelSelector({
     [workflows, targetCategory],
   );
 
+  // 与生成时一致：未绑定或服务器已删除时回落默认地址；云端工作流不检测 ComfyUI。
+  const workflowUrls = useMemo(() => new Map(matchingWorkflows
+    .filter((workflow) => !workflow.adapterType || workflow.adapterType === 'comfyui')
+    .map((workflow) => {
+      const bound = config.comfyServers?.find((server) => server.id === workflow.serverId)?.url;
+      const normalize = (url?: string) => (url ?? '').trim().replace(/\/+$/, '');
+      return [workflow.id, normalize(bound) || normalize(config.comfyUIUrl)];
+    })), [matchingWorkflows, config.comfyServers, config.comfyUIUrl]);
+  const probeUrlsKey = JSON.stringify([...new Set(workflowUrls.values())].filter(Boolean).sort());
+  const canSelectWorkflow = !!onWorkflowSelect;
+  useEffect(() => {
+    if (!open || !canSelectWorkflow) return;
+    const urls = JSON.parse(probeUrlsKey) as string[];
+    if (urls.length === 0) return;
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const refresh = async () => {
+      await Promise.all(urls.map(async (url) => {
+        const available = await probeComfyServer(url, { signal: controller.signal });
+        if (!controller.signal.aborted) {
+          setAvailableComfyUrls((current) => ({ ...current, [url]: available }));
+        }
+      }));
+      if (!controller.signal.aborted) timer = setTimeout(() => void refresh(), 10_000);
+    };
+    void refresh();
+    return () => {
+      controller.abort();
+      clearTimeout(timer);
+    };
+  }, [open, canSelectWorkflow, probeUrlsKey]);
+  const visibleWorkflows = matchingWorkflows.filter((workflow) => {
+    const url = workflowUrls.get(workflow.id);
+    return url === undefined || availableComfyUrls[url] === true;
+  });
+
   const currentWorkflow = selectedWorkflowId
     ? matchingWorkflows.find((w) => w.id === selectedWorkflowId)
     : undefined;
@@ -297,6 +336,7 @@ export default function ModelSelector({
         className={`model-selector-trigger${selectedWorkflowId ? ' has-workflow' : ''}${currentModel ? ' has-model' : ''}`}
         onClick={(e) => {
           e.stopPropagation();
+          if (!open) setAvailableComfyUrls({});
           setOpen(!open);
         }}
       >
@@ -395,9 +435,17 @@ export default function ModelSelector({
           })}
 
           {/* ComfyUI 工作流区域 */}
-          {targetCategory && onWorkflowSelect && (
+          {targetCategory && onWorkflowSelect && visibleWorkflows.length > 0 && (
             <div className="model-group model-group-wf">
-              <div className="model-group-header">
+              <button
+                type="button"
+                className="model-group-header"
+                aria-expanded={!workflowsCollapsed}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setWorkflowsCollapsed((collapsed) => !collapsed);
+                }}
+              >
                 <span className="text-model-icon text-model-icon-wf">
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                     <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
@@ -408,47 +456,37 @@ export default function ModelSelector({
                   <div className="model-group-name">{t('工作流')}</div>
                   <div className="model-group-desc">{t('ComfyUI、RunningHub 与工作流 API')}</div>
                 </div>
-              </div>
-              <div className="model-group-items">
-                {matchingWorkflows.length === 0 ? (
-                  <div className="model-wf-empty">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                      <circle cx="12" cy="12" r="10" />
-                      <line x1="12" y1="8" x2="12" y2="12" />
-                      <line x1="12" y1="16" x2="12.01" y2="16" />
-                    </svg>
-                    <span>{t('暂无匹配的工作流，请在设置中导入')}</span>
-                  </div>
-                ) : (
-                  <>
-                    {/* 各匹配工作流 */}
-                    {matchingWorkflows.map((wf) => (
-                      <button
-                        key={wf.id}
-                        type="button"
-                        className={`model-item${selectedWorkflowId === wf.id ? ' active' : ''}`}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onWorkflowSelect(wf.id);
-                          setOpen(false);
-                        }}
-                      >
-                        <span className="text-model-icon text-model-icon-mini wf-dot" />
-                        <div className="model-item-info">
-                          <div className="model-item-name">{wf.name}</div>
-                          {wf.fileName && (
-                            <div className="model-item-desc">{wf.fileName}</div>
-                          )}
-                        </div>
-                        {selectedWorkflowId === wf.id && (
-                          <svg className="model-item-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                            <polyline points="20 6 9 17 4 12" />
-                          </svg>
-                        )}
-                      </button>
-                    ))}
-                  </>
-                )}
+                <svg className={`model-group-chevron${workflowsCollapsed ? ' collapsed' : ''}`} width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <polyline points="6 9 12 15 18 9" />
+                </svg>
+              </button>
+              <div className={`model-group-items${workflowsCollapsed ? ' collapsed' : ''}`} inert={workflowsCollapsed}>
+                {/* 各匹配工作流 */}
+                {visibleWorkflows.map((wf) => (
+                  <button
+                    key={wf.id}
+                    type="button"
+                    className={`model-item${selectedWorkflowId === wf.id ? ' active' : ''}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onWorkflowSelect(wf.id);
+                      setOpen(false);
+                    }}
+                  >
+                    <span className="text-model-icon text-model-icon-mini wf-dot" />
+                    <div className="model-item-info">
+                      <div className="model-item-name">{wf.name}</div>
+                      {wf.fileName && (
+                        <div className="model-item-desc">{wf.fileName}</div>
+                      )}
+                    </div>
+                    {selectedWorkflowId === wf.id && (
+                      <svg className="model-item-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                        <polyline points="20 6 9 17 4 12" />
+                      </svg>
+                    )}
+                  </button>
+                ))}
               </div>
             </div>
           )}

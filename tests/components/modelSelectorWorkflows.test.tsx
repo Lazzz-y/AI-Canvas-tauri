@@ -1,0 +1,136 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { WorkflowDefinition } from '../../src/types';
+
+interface Element { props: Record<string, unknown> & { children?: unknown } }
+const driver = vi.hoisted(() => ({
+  states: [] as unknown[], stateIndex: 0, effectIndex: 0,
+  effects: [] as Array<{ deps: readonly unknown[]; cleanup?: () => void }>,
+  pending: [] as Array<() => void>,
+  probe: vi.fn(),
+  config: { providers: {}, comfyUIUrl: 'http://localhost:8188', comfyServers: [{ id: 'remote', name: '远程', url: 'https://comfy.example.com' }] },
+}));
+vi.mock('react', async () => ({
+  ...await vi.importActual<typeof import('react')>('react'),
+  useMemo: <T,>(fn: () => T) => fn(),
+  useCallback: <T,>(fn: T) => fn,
+  useRef: () => ({ current: null }),
+  useLayoutEffect: () => {},
+  useState: <T,>(initial: T | (() => T)) => {
+    const index = driver.stateIndex++;
+    if (!(index in driver.states)) driver.states[index] = typeof initial === 'function' ? (initial as () => T)() : initial;
+    return [driver.states[index], (next: T | ((value: T) => T)) => {
+      driver.states[index] = typeof next === 'function' ? (next as (value: T) => T)(driver.states[index] as T) : next;
+    }];
+  },
+  useEffect: (effect: () => void | (() => void), deps: readonly unknown[]) => {
+    const index = driver.effectIndex++;
+    const previous = driver.effects[index];
+    if (previous && deps.every((dep, i) => Object.is(dep, previous.deps[i]))) return;
+    driver.pending.push(() => {
+      previous?.cleanup?.();
+      driver.effects[index] = { deps, cleanup: effect() ?? undefined };
+    });
+  },
+}));
+vi.mock('../../src/store/useAppStore', () => ({ useAppStore: (select: (state: unknown) => unknown) => select({ config: driver.config }) }));
+vi.mock('../../src/i18n', () => ({ useT: () => (text: string) => text }));
+vi.mock('../../src/services/comfyServers', () => ({ probeComfyServer: driver.probe }));
+vi.mock('../../src/components/nodes/shared/defaultModels', () => ({
+  defaultModelGroups: [], getConfiguredModelGroups: () => [], getGeneralModelGroups: () => [],
+}));
+vi.mock('../../src/components/shared/ProviderBadge', () => ({ default: 'badge' }));
+import ModelSelector from '../../src/components/nodes/shared/ModelSelector';
+
+function all(tree: unknown): Element[] {
+  if (Array.isArray(tree)) return tree.flatMap(all);
+  if (!tree || typeof tree !== 'object' || !('props' in tree)) return [];
+  const element = tree as Element;
+  return [element, ...all(element.props.children)];
+}
+function click(element: Element) {
+  (element.props.onClick as (event: unknown) => void)({ stopPropagation: vi.fn() });
+}
+function workflow(id: string, extra: Partial<WorkflowDefinition> = {}): WorkflowDefinition {
+  return { id, name: id, category: 'ai-image', fileName: `${id}.json`, fileContent: '{}', createdAt: 0, updatedAt: 0, ...extra };
+}
+const select = vi.fn();
+function render(workflows: WorkflowDefinition[], selectedWorkflowId?: string) {
+  driver.stateIndex = 0;
+  driver.effectIndex = 0;
+  const tree = ModelSelector({ nodeType: 'ai-image', workflows, selectedWorkflowId, onSelect: vi.fn(), onWorkflowSelect: select });
+  driver.pending.splice(0).forEach((effect) => effect());
+  return all(tree);
+}
+function group(elements: Element[]) { return elements.find((element) => element.props.className === 'model-group model-group-wf'); }
+function items(elements: Element[]) { return elements.filter((element) => typeof element.props.className === 'string' && /^model-item(?: active)?$/.test(element.props.className)); }
+function open(workflows: WorkflowDefinition[]) {
+  click(render(workflows).find((element) => String(element.props.className).startsWith('model-selector-trigger'))!);
+  return render(workflows);
+}
+
+beforeEach(() => {
+  vi.useFakeTimers();
+  driver.states = []; driver.effects = []; driver.pending = [];
+  driver.probe.mockReset().mockResolvedValue(false);
+  driver.config.comfyServers = [{ id: 'remote', name: '远程', url: 'https://comfy.example.com' }];
+  vi.stubGlobal('window', { addEventListener: vi.fn(), removeEventListener: vi.fn() });
+  vi.stubGlobal('document', { addEventListener: vi.fn(), removeEventListener: vi.fn() });
+});
+afterEach(() => {
+  driver.effects.forEach((effect) => effect.cleanup?.());
+  vi.useRealTimers();
+});
+
+describe('模型选择器工作流可用性', () => {
+  it('关闭菜单不探测，未就绪时隐藏整个分组且不清除当前选择', async () => {
+    const flows = [workflow('local')];
+    render(flows);
+    expect(driver.probe).not.toHaveBeenCalled();
+    expect(group(open(flows))).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(0);
+    const elements = render(flows, 'local');
+    expect(group(elements)).toBeUndefined();
+    expect(elements.find((element) => element.props.className === 'model-selector-label')?.props.children).toBe('local');
+  });
+
+  it('按实际绑定服务器过滤，折叠可切换且仍能选择工作流', async () => {
+    const flows = [workflow('local'), workflow('remote-a', { serverId: 'remote' }), workflow('remote-b', { serverId: 'remote' })];
+    driver.probe.mockImplementation(async (url: string) => url.startsWith('https:'));
+    open(flows);
+    await vi.advanceTimersByTimeAsync(0);
+    let elements = render(flows);
+    expect(driver.probe).toHaveBeenCalledTimes(2);
+    expect(items(elements)).toHaveLength(2);
+    const header = all(group(elements)).find((element) => element.props.className === 'model-group-header')!;
+    expect(header.props['aria-expanded']).toBe(false);
+    click(header);
+    elements = render(flows);
+    expect(all(group(elements)).find((element) => element.props.className === 'model-group-header')?.props['aria-expanded']).toBe(true);
+    click(items(elements)[0]);
+    expect(select).toHaveBeenCalledWith('remote-a');
+    render(flows);
+    const signal = driver.probe.mock.calls[0][1].signal as AbortSignal;
+    expect(signal.aborted).toBe(true);
+  });
+
+  it('在线状态刷新后出现或消失，已删除服务器回落默认地址', async () => {
+    const flows = [workflow('fallback', { serverId: 'deleted' })];
+    open(flows);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(group(render(flows))).toBeUndefined();
+    driver.probe.mockResolvedValue(true);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(items(render(flows))).toHaveLength(1);
+    expect(driver.probe.mock.calls[0][0]).toBe('http://localhost:8188');
+    driver.probe.mockResolvedValue(false);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(group(render(flows))).toBeUndefined();
+  });
+
+  it('ComfyUI 离线不隐藏 RunningHub 和工作流 API', async () => {
+    const flows = [workflow('local'), workflow('cloud', { adapterType: 'runninghub' }), workflow('api', { adapterType: 'workflow-api' })];
+    open(flows);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(items(render(flows))).toHaveLength(2);
+  });
+});
