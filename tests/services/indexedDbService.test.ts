@@ -98,7 +98,7 @@ describe('indexedDbService schema', () => {
     expect(transaction).toHaveBeenCalledWith('config', 'readwrite', { durability: 'strict' });
     expect(transaction).toHaveBeenCalledWith('toolbarLayouts', 'readwrite', { durability: 'strict' });
     await service.saveProjectToDb(RECOVERY_PROJECT);
-    expect(transaction.mock.calls.at(-1)).toEqual([['projects', 'projectSummaries'], 'readwrite']);
+    expect(transaction.mock.calls.at(-1)).toEqual([['projects', 'projectSummaries', 'metadata'], 'readwrite']);
   });
 
   it('falls back only when transaction options are unsupported and does not retry permission or quota failures', async () => {

@@ -129,6 +129,7 @@ describe('downloadUrlAndSave', () => {
     expect(mocks.writeFile).toHaveBeenCalledWith(
       '/project/data/自定义接口图片.png',
       new Uint8Array([1, 2, 3]),
+      { createNew: true },
     );
     expect(result).toEqual({
       filePath: '/project/data/自定义接口图片.png',
@@ -183,6 +184,7 @@ describe('downloadUrlAndSave', () => {
     expect(mocks.writeFile).toHaveBeenCalledWith(
       '/project/data/自定义接口视频.mp4',
       new Uint8Array([4, 5, 6]),
+      { createNew: true },
     );
     expect(result).toEqual({
       filePath: '/project/data/自定义接口视频.mp4',
@@ -195,7 +197,7 @@ describe('downloadUrlAndSave', () => {
   it('allocates local processor outputs inside the project directory', async () => {
     await expect(resolveProjectOutputPath('project-1', '主体识别.png'))
       .resolves.toBe('/project/data/主体识别.png');
-    expect(mocks.resolveUniqueDestPath).toHaveBeenCalledWith('/project/data', '主体识别.png');
+    expect(mocks.resolveUniqueDestPath).toHaveBeenCalledWith('/project/data', '主体识别.png', true);
   });
 });
 

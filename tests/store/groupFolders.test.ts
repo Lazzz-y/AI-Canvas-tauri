@@ -22,10 +22,19 @@ vi.mock('../../src/services/fileService', () => ({
   ensureGroupFolder,
   renameGroupFolder,
   moveProjectFileToFolder,
+  removeEmptyProjectGroupFolder: vi.fn(async () => undefined),
+  finishProjectFileRelocation: vi.fn(async () => undefined),
   copyFileToProjectData: vi.fn(async (_path: string, _project: string) => ({ filePath: 'D:/data/proj-1/copied.png', assetUrl: 'asset://D:/data/proj-1/copied.png', fileName: 'copied.png' })),
   getProjectDataDir: vi.fn(async () => PROJECT_DIR),
   getAssetUrlFromPath: vi.fn(async (p: string) => `asset://${p}`),
   sanitizeFolderName: (name: string) => name.replace(/[<>:"|?*/\\]/g, '_'),
+}));
+
+vi.mock('../../src/services/indexedDb/mediaRelocations', async (original) => ({
+  ...await original<typeof import('../../src/services/indexedDb/mediaRelocations')>(),
+  persistMediaRelocation: vi.fn(async () => undefined),
+  pendingMediaRelocations: vi.fn(async () => []),
+  completeMediaRelocation: vi.fn(async () => undefined),
 }));
 
 vi.mock('../../src/services/pollManager', () => ({
@@ -35,6 +44,8 @@ vi.mock('../../src/services/pollManager', () => ({
 }));
 
 import { useAppStore } from '../../src/store/useAppStore';
+import { finishProjectFileRelocation } from '../../src/services/fileService';
+import { persistMediaRelocation, pendingMediaRelocations } from '../../src/services/indexedDb/mediaRelocations';
 
 function node(id: string): Node<BaseNodeData> {
   return {
@@ -53,12 +64,40 @@ function createGroup(nodeIds: string[]) {
 beforeEach(() => {
   useAppStore.setState(useAppStore.getInitialState(), true);
   useAppStore.setState({ currentProjectId: 'p1', nodes: [node('a'), node('b'), node('c'), node('d')] });
+  useAppStore.setState({ saveCurrentProjectSilent: vi.fn(async () => 'p1') });
   ensureGroupFolder.mockClear();
   renameGroupFolder.mockClear();
   moveProjectFileToFolder.mockClear();
+  vi.mocked(finishProjectFileRelocation).mockClear();
 });
 
 describe('分组与本地文件夹同步', () => {
+  it('保存失败时保留源文件，下次同步完成已提交迁移', async () => {
+    const path = `${PROJECT_DIR}/a.png`;
+    useAppStore.setState({ nodes: [{ ...node('a'), data: { ...node('a').data, filePath: path } }, node('b')] });
+    createGroup(['a', 'b']);
+    useAppStore.setState({ saveCurrentProjectSilent: vi.fn(async () => undefined) });
+    await useAppStore.getState().syncGroupFiles();
+    expect(finishProjectFileRelocation).not.toHaveBeenCalled();
+    vi.mocked(pendingMediaRelocations).mockResolvedValueOnce([{
+      oldPath: path, newPath: `${PROJECT_DIR}/分组/a.png`, projectId: 'p1',
+      assetUrl: `asset://${PROJECT_DIR}/分组/a.png`, relativePath: '分组/a.png',
+    }]);
+    useAppStore.setState({ saveCurrentProjectSilent: vi.fn(async () => 'p1') });
+    await useAppStore.getState().syncGroupFiles();
+    expect(finishProjectFileRelocation).toHaveBeenCalledWith(path, `${PROJECT_DIR}/分组/a.png`, PROJECT_DIR);
+  });
+
+  it('引用事务失败时不删除源文件也不改写节点', async () => {
+    const path = `${PROJECT_DIR}/a.png`;
+    useAppStore.setState({ nodes: [{ ...node('a'), data: { ...node('a').data, filePath: path } }, node('b')] });
+    createGroup(['a', 'b']);
+    vi.mocked(persistMediaRelocation).mockRejectedValueOnce(new Error('quota exceeded'));
+    await useAppStore.getState().syncGroupFiles();
+    expect(finishProjectFileRelocation).not.toHaveBeenCalled();
+    expect(useAppStore.getState().nodes.find((item) => item.id === 'a')?.data.filePath).toBe(path);
+  });
+
   it('复制节点使用独立文件，入组和重新生成不影响另一节点', async () => {
     const original = `${PROJECT_DIR}/original.png`;
     useAppStore.setState({ nodes: [{
@@ -79,7 +118,7 @@ describe('分组与本地文件夹同步', () => {
     expect(useAppStore.getState().nodes.find((n) => n.id === clone.id)?.data.imageUrl).toBe(`asset://${PROJECT_DIR}/copied.png`);
   });
 
-  it('旧分镜格与图片共用文件时，归档要求独立副本并保留源文件', async () => {
+  it('旧分镜格与图片共用文件时，归档先拆分独立副本再迁移最后一个引用', async () => {
     const path = `${PROJECT_DIR}/shared.png`;
     useAppStore.setState({ nodes: [
       { ...node('a'), data: { ...node('a').data, filePath: path, imageUrl: `asset://${path}` } },
@@ -89,7 +128,9 @@ describe('分组与本地文件夹同步', () => {
     await useAppStore.getState().syncGroupFiles();
     const calls = moveProjectFileToFolder.mock.calls.filter(([file]) => !!file);
     expect(calls).toHaveLength(2);
-    expect(calls.every((call) => call[3]?.forceCopy && call[3]?.preserveSource)).toBe(true);
+    expect(calls[0][3]?.forceCopy).toBe(true);
+    expect(calls[1][3]?.forceCopy).toBe(false);
+    expect(calls.every((call) => call[3]?.preserveSource)).toBe(true);
   });
 
   it('文件移动期间切换项目，不把旧结果写入新项目的同名节点', async () => {

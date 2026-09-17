@@ -165,7 +165,32 @@ where
         if cancelled()? {
             return Err("文件传输已取消".to_string());
         }
-        fs::rename(&temp_path, destination).map_err(|e| format!("完成目标文件写入失败: {e}"))?;
+        // Never replace another generation/grouping result that won this destination.
+        // Hard-link publication is atomic; filesystems without links use exclusive creation.
+        match fs::hard_link(&temp_path, destination) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                return Err("目标文件已存在，已拒绝覆盖".to_string());
+            }
+            Err(_) => {
+                let mut target = fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(destination)
+                    .map_err(|e| format!("创建目标文件失败（禁止覆盖）: {e}"))?;
+                let write_result = (|| {
+                    let mut source = File::open(&temp_path)?;
+                    std::io::copy(&mut source, &mut target)?;
+                    target.sync_all()
+                })();
+                drop(target);
+                if let Err(error) = write_result {
+                    let _ = fs::remove_file(destination);
+                    return Err(format!("完成目标文件写入失败: {error}"));
+                }
+            }
+        }
+        let _ = fs::remove_file(&temp_path);
         Ok(transferred_bytes)
     })();
 
@@ -375,6 +400,31 @@ mod tests {
     #[test]
     fn reserves_at_least_sixty_four_megabytes() {
         assert_eq!(required_free_space(100), 100 + MIN_FREE_SPACE_RESERVE);
+    }
+
+    #[test]
+    fn never_overwrites_a_destination_created_during_transfer() {
+        let directory = test_directory("no-clobber");
+        let destination = directory.join("result.png");
+        let mut reader = Cursor::new(b"new result".to_vec());
+        let result = stream_to_file(
+            "race",
+            &mut reader,
+            &destination,
+            None,
+            None,
+            None,
+            || Ok(false),
+            |_| {},
+            |_| {
+                fs::write(&destination, b"existing result").unwrap();
+                Ok(())
+            },
+        );
+        assert!(result.is_err());
+        assert_eq!(fs::read(&destination).unwrap(), b"existing result");
+        assert!(!part_path(&destination, "race").exists());
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

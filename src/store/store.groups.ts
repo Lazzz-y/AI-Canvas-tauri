@@ -3,16 +3,20 @@
  */
 import type { StateCreator } from 'zustand';
 import type { AppState } from './useAppStore';
-import type { BaseNodeData, NodeGroup, StoryboardCellOverride } from '../types';
+import type { NodeGroup } from '../types';
 import { GROUP_COLOR_PALETTE } from '../types';
 import { generateId } from './store.utils';
 import { isNodeMediaCopySource } from '../services/nodeMediaCopy';
-import { registerCanvasImport, isCanvasDerivationFresh, completeCanvasDerivation } from '../services/canvasDerivationGuard';
+import { registerCanvasImport, isCanvasDerivationFresh, completeCanvasDerivation, type CanvasDerivationGuard } from '../services/canvasDerivationGuard';
+import { persistMediaRelocation, pendingMediaRelocations, completeMediaRelocation,
+  relocateMediaReferences, relocateOwnedMediaReferences, type MediaRelocation } from '../services/indexedDb/mediaRelocations';
 import {
   ensureGroupFolder,
   getAssetUrlFromPath,
   getProjectDataDir,
   moveProjectFileToFolder,
+  finishProjectFileRelocation,
+  removeEmptyProjectGroupFolder,
   sanitizeFolderName,
 } from '../services/fileService';
 
@@ -56,32 +60,64 @@ async function moveFile(
   return moved ? describeFile(moved, folder) : null;
 }
 
-/** 把移动结果回填到节点数据；期间 filePath 已被改写时保持原样（新文件由下一轮搬运） */
-function applyNodeMove(data: BaseNodeData, expectedPath: string | undefined, moved: MovedFile): BaseNodeData {
-  if (data.filePath !== expectedPath) return data;
-  const next: BaseNodeData = { ...data, filePath: moved.filePath, relativePath: moved.relativePath,
-    fileName: moved.filePath.replace(/\\/g, '/').split('/').pop(), assetId: undefined };
-  if (next.thumbnailUrl && next.thumbnailUrl === next.imageUrl) next.thumbnailUrl = moved.assetUrl;
-  if (next.imageUrl) next.imageUrl = moved.assetUrl;
-  if (next.videoUrl) next.videoUrl = moved.assetUrl;
-  if (next.audioUrl) next.audioUrl = moved.assetUrl;
-  return next;
-}
-
-function applyOverrideMove(
-  override: StoryboardCellOverride,
-  expectedPath: string | undefined,
-  moved: MovedFile,
-): StoryboardCellOverride {
-  if (override.filePath !== expectedPath) return override;
-  return { ...override, filePath: moved.filePath, relativePath: moved.relativePath, url: moved.assetUrl };
-}
-
 /** 折叠后的文件夹卡片尺寸 */
 export const COLLAPSED_GROUP_SIZE = { width: 220, height: 152 };
 
 // 自动保存每 2 秒可能触发一次，重入会让同一个文件被搬两次
 let syncingGroupFiles = false;
+const retiredFolders = new Map<string, Set<string>>();
+function retireFolders(projectId: string | null, names: string[]) {
+  if (projectId) retiredFolders.set(projectId, new Set([...(retiredFolders.get(projectId) ?? []), ...names]));
+}
+
+async function relocateGroupedFiles(projectId: string, projectDir: string, guard: CanvasDerivationGuard,
+  set: Parameters<StateCreator<AppState>>[0], get: () => AppState): Promise<void> {
+  const fresh = () => isCanvasDerivationFresh(guard, get());
+  const finish = async (move: MediaRelocation) => {
+    if (!fresh() || isNodeMediaCopySource(move.oldPath)) return false;
+    if (!move.ownerId) await finishProjectFileRelocation(move.oldPath, move.newPath, projectDir);
+    await completeMediaRelocation(move);
+    return true;
+  };
+  const pending = await pendingMediaRelocations(projectId);
+  if (!fresh()) return;
+  if (pending.length) {
+    set((state) => pending.reduce((current, move) => move.ownerId
+      ? relocateOwnedMediaReferences(current, move, move.ownerId) : relocateMediaReferences(current, [move]), state));
+    if (await get().saveCurrentProjectSilent() !== projectId || !fresh()) return;
+    for (const move of pending) if (!await finish(move)) return;
+  }
+  const nodeIds = get().nodes.filter((node) => node.type !== 'group').map((node) => node.id);
+  for (const nodeId of nodeIds) {
+    const initial = get().nodes.find((node) => node.id === nodeId);
+    if (!initial || !fresh()) continue;
+    const slots = [null, ...(initial.data.storyboardOverrides ?? []).map((_, index) => index)];
+    for (const slot of slots) {
+      if (!fresh()) return;
+      const node = get().nodes.find((item) => item.id === nodeId);
+      if (!node) break;
+      const path = slot === null ? node.data.filePath : node.data.storyboardOverrides?.[slot]?.filePath;
+      if (!path || isNodeMediaCopySource(path)) continue;
+      const key = (value: string) => value.replace(/\\/g, '/');
+      // Shared legacy nodes split first. The last owner performs the actual relocation.
+      const owners = get().nodes.filter(({ data }) => [data.filePath,
+        ...(data.storyboardOverrides ?? []).map((cell) => cell?.filePath),
+        ...(data.directorCaptureFilePaths ?? [])].some((candidate) => candidate && key(candidate) === key(path)));
+      const shared = owners.length > 1;
+      const group = get().groups.find((item) => item.id === node.parentId);
+      const folder = group ? sanitizeFolderName(group.name) : null;
+      const moved = await moveFile(path, projectDir, folder, shared);
+      if (!moved || !fresh()) continue;
+      const move: MediaRelocation = { oldPath: path, newPath: moved.filePath, assetUrl: moved.assetUrl,
+        relativePath: moved.relativePath, projectId, ownerId: shared ? nodeId : undefined, oldAssetUrl: await getAssetUrlFromPath(path) };
+      await persistMediaRelocation(move, shared ? nodeId : undefined);
+      if (!fresh()) return; // Durable pending cleanup resumes when this project is reopened.
+      set((state) => shared ? relocateOwnedMediaReferences(state, move, nodeId) : relocateMediaReferences(state, [move]));
+      if (await get().saveCurrentProjectSilent() !== projectId || !fresh()) return;
+      if (!await finish(move)) return;
+    }
+  }
+}
 
 export const createGroupSlice: StateCreator<AppState, [], [], GroupSlice> = (set, get) => {
   return {
@@ -264,6 +300,7 @@ export const createGroupSlice: StateCreator<AppState, [], [], GroupSlice> = (set
         }),
     }));
 
+    retireFolders(get().currentProjectId, dissolvedNames);
     const dissolvedGroupNames = groups.filter((g) => affectedGroupIds.has(g.id)).map((g) => g.name);
     get().showToast(`已解散分组「${dissolvedGroupNames.join('、')}」`);
   },
@@ -361,7 +398,8 @@ export const createGroupSlice: StateCreator<AppState, [], [], GroupSlice> = (set
     }));
 
     const projectId = get().currentProjectId;
-    // 不重命名旧目录：撤销、输出历史仍可能引用其中的文件。
+    retireFolders(projectId, [oldName]);
+    // 逐文件提交引用迁移，完成后只清理空目录。
     void ensureGroupFolder(projectId, name).then(() => {
       if (get().currentProjectId === projectId) return get().syncGroupFiles();
     });
@@ -377,60 +415,18 @@ export const createGroupSlice: StateCreator<AppState, [], [], GroupSlice> = (set
     try {
       const projectDir = await getProjectDataDir(projectId);
       if (!projectDir || !isCanvasDerivationFresh(guard, get())) return;
-      const { nodes, groups } = get();
-      const folderOfGroup = new Map(groups.map((g) => [g.id, sanitizeFolderName(g.name)]));
-      // 旧项目共享引用在归档时拆成独立文件，原路径保留给输出历史和撤销。
-      const pathKey = (path: string) => path.replace(/\\/g, '/');
-      const referenceCounts = new Map<string, number>();
-      for (const { data } of nodes) {
-        const paths = [data.filePath, ...(data.storyboardOverrides ?? []).map((cell) => cell?.filePath),
-          ...(data.directorCaptureFilePaths ?? [])];
-        for (const path of paths) {
-          if (!path) continue;
-          const key = pathKey(path);
-          referenceCounts.set(key, (referenceCounts.get(key) ?? 0) + 1);
-        }
-      }
-      const moveUnsharedFile = (path: string | undefined, folder: string | null) =>
-        path && isNodeMediaCopySource(path)
-          ? Promise.resolve(null)
-          : moveFile(path, projectDir, folder, !!path && (referenceCounts.get(pathKey(path)) ?? 0) > 1);
-
-      for (const node of nodes) {
-        if (node.type === 'group') continue;
+      await relocateGroupedFiles(projectId, projectDir, guard, set, get);
+      if (!isCanvasDerivationFresh(guard, get())) return;
+      if (await get().saveCurrentProjectSilent() !== projectId) return;
+      for (const name of retiredFolders.get(projectId) ?? []) {
         if (!isCanvasDerivationFresh(guard, get())) return;
-        const folder = node.parentId ? folderOfGroup.get(node.parentId) ?? null : null;
-        const data = node.data as BaseNodeData;
-
-        const moved = await moveUnsharedFile(data.filePath, folder);
-        if (!isCanvasDerivationFresh(guard, get())) return;
-        if (moved) {
-          set((s) => ({
-            nodes: s.nodes.map((n) => (
-              n.id === node.id ? { ...n, data: applyNodeMove(n.data as BaseNodeData, data.filePath, moved) } : n
-            )),
-          }));
+        if (!get().groups.some((group) => sanitizeFolderName(group.name) === sanitizeFolderName(name))) {
+          await removeEmptyProjectGroupFolder(projectDir, name);
         }
-
-        const overrides = data.storyboardOverrides;
-        if (!Array.isArray(overrides)) continue;
-        for (let i = 0; i < overrides.length; i++) {
-          const override = overrides[i];
-          const movedCell = override ? await moveUnsharedFile(override.filePath, folder) : null;
-          if (!isCanvasDerivationFresh(guard, get())) return;
-          if (!movedCell) continue;
-          set((s) => ({
-            nodes: s.nodes.map((n) => {
-              if (n.id !== node.id) return n;
-              const current = (n.data as BaseNodeData).storyboardOverrides;
-              if (!Array.isArray(current) || !current[i]) return n;
-              const next = [...current];
-              next[i] = applyOverrideMove(current[i]!, override!.filePath, movedCell);
-              return { ...n, data: { ...(n.data as BaseNodeData), storyboardOverrides: next } };
-            }),
-          }));
-        }
+        retiredFolders.get(projectId)?.delete(name);
       }
+    } catch {
+      if (get().currentProjectId === projectId) get().showToast('分组文件归档未完成，原文件已保留，请重试', 'error');
     } finally {
       completeCanvasDerivation(guard);
       syncingGroupFiles = false;

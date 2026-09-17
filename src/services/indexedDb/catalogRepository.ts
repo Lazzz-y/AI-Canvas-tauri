@@ -3,10 +3,12 @@
  * 提供这些常驻对象的读写 CRUD，统一走 schema.ts 声明的 object store，是 catalog 类数据的单一入口。
  */
 import type { PresetAdvancedConfig, SkillManifest, UserPresetMode, WorkflowDefinition } from '../../types';
+import { withRelocatedMedia } from './mediaRelocations';
 import type { InstalledPlugin } from '../../types/plugin';
 import {
   openDB,
   STORE_CONFIG,
+  STORE_METADATA,
   STORE_PRESETS,
   STORE_SKILLS,
   STORE_STYLES,
@@ -102,7 +104,9 @@ export interface CustomStyleRecord {
 
 function putRecord<T>(storeName: string, record: T): Promise<void> {
   return openDB().then((db) => new Promise((resolve, reject) => {
-    const transaction = storeName === STORE_CONFIG ? createDurableSettingsTransaction(db, storeName) : db.transaction(storeName, 'readwrite');
+    const relocatable = storeName === STORE_WORKFLOWS || storeName === STORE_PRESETS;
+    const transaction = storeName === STORE_CONFIG ? createDurableSettingsTransaction(db, storeName)
+      : db.transaction(relocatable ? [storeName, STORE_METADATA] : storeName, 'readwrite');
     let failure: unknown;
     let request: IDBRequest<IDBValidKey> | undefined;
     transaction.oncomplete = () => failure === undefined ? resolve() : reject(failure);
@@ -112,7 +116,9 @@ function putRecord<T>(storeName: string, record: T): Promise<void> {
     // error 先于 abort 派发；等终态再结束 Promise，避免持久化队列提前放行。
     transaction.onerror = () => { failure ??= request?.error ?? transaction.error; };
     try {
-      request = transaction.objectStore(storeName).put(record);
+      if (relocatable) {
+        withRelocatedMedia(transaction, record, (next) => { request = transaction.objectStore(storeName).put(next); });
+      } else request = transaction.objectStore(storeName).put(record);
     } catch (error) {
       failure = error;
       try {

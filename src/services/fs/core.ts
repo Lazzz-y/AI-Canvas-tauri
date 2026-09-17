@@ -4,9 +4,10 @@
  * 同名加序号、文件分类与目录列举。被 fs 下其它模块及 fileService 共用。
  */
 import {
-  copyFile,
   exists,
   mkdir,
+  lstat,
+  remove,
   readDir,
   readFile,
   rename,
@@ -16,7 +17,7 @@ import {
   type DebouncedWatchOptions,
   type WatchEvent,
 } from '@tauri-apps/plugin-fs';
-import { convertFileSrc } from '@tauri-apps/api/core';
+import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { appDataDir, executableDir } from '@tauri-apps/api/path';
 
 /** 检测是否运行在 Tauri 桌面环境中 */
@@ -402,7 +403,7 @@ export async function renameGroupFolder(
  * 把项目目录内的文件移动到分组文件夹（groupFolder 为 null 表示移回项目根目录）。
  * 仅处理项目根目录或其一级子文件夹中的文件；外部引用文件、更深的嵌套、
  * .trash/AppData 内的文件以及已在目标目录的文件一律不动，返回 null。
- * preserveSource 用于画布归档：保留旧路径供历史引用；forceCopy 拆分旧共享文件。
+ * preserveSource 用于画布归档的准备阶段，引用提交后再清理旧路径；forceCopy 拆分旧共享文件。
  * @returns 新的绝对路径，未移动或失败时为 null
  */
 export async function moveProjectFileToFolder(
@@ -427,14 +428,63 @@ export async function moveProjectFileToFolder(
     // 源文件可能已被删除或随文件夹改名搬走，此时不该建目录也不该报错
     if (!(await exists(normalized))) return null;
     if (groupFolder && !(await exists(targetDir))) await mkdir(targetDir, { recursive: true });
-    const destPath = await resolveUniqueDestPath(targetDir, fileName);
-    if (options.preserveSource || options.forceCopy) await copyFile(normalized, destPath);
+    const destPath = await resolveUniqueDestPath(targetDir, fileName, true);
+    if (options.preserveSource || options.forceCopy) await invoke('copy_file_streamed', {
+      taskId: crypto.randomUUID(), sourcePath: normalized, destinationPath: destPath,
+    });
     else await rename(normalized, destPath);
     return destPath;
   } catch (err) {
     console.warn('[fileService] moveProjectFileToFolder failed:', normalized, '→', targetDir, err);
     return null;
   }
+}
+
+/** Finalize a committed relocation. Never recursively delete a folder or remove the destination. */
+export async function finishProjectFileRelocation(oldPath: string, newPath: string, projectDir: string): Promise<void> {
+  if (!isTauriEnv()) return;
+  const root = stripVerbatimPrefix(projectDir).replace(/\\/g, '/').replace(/\/+$/, '');
+  const source = stripVerbatimPrefix(oldPath).replace(/\\/g, '/');
+  const target = stripVerbatimPrefix(newPath).replace(/\\/g, '/');
+  const safe = (path: string) => path.startsWith(`${root}/`)
+    && path.slice(root.length + 1).split('/').every((part) => !!part && part !== '..' && part !== '.' && !part.startsWith('.'));
+  if (!safe(source) || !safe(target) || source === target) throw new Error('文件迁移清理范围无效');
+  for (const path of [source, target]) {
+    const parents = path.slice(root.length + 1).split('/').slice(0, -1);
+    let directory = root;
+    for (const part of parents) {
+      directory += `/${part}`;
+      if (path === source && !await exists(directory)) break;
+      const info = await lstat(directory);
+      if (!info.isDirectory || info.isSymlink) throw new Error('文件迁移目录已变化，停止清理');
+    }
+  }
+  const destination = await lstat(target);
+  if (!destination.isFile || destination.isSymlink) throw new Error('目标文件未就绪，保留原文件');
+  if (await exists(source)) {
+    const original = await lstat(source);
+    if (!original.isFile || original.isSymlink || original.size !== destination.size
+      || (original.mtime && destination.mtime && original.mtime > destination.mtime)) throw new Error('原文件已变化，停止清理');
+    await remove(source);
+  }
+  const parent = source.slice(0, source.lastIndexOf('/'));
+  if (parent !== root && await exists(parent)) {
+    const info = await lstat(parent);
+    if (info.isDirectory && !info.isSymlink && (await readDir(parent)).length === 0) {
+      await remove(parent); // non-recursive: newly added files make this fail safely
+    }
+  }
+  notifyProjectDiskChanged();
+}
+
+export async function removeEmptyProjectGroupFolder(projectDir: string, name: string): Promise<void> {
+  if (!isTauriEnv()) return;
+  const folder = sanitizeFolderName(name);
+  if (!folder || folder.startsWith('.') || folder === 'AppData') return;
+  const path = joinPath(projectDir, folder);
+  if (!await exists(path)) return;
+  const info = await lstat(path);
+  if (info.isDirectory && !info.isSymlink && (await readDir(path)).length === 0) await remove(path);
 }
 
 export interface ProjectDataDirRenameResult {
@@ -523,22 +573,26 @@ export async function revertProjectDataDirRename(
 
 /**
  * 在目标目录中为文件名找到不冲突的完整路径，冲突时在主名后追加 _1、_2 …
- * （exists 可能抛错，捕获后沿用当前路径）
+ * 媒体写入可要求随机身份，避免跨生成、复制和分组任务抢用同一个候选名。
+ * 查重失败必须终止，不能继续写入未经确认的路径。
  */
-export async function resolveUniqueDestPath(dataDir: string, fileName: string): Promise<string> {
+export async function resolveUniqueDestPath(dataDir: string, fileName: string, uniqueIdentity = false): Promise<string> {
   const sanitized = sanitizeFileName(fileName);
   const dotIndex = sanitized.lastIndexOf('.');
-  const baseName = dotIndex > 0 ? sanitized.slice(0, dotIndex) : sanitized;
+  const rawBase = dotIndex > 0 ? sanitized.slice(0, dotIndex) : sanitized;
+  const baseName = uniqueIdentity ? rawBase.replace(/--[a-f0-9]{32}$/i, '') : rawBase;
   const ext = dotIndex > 0 ? sanitized.slice(dotIndex) : '';
   let destPath = joinPath(dataDir, sanitized);
-  try {
+  if (uniqueIdentity) {
+    do {
+      destPath = joinPath(dataDir, `${baseName}--${crypto.randomUUID().replace(/-/g, '')}${ext}`);
+    } while (await exists(destPath));
+  } else {
     let counter = 1;
     while (await exists(destPath)) {
       destPath = joinPath(dataDir, `${baseName}_${counter}${ext}`);
       counter++;
     }
-  } catch {
-    // exists 抛错时沿用当前 destPath
   }
   return destPath;
 }

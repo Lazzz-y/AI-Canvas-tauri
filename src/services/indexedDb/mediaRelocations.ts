@@ -1,0 +1,153 @@
+import { openDB, STORE_METADATA } from './schema';
+import { localMediaUrlToPath } from '../../utils/mediaUrl';
+
+export interface MediaRelocation {
+  oldPath: string;
+  newPath: string;
+  assetUrl: string;
+  oldAssetUrl?: string;
+  relativePath: string;
+  projectId: string;
+  ownerId?: string;
+}
+const JOURNAL_ID = 'media-relocations';
+const STORES = ['projects', 'history', 'chatMessages', 'assetIndex', 'assetMeta', 'assetMetaV2',
+  'globalCharacters', 'videoEditorProjects', 'agentTasks', 'workflows', 'presets'];
+const pathKey = (path: string) => {
+  const normalized = path.replace(/^\\\\\?\\/, '').replace(/\\/g, '/');
+  return /^[a-z]:\//i.test(normalized) ? normalized.toLowerCase() : normalized;
+};
+
+/** Rewrite exact file references only; prompts and arbitrary embedded text are not rewritten. */
+export function relocateMediaReferences<T>(value: T, moves: readonly MediaRelocation[]): T {
+  const lookup = new Map(moves.map((move) => [pathKey(move.oldPath), move]));
+  const resolve = (path: string | undefined): MediaRelocation | undefined => {
+    if (!path) return undefined;
+    let found = lookup.get(pathKey(path));
+    let result = found;
+    const visited = new Set<string>();
+    while (found && !visited.has(found.newPath)) {
+      visited.add(found.newPath);
+      result = found;
+      found = lookup.get(pathKey(found.newPath));
+    }
+    return result;
+  };
+  const seen = new WeakMap<object, unknown>();
+  const visit = (item: unknown): unknown => {
+    if (typeof item === 'string') {
+      const direct = resolve(item);
+      if (direct) return direct.newPath;
+      const known = moves.find((move) => move.oldAssetUrl === item);
+      if (known) return resolve(known.oldPath)?.assetUrl ?? known.assetUrl;
+      const local = resolve(localMediaUrlToPath(item));
+      return local ? local.assetUrl : item;
+    }
+    if (!item || typeof item !== 'object' || (Object.getPrototypeOf(item) !== Object.prototype && !Array.isArray(item))) return item;
+    if (seen.has(item)) return seen.get(item);
+    const next: Record<string, unknown> | unknown[] = Array.isArray(item) ? [] : {};
+    seen.set(item, next);
+    let changed = false;
+    for (const [key, child] of Object.entries(item)) {
+      const rewritten = visit(child);
+      (next as Record<string, unknown>)[key] = rewritten;
+      if (rewritten !== child) changed = true;
+    }
+    const record = item as Record<string, unknown>;
+    const move = resolve(typeof record.filePath === 'string' ? record.filePath : typeof record.path === 'string' ? record.path : undefined);
+    if (move && !Array.isArray(next)) {
+      if ('relativePath' in record || 'filePath' in record) next.relativePath = move.relativePath;
+      if (move.ownerId && 'assetId' in record) delete next.assetId;
+      if ('fileName' in record) next.fileName = move.newPath.replace(/\\/g, '/').split('/').pop();
+      changed = true;
+    }
+    const result = changed ? next : item;
+    seen.set(item, result);
+    return result;
+  };
+  return visit(value) as T;
+}
+
+/** Read the relocation journal inside the writer's transaction so stale saves cannot resurrect old paths. */
+export function withRelocatedMedia<T>(tx: IDBTransaction, value: T, write: (next: T) => void): void {
+  const request = tx.objectStore(STORE_METADATA).get(JOURNAL_ID);
+  request.onsuccess = () => write((request.result?.moves ?? []).reduce((current: T, move: MediaRelocation) =>
+    move.ownerId ? relocateOwnedMediaReferences(current, move, move.ownerId) : relocateMediaReferences(current, [move]), value));
+}
+
+export function relocateOwnedMediaReferences<T>(value: T, move: MediaRelocation, nodeId: string): T {
+  const visit = (item: unknown): unknown => {
+    if (!item || typeof item !== 'object') return item;
+    if (Array.isArray(item)) {
+      const next = item.map(visit);
+      return next.some((child, index) => child !== item[index]) ? next : item;
+    }
+    if (Object.getPrototypeOf(item) !== Object.prototype) return item;
+    const record = item as Record<string, unknown>;
+    if (record.id === nodeId || record.nodeId === nodeId) return relocateMediaReferences(item, [{ ...move, ownerId: nodeId }]);
+    let changed = false;
+    const next = Object.fromEntries(Object.entries(record).map(([key, child]) => {
+      const result = visit(child);
+      if (result !== child) changed = true;
+      return [key, result];
+    }));
+    return changed ? next : item;
+  };
+  return visit(value) as T;
+}
+
+export async function persistMediaRelocation(move: MediaRelocation, sharedNodeId?: string): Promise<void> {
+  const db = await openDB();
+  const stores = STORES.filter((name) => db.objectStoreNames.contains(name));
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction([...stores, STORE_METADATA], 'readwrite');
+    const journal = tx.objectStore(STORE_METADATA).get(JOURNAL_ID);
+    journal.onsuccess = () => {
+      const moves = [...(journal.result?.moves ?? []), { ...move, ownerId: sharedNodeId }];
+      const pending = [...(journal.result?.pending ?? []), { ...move, ownerId: sharedNodeId }];
+      tx.objectStore(STORE_METADATA).put({ id: JOURNAL_ID, moves, pending });
+      for (const name of stores) {
+        const store = tx.objectStore(name);
+        const request = store.openCursor();
+        request.onsuccess = () => {
+          const cursor = request.result;
+          if (!cursor) return;
+          const value = sharedNodeId ? relocateOwnedMediaReferences(cursor.value, move, sharedNodeId)
+            : relocateMediaReferences(cursor.value, [move]);
+          if (value !== cursor.value) {
+            if (typeof store.keyPath === 'string' && value[store.keyPath] !== cursor.value[store.keyPath]) {
+              cursor.delete();
+              store.put(value);
+            } else cursor.update(value);
+          }
+          cursor.continue();
+        };
+      }
+    };
+    tx.oncomplete = () => resolve();
+    tx.onerror = tx.onabort = () => reject(tx.error ?? new Error('文件引用迁移失败'));
+  });
+}
+
+export async function pendingMediaRelocations(projectId: string): Promise<MediaRelocation[]> {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const request = db.transaction(STORE_METADATA).objectStore(STORE_METADATA).get(JOURNAL_ID);
+    request.onsuccess = () => resolve((request.result?.pending ?? []).filter((move: MediaRelocation) => move.projectId === projectId));
+    request.onerror = () => reject(request.error);
+  });
+}
+
+export async function completeMediaRelocation(move: MediaRelocation): Promise<void> {
+  const db = await openDB();
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(STORE_METADATA, 'readwrite');
+    const request = tx.objectStore(STORE_METADATA).get(JOURNAL_ID);
+    request.onsuccess = () => {
+      if (request.result) tx.objectStore(STORE_METADATA).put({ ...request.result,
+        pending: request.result.pending.filter((item: MediaRelocation) => item.oldPath !== move.oldPath || item.newPath !== move.newPath) });
+    };
+    tx.oncomplete = () => resolve();
+    tx.onerror = tx.onabort = () => reject(tx.error);
+  });
+}

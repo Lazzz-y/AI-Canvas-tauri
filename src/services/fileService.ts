@@ -659,7 +659,7 @@ export async function copyFileToProjectData(
   if (!dataDir) return null;
 
   const fileName = sourcePath.split(/[/\\]/).pop() || 'file';
-  const destPath = await resolveUniqueDestPath(dataDir, fileName);
+  const destPath = await resolveUniqueDestPath(dataDir, fileName, true);
 
   try {
     await runNativeFileTransfer('copy_file_streamed', { sourcePath, destinationPath: destPath }, options);
@@ -708,10 +708,10 @@ export async function saveDataUrlToProjectData(
     if (options.deduplicateByContent) {
       destPath = await resolveContentAddressedProjectPath(dataDir, fileName, bytes);
     } else {
-      destPath = await resolveUniqueDestPath(dataDir, fileName);
+      destPath = await resolveUniqueDestPath(dataDir, fileName, true);
     }
     if (!options.deduplicateByContent || !await exists(destPath)) {
-      await writeFile(destPath, bytes);
+      await writeFile(destPath, bytes, { createNew: true });
       notifyProjectDiskChanged();
     }
 
@@ -741,10 +741,10 @@ export async function saveBinaryToProjectData(
   const dataDir = await ensureProjectDataDir(projectId, { throwOnError: options.throwOnError });
   if (!dataDir) return null;
 
-  const destPath = await resolveUniqueDestPath(dataDir, fileName);
+  const destPath = await resolveUniqueDestPath(dataDir, fileName, true);
 
   try {
-    await writeFile(destPath, data);
+    await writeFile(destPath, data, { createNew: true });
     notifyProjectDiskChanged();
   } catch (err) {
     if (options.throwOnError) throw err;
@@ -769,7 +769,7 @@ export async function resolveProjectOutputPath(
   if (!isTauriEnv()) return null;
   const dataDir = await ensureProjectDataDir(projectId);
   if (!dataDir) return null;
-  return resolveUniqueDestPath(dataDir, sanitizeFileName(fileName));
+  return resolveUniqueDestPath(dataDir, sanitizeFileName(fileName), true);
 }
 
 /**
@@ -952,7 +952,7 @@ export async function downloadUrlAndSave(
         const destPath = await resolveContentAddressedProjectPath(dataDir, fileName, bytes);
         if (!await exists(destPath)) {
           throwIfMediaReadAborted(options?.signal);
-          await writeFile(destPath, bytes);
+          await writeFile(destPath, bytes, { createNew: true });
           notifyProjectDiskChanged();
         }
         const convertFileSrc = await getConvertFileSrc();
@@ -977,7 +977,7 @@ export async function downloadUrlAndSave(
       dataDir,
       fileName,
       async () => {
-        const destPath = await resolveUniqueDestPath(dataDir, fileName);
+        const destPath = await resolveUniqueDestPath(dataDir, fileName, true);
         return runNativeFileTransfer(
           sourcePath ? 'copy_file_streamed' : 'download_file_streamed',
           sourcePath ? { sourcePath, destinationPath: destPath } : { url, destinationPath: destPath },
@@ -1028,7 +1028,7 @@ export async function renameProjectFileToLabel(
   try {
     // 就地改名：分组内的文件留在自己的子文件夹，否则会被搬回项目根目录
     const currentDir = normPath.slice(0, normPath.length - oldName.length - 1);
-    const destPath = await resolveUniqueDestPath(currentDir, newName);
+    const destPath = await resolveUniqueDestPath(currentDir, newName, true);
     await rename(filePath, destPath);
     notifyProjectDiskChanged();
     const convertFileSrc = await getConvertFileSrc();

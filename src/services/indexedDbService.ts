@@ -31,6 +31,8 @@ import {
   type ProjectSummaryRecord,
 } from './indexedDb/projectSummary';
 
+import { withRelocatedMedia } from './indexedDb/mediaRelocations';
+
 const LAST_ACTIVE_PROJECT_KEY = 'last-active-project';
 
 export interface ProjectRecord extends ProjectSummaryRecord {
@@ -47,8 +49,8 @@ export async function saveProjectToDb(record: ProjectRecord): Promise<void> {
   if (!summary) throw new Error('项目摘要无效，无法写入 IndexedDB');
   const db = await openDB();
   return new Promise((resolve, reject) => {
-    const tx = db.transaction([STORE_PROJECTS, STORE_PROJECT_SUMMARIES], 'readwrite');
-    const projectRequest = tx.objectStore(STORE_PROJECTS).put(record);
+    const tx = db.transaction([STORE_PROJECTS, STORE_PROJECT_SUMMARIES, STORE_METADATA], 'readwrite');
+    withRelocatedMedia(tx, record, (next) => tx.objectStore(STORE_PROJECTS).put(next));
     const summaryRequest = tx.objectStore(STORE_PROJECT_SUMMARIES).put(summary);
     let settled = false;
     const fail = (error: DOMException | null) => {
@@ -56,7 +58,6 @@ export async function saveProjectToDb(record: ProjectRecord): Promise<void> {
       settled = true;
       reject(error ?? new Error(`项目 ${record.id} 的 IndexedDB 写入失败`));
     };
-    projectRequest.onerror = () => fail(projectRequest.error);
     summaryRequest.onerror = () => fail(summaryRequest.error);
     tx.oncomplete = () => {
       if (settled) return;
@@ -75,8 +76,8 @@ export async function saveProjectToDb(record: ProjectRecord): Promise<void> {
 export async function putGlobalCharacter(character: DramaCharacter): Promise<void> {
   const db = await openDB();
   return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_GLOBAL_CHARACTERS, 'readwrite');
-    tx.objectStore(STORE_GLOBAL_CHARACTERS).put(character);
+    const tx = db.transaction([STORE_GLOBAL_CHARACTERS, STORE_METADATA], 'readwrite');
+    withRelocatedMedia(tx, character, (next) => tx.objectStore(STORE_GLOBAL_CHARACTERS).put(next));
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
     tx.onabort = () => reject(tx.error ?? new Error(`全局角色 ${character.id} 保存失败`));
@@ -316,12 +317,14 @@ function matchesHistoryQuery(record: HistoryRecord, query: HistoryQuery): boolea
 export async function putHistoryEntry(record: HistoryRecord): Promise<void> {
   const db = await openDB();
   return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_HISTORY, 'readwrite');
+    const tx = db.transaction([STORE_HISTORY, STORE_METADATA], 'readwrite');
     const store = tx.objectStore(STORE_HISTORY);
-    store.put(record);
-    pruneProjectHistory(store, record.projectId);
+    withRelocatedMedia(tx, record, (next) => {
+      store.put(next);
+      pruneProjectHistory(store, record.projectId);
+    });
     tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
+    tx.onerror = tx.onabort = () => reject(tx.error ?? new Error('文件引用写入事务失败'));
   });
 }
 
@@ -330,14 +333,14 @@ export async function putHistoryEntries(records: HistoryRecord[]): Promise<void>
   if (records.length === 0) return;
   const db = await openDB();
   return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_HISTORY, 'readwrite');
+    const tx = db.transaction([STORE_HISTORY, STORE_METADATA], 'readwrite');
     const store = tx.objectStore(STORE_HISTORY);
-    for (const record of records) store.put(record);
-    for (const projectId of new Set(records.map((record) => record.projectId))) {
-      pruneProjectHistory(store, projectId);
-    }
+    withRelocatedMedia(tx, records, (next) => {
+      for (const record of next) store.put(record);
+      for (const projectId of new Set(records.map((record) => record.projectId))) pruneProjectHistory(store, projectId);
+    });
     tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
+    tx.onerror = tx.onabort = () => reject(tx.error ?? new Error('文件引用写入事务失败'));
   });
 }
 
@@ -599,10 +602,10 @@ export async function getAllAssetMeta(): Promise<AssetMetaRecord[]> {
 export async function putAssetMeta(record: AssetMetaRecord): Promise<void> {
   const db = await openDB();
   return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_ASSET_META_V2, 'readwrite');
-    tx.objectStore(STORE_ASSET_META_V2).put(record);
+    const tx = db.transaction([STORE_ASSET_META_V2, STORE_METADATA], 'readwrite');
+    withRelocatedMedia(tx, record, (next) => tx.objectStore(STORE_ASSET_META_V2).put(next));
     tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
+    tx.onerror = tx.onabort = () => reject(tx.error ?? new Error('文件引用写入事务失败'));
   });
 }
 
@@ -777,10 +780,10 @@ export async function getAssetIndexesByFingerprint(fingerprint: string): Promise
 export async function putAssetIndex(record: AssetIndexRecord): Promise<void> {
   const db = await openDB();
   return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_ASSET_INDEX, 'readwrite');
-    tx.objectStore(STORE_ASSET_INDEX).put(record);
+    const tx = db.transaction([STORE_ASSET_INDEX, STORE_METADATA], 'readwrite');
+    withRelocatedMedia(tx, record, (next) => tx.objectStore(STORE_ASSET_INDEX).put(next));
     tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
+    tx.onerror = tx.onabort = () => reject(tx.error ?? new Error('文件引用写入事务失败'));
   });
 }
 
@@ -788,10 +791,10 @@ export async function putAssetIndex(record: AssetIndexRecord): Promise<void> {
 export async function putChatMessage(record: ChatMessageRecord): Promise<void> {
   const db = await openDB();
   return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_CHAT_MESSAGES, 'readwrite');
-    tx.objectStore(STORE_CHAT_MESSAGES).put(record);
+    const tx = db.transaction([STORE_CHAT_MESSAGES, STORE_METADATA], 'readwrite');
+    withRelocatedMedia(tx, record, (next) => tx.objectStore(STORE_CHAT_MESSAGES).put(next));
     tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
+    tx.onerror = tx.onabort = () => reject(tx.error ?? new Error('文件引用写入事务失败'));
   });
 }
 
@@ -855,7 +858,7 @@ export async function putChatMessageWithSequence(
 ): Promise<number> {
   const db = await openDB();
   return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_CHAT_MESSAGES, 'readwrite');
+    const tx = db.transaction([STORE_CHAT_MESSAGES, STORE_METADATA], 'readwrite');
     const store = tx.objectStore(STORE_CHAT_MESSAGES);
     let sequence = record.sequence;
     const existingReq = store.get(record.id);
@@ -863,7 +866,7 @@ export async function putChatMessageWithSequence(
       const existing = existingReq.result as ChatMessageRecord | undefined;
       if (existing) {
         sequence = existing.sequence;
-        store.put({ ...record, sequence });
+        withRelocatedMedia(tx, { ...record, sequence }, (next) => store.put(next));
         return;
       }
       const index = store.index('conversationId_sequence');
@@ -875,13 +878,13 @@ export async function putChatMessageWithSequence(
       cursorReq.onsuccess = () => {
         const cursor = cursorReq.result;
         sequence = cursor ? (cursor.value as ChatMessageRecord).sequence + 1 : 0;
-        store.put({ ...record, sequence });
+        withRelocatedMedia(tx, { ...record, sequence }, (next) => store.put(next));
       };
       cursorReq.onerror = () => reject(cursorReq.error);
     };
     existingReq.onerror = () => reject(existingReq.error);
     tx.oncomplete = () => resolve(sequence);
-    tx.onerror = () => reject(tx.error);
+    tx.onerror = tx.onabort = () => reject(tx.error ?? new Error('文件引用写入事务失败'));
   });
 }
 
@@ -958,10 +961,10 @@ export type AgentTaskRecord = AgentTask;
 export async function putAgentTask(record: AgentTaskRecord): Promise<void> {
   const db = await openDB();
   return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_AGENT_TASKS, 'readwrite');
-    tx.objectStore(STORE_AGENT_TASKS).put(record);
+    const tx = db.transaction([STORE_AGENT_TASKS, STORE_METADATA], 'readwrite');
+    withRelocatedMedia(tx, record, (next) => tx.objectStore(STORE_AGENT_TASKS).put(next));
     tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
+    tx.onerror = tx.onabort = () => reject(tx.error ?? new Error('文件引用写入事务失败'));
   });
 }
 
