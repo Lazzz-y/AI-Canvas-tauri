@@ -182,7 +182,6 @@ const nodes = {
   '用户自定义的兼容接口模型': 'User-defined compatible interface models',
   '请先在设置中配置 {name} API Key': 'Configure the {name} API key in Settings first',
   'ComfyUI 工作流': 'ComfyUI workflows',
-  '暂无匹配的工作流，请在设置中导入': 'No matching workflows; import one in Settings',
 
   // ── ReversePromptDialog ──
   '反推提示词': 'Reverse prompt',
