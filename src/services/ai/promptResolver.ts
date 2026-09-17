@@ -2,7 +2,8 @@
  * ai/promptResolver — @mention prompt 解析
  */
 import { useAppStore } from '../../store/useAppStore';
-import { readFileToDataUrl, getFileCategory } from '../fileService';
+import { isRemoteMediaUrl } from '../../utils/mediaUrl';
+import { readFileToDataUrl, getFileCategory, getAssetUrlFromPath } from '../fileService';
 import { imageUrlReachable, resolveNodeImageUrl, mergeImageWithOverlays } from './imageUtils';
 import { cropImageCell, cropImageByRanges } from '../../components/nodes/shared/image/imageUtils';
 import { parseDramaMentionId } from '../../types/dramaAssets';
@@ -18,7 +19,7 @@ import type { CharacterVoiceKind, DramaAsset } from '../../types/dramaAssets';
 import { formatShotRowBrief, isShotRowBlank, readShotFrameSource } from '../../types';
 import type { BaseNodeData, ImageAnnotationLayer, ShotRow, StoryboardCellOverride } from '../../types';
 import type { MediaReference } from '../../types/aiTypes';
-import { mergeMediaReferences, toLegacyReferenceMedia } from './connectedReferenceMedia';
+import { mergeMediaReferences, toLegacyReferenceMedia, getMediaReferenceUrls } from './connectedReferenceMedia';
 
 interface PromptImageEntry {
   url: string;
@@ -485,6 +486,7 @@ async function resolvePromptReferences(
   rawPrompt: string,
   extractMediaReferences: boolean,
   preserveBindings = false,
+  preferLocalImages = false,
 ): Promise<PromptMediaReferences> {
   const store = useAppStore.getState();
   const { nodes } = store;
@@ -788,7 +790,9 @@ async function resolvePromptReferences(
 
   const imageReferences = await Promise.all(
     imageEntries.map(async (entry) => {
-      const url = await resolveNodeImageUrl(entry.url, entry.filePath);
+      const url = preferLocalImages && entry.filePath && isRemoteMediaUrl(entry.url)
+        ? await getAssetUrlFromPath(entry.filePath)
+        : await resolveNodeImageUrl(entry.url, entry.filePath);
       let resolvedUrl = url;
       try {
         resolvedUrl = await mergePromptImageOverlays(url, entry);
@@ -796,7 +800,7 @@ async function resolvePromptReferences(
         console.error('[aiService] Failed to merge overlays:', err);
       }
       const hasOverlays = Boolean(entry.mattingMask || entry.annotation || entry.annotationLayer);
-      const sourceUrl = !hasOverlays && entry.sourceUrl?.trim()
+      const sourceUrl = !preferLocalImages && !hasOverlays && entry.sourceUrl?.trim()
         ? entry.sourceUrl.trim()
         : undefined;
       const reachableSourceUrl = sourceUrl && (
@@ -850,9 +854,13 @@ async function resolvePromptReferences(
 }
 
 /** 图片生成兼容入口：图片 URL 独立提取，视频/音频仍按旧行为内联到 prompt。 */
-export async function resolvePromptWithImageRefs(rawPrompt: string): Promise<{ prompt: string; imageUrls: string[] }> {
-  const { prompt, imageUrls } = await resolvePromptReferences(rawPrompt, false);
-  return { prompt, imageUrls };
+export async function resolvePromptWithImageRefs(
+  rawPrompt: string,
+  options: { preferLocalImages?: boolean } = {},
+): Promise<{ prompt: string; imageUrls: string[] }> {
+  const result = await resolvePromptReferences(rawPrompt, false, false, options.preferLocalImages);
+  return { prompt: result.prompt, imageUrls: options.preferLocalImages
+    ? getMediaReferenceUrls(result.references, 'image', 'local') : result.imageUrls };
 }
 
 /** 视频生成入口：图片、视频和音频引用都提取为对应的独立媒体参数。 */

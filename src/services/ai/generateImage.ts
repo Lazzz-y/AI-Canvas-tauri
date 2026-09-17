@@ -33,6 +33,7 @@ import { generateVolcengineImagesBatch } from './providers/volcengineImage';
 import { runConfiguredModelProtocol } from './modelProtocolRuntime';
 import { mediaProviderRegistry } from './mediaProviderRegistry';
 import { modelProtocolUsesVariable, resolveModelExecutionProfile } from './modelProtocol';
+import { getProviderDefinition } from './providerCatalogService';
 
 function hasReferenceImageFile(value: unknown): boolean {
   if (!value || typeof value !== 'object') return false;
@@ -124,8 +125,38 @@ export async function generateImagesBatch(
   const requestedCount = Math.min(MAX_IMAGE_BATCH_COUNT, Math.max(1, Math.floor(count)));
   const { prompt: rawPrompt, model, provider, imageSize = '2K', aspectRatio = '1:1' } = params;
 
+  const generalModel = provider === 'general' ? resolveGeneralModel(model) : undefined;
+  if (provider === 'general' && !generalModel) {
+    throw new Error('未找到该通用模型配置\n请在「设置 → API Key」中检查');
+  }
+  const config = useAppStore.getState().config;
+  const connectionId = generalModel?.providerConfigId ?? provider;
+  const providerConfig = config.providers[connectionId];
+  const modelName = generalModel?.modelId ?? extractModelName(model, provider);
+  // Older nodes may still use a provider ID, or predate the catalog reference-mode field.
+  // Explicit user settings win; never infer multipart solely from a model's name.
+  const imageReferenceRequestMode = generalModel?.imageReferenceRequestMode
+    ?? (generalModel?.executionProfile?.preset === 'custom' ? undefined
+      : providerConfig?.selectedModels?.find((item) => item.id === modelName)?.imageReferenceRequestMode
+        ?? getProviderDefinition(connectionId, providerConfig)?.models
+          ?.find((item) => item.id === modelName)?.imageReferenceRequestMode);
+  const usesImageDataUrls = !params.workflowId
+    && imageReferenceRequestMode === 'generation-json-image-data-urls';
+  const usesImageMultipart = !params.workflowId
+    && generalModel?.executionProfile?.preset !== 'custom'
+    && imageReferenceRequestMode === 'edits-multipart';
+
+  const customProtocol = generalModel?.executionProfile?.preset === 'custom'
+    ? resolveModelExecutionProfile(generalModel.executionProfile)
+    : undefined;
+  const usesCustomImageFiles = customProtocol?.submit.bodyEncoding === 'multipart'
+    && hasReferenceImageFile(customProtocol.submit.body);
+
+
   // 解析 @{nodeId:label} 引用：图片 URL 提取到 image_urls，文本内联替换到 prompt
-  const { prompt: resolvedPrompt, imageUrls } = await resolvePromptWithImageRefs(rawPrompt);
+  const { prompt: resolvedPrompt, imageUrls } = await resolvePromptWithImageRefs(rawPrompt, {
+    preferLocalImages: usesImageMultipart || usesCustomImageFiles || usesImageDataUrls,
+  });
   if (signal?.aborted) throw new DOMException('请求已取消', 'AbortError');
 
   // 合并调用方传入的 image_urls 与从 prompt 中解析出的 imageUrls
@@ -156,15 +187,6 @@ export async function generateImagesBatch(
     return singleResult(await generateDreaminaImage({ prompt, model, imageSize, aspectRatio, imageUrls: allImageUrls, nodeId: params.nodeId }, signal));
   }
 
-  const generalModel = provider === 'general' ? resolveGeneralModel(model) : undefined;
-  if (provider === 'general' && !generalModel) {
-    throw new Error('未找到该通用模型配置\n请在「设置 → API Key」中检查');
-  }
-  const usesImageDataUrls = !params.workflowId
-    && generalModel?.imageReferenceRequestMode === 'generation-json-image-data-urls';
-  const usesImageMultipart = !params.workflowId
-    && generalModel?.executionProfile?.preset !== 'custom'
-    && generalModel?.imageReferenceRequestMode === 'edits-multipart';
 
   // ComfyUI 工作流执行路径：参考图由 ComfyUI 自己的 /upload 收，不必先过图床
   if (params.workflowId) {
@@ -198,13 +220,8 @@ export async function generateImagesBatch(
     throw new Error('未选择 ComfyUI 工作流\n请在模型选择器中导入并选择工作流');
   }
 
-  const customProtocol = generalModel?.executionProfile?.preset === 'custom'
-    ? resolveModelExecutionProfile(generalModel.executionProfile)
-    : undefined;
-  const usesCustomImageFiles = customProtocol?.submit.bodyEncoding === 'multipart'
-    && hasReferenceImageFile(customProtocol.submit.body);
 
-  // 参考图传输格式由通用模型配置决定；其他 Provider 保持上传图床的既有行为。
+  // 参考图传输格式由模型显式配置或已确认的厂商目录决定。
   const referenceMedia = provider === 'runninghub' ? mergeMediaReferences(collectPromptNodeMediaUrls(rawPrompt).references, collectConnectedReferenceMedia(params.nodeId).references) : undefined;
   if (referenceMedia) allImageUrls = mergeImageUrls(allImageUrls, getMediaReferenceUrls(referenceMedia, 'image', 'local'));
   // multipart 直接读取原始参考图，避免本地图片先上传图床再下载回来的额外网络依赖。
@@ -227,8 +244,6 @@ export async function generateImagesBatch(
     });
   }
 
-  const config = useAppStore.getState().config;
-
   // 尚未迁移的 Provider 继续走兼容分支。
   switch (provider) {
     case 'general': {
@@ -241,7 +256,7 @@ export async function generateImagesBatch(
       if (!connection.baseUrl) throw new Error(`通用模型 "${gm.name}" 未配置接口地址`);
       const dimensions = mapImageDimensions(imageSize, aspectRatio);
       const hasExplicitStandardRequestMode = allImageUrls.length > 0
-        && gm.imageReferenceRequestMode !== undefined
+        && imageReferenceRequestMode !== undefined
         && gm.executionProfile?.preset !== 'custom';
       if (gm.executionProfile && !hasExplicitStandardRequestMode) {
         const urls = await runConfiguredModelProtocol({
@@ -277,7 +292,7 @@ export async function generateImagesBatch(
         prompt,
         dimensions,
         imageUrls: allImageUrls,
-        imageReferenceRequestMode: gm.imageReferenceRequestMode,
+        imageReferenceRequestMode,
       }, requestedCount, signal);
     }
 
@@ -319,6 +334,7 @@ export async function generateImagesBatch(
         prompt,
         dimensions,
         imageUrls: allImageUrls,
+        imageReferenceRequestMode,
       }, requestedCount, signal);
     }
   }

@@ -33,6 +33,53 @@ afterEach(() => {
 });
 
 describe('model request transport boundary', () => {
+  it.each(['cccapi', 'legacy-ccc', 'general'])('uses CCC catalog multipart before uploading references (%s)', async (provider) => {
+    const connectionId = provider === 'general' ? 'legacy-ccc' : provider;
+    useAppStore.setState((state) => ({ config: {
+      ...state.config,
+      providers: { ...state.config.providers, [connectionId]: {
+        name: 'CCC', apiKey: 'secret', baseUrl: 'https://cccapi.cn/v1',
+        ...(provider === 'cccapi' ? {} : { catalogId: 'cccapi' }),
+      } },
+      generalModels: [{ id: 'old-image', name: 'GPT Image 2', modelId: 'gpt-image-2',
+        category: 'image', providerConfigId: connectionId }],
+    } }));
+    const localUrl = 'asset://localhost/D%3A%2Fproject%2Freference.png';
+    useAppStore.setState({ nodes: [{ id: 'ref', type: 'ai-image', position: { x: 0, y: 0 }, data: {
+      label: 'reference', type: 'ai-image', imageUrl: localUrl, sourceUrl: 'https://expired.example/old.png',
+    } }] });
+    const localFetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+      if (url !== localUrl) throw new Error('Unexpected upload');
+      return new Response(Uint8Array.from([137, 80, 78, 71]), { headers: { 'Content-Type': 'image/png' } });
+    });
+    transportMocks.corsSafeFetch.mockImplementation(async () => jsonResponse({ data: [{ url: 'https://cdn.example/result.png' }] }));
+    const params = { provider, model: provider === 'general' ? 'general/old-image' : `${provider}/gpt-image-2`, prompt: 'edit' };
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await generateImagesBatch(attempt === 0 ? { ...params, image_urls: [localUrl] }
+        : { ...params, prompt: '@{ref:reference} edit' }, 1);
+      const [url, init] = transportMocks.corsSafeFetch.mock.calls.at(-1)! as [string, RequestInit];
+      expect(url).toBe('https://cccapi.cn/v1/images/edits');
+      expect((init.body as FormData).getAll('image[]')).toHaveLength(1);
+    }
+    expect(localFetch).toHaveBeenCalledTimes(2);
+    expect(transportMocks.corsSafeFetch).toHaveBeenCalledTimes(2);
+    await generateImagesBatch(params, 1);
+    expect(transportMocks.corsSafeFetch.mock.calls.at(-1)![0]).toBe('https://cccapi.cn/v1/images/generations');
+  });
+
+  it.each(['cccapi', 'custom-openai'])('respects an explicit JSON reference mode or an unknown gateway (%s)', async (catalogId) => {
+    useAppStore.setState((state) => ({ config: { ...state.config, providers: {
+      ...state.config.providers, gateway: { name: 'gateway', apiKey: 'secret', baseUrl: 'https://gateway.example/v1', catalogId,
+        selectedModels: catalogId === 'cccapi' ? [{ id: 'gpt-image-2', name: 'image', provider: 'cccapi', category: 'image', imageReferenceRequestMode: 'generation-json-image-urls' }] : [],
+      },
+    } } }));
+    transportMocks.corsSafeFetch.mockResolvedValue(jsonResponse({ data: [{ url: 'https://cdn.example/result.png' }] }));
+    await generateImagesBatch({ provider: 'gateway', model: 'gateway/gpt-image-2', prompt: 'edit', image_urls: ['https://cdn.example/ref.png'] }, 1);
+    const [url, init] = transportMocks.corsSafeFetch.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('https://gateway.example/v1/images/generations');
+    expect(JSON.parse(init.body as string).image_urls).toEqual(['https://cdn.example/ref.png']);
+  });
+
   it.each([false, true])('submits the current ratio after editing an image node (drag duplicate: %s)', async (duplicate) => {
     const reference = 'data:image/png;base64,iVBORw==';
     useAppStore.setState((state) => ({
@@ -129,6 +176,26 @@ describe('model request transport boundary', () => {
     controller.abort();
     await expect(generateImagesBatch(params, 1, controller.signal)).rejects.toThrow();
     expect(transportMocks.corsSafeFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('reproduces the reference-field warning for a text-only custom protocol despite an edits mode setting', async () => {
+    const imported = analyzeModelProtocolExamples({
+      submitRequest: `curl https://gateway.example/v1/images/generations
+        -H 'Content-Type: application/json'
+        -d '{"model":"gpt-image-2","prompt":"draw"}'`,
+      submitResponse: '{"data":[{"url":"https://cdn.example/result.png"}]}',
+    });
+    useAppStore.setState((state) => ({ config: { ...state.config,
+      providers: { ...state.config.providers, wm: { name: 'WM', apiKey: 'secret', baseUrl: imported.baseUrl! } },
+      generalModels: [{ id: 'wm-image', name: 'gpt-image-2', modelId: 'gpt-image-2', category: 'image',
+        providerConfigId: 'wm', imageReferenceRequestMode: 'edits-multipart',
+        executionProfile: { preset: 'custom', protocol: imported.protocol! },
+      }],
+    } }));
+    await expect(generateImagesBatch({ provider: 'general', model: 'general/wm-image', prompt: 'edit',
+      image_urls: ['https://cdn.example/ref.png'],
+    }, 1)).rejects.toThrow('没有完整接收参考图');
+    expect(transportMocks.corsSafeFetch).not.toHaveBeenCalled();
   });
 
   it('adds actionable guidance to ambiguous API Key errors', async () => {
