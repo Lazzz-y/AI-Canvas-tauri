@@ -121,13 +121,13 @@ export default function ModelSelector({
     return [...configuredGroups, ...generalModelGroups];
   }, [configuredGroups, generalModelGroups]);
 
-  // 默认分组收起，except defaultExpandedGroupIds（含通用模型默认展开）
+  // 所有分组默认收起，仅展开 defaultExpandedGroupIds 显式指定的分组。
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => {
     const ids = allGroups
       .map((g) => ({ ...g, models: g.models.filter((m) => m.nodeTypes.includes(modelNodeType)) }))
       .filter((g) => g.models.length > 0)
       .map((g) => g.id)
-      .filter((id) => !defaultExpandedGroupIds.includes(id) && id !== 'general-models');
+      .filter((id) => !defaultExpandedGroupIds.includes(id));
     return new Set(ids);
   });
 
