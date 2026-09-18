@@ -2,6 +2,7 @@ import { isLocalMediaUrl } from '../../../utils/mediaUrl';
 import type { RunningHubConnection, RunningHubMediaKind } from '../../../types/runninghub';
 import { corsSafeFetch } from '../httpTransport';
 import { assertMediaDataUrlSize } from '../../fileService';
+import { prepareReferenceImageUpload } from '../referenceImageUpload';
 
 export class RunningHubRequestError extends Error {
   readonly code: number;
@@ -79,10 +80,11 @@ export async function uploadRunningHubMedia(
   if (!response.ok) throw new Error(`读取参考${kind === 'image' ? '图片' : kind === 'video' ? '视频' : '音频'}失败`);
   if (Number(response.headers.get('content-length')) > MAX_UPLOAD_BYTES) throw new Error('参考素材超过 100 MB 限制');
   assertMediaDataUrlSize(Number(response.headers.get('content-length')) || 0, kind, 'RunningHub 参考素材');
-  const blob = await response.blob();
-  assertMediaDataUrlSize(blob.size, kind, 'RunningHub 参考素材');
-  if (!blob.size || blob.size > MAX_UPLOAD_BYTES) throw new Error('参考素材为空或超过 100 MB 限制');
-  if (blob.type && !blob.type.startsWith(`${kind}/`) && blob.type !== 'application/octet-stream') throw new Error('参考素材类型与参数不匹配');
+  const sourceBlob = await response.blob();
+  assertMediaDataUrlSize(sourceBlob.size, kind, 'RunningHub 参考素材');
+  if (!sourceBlob.size || sourceBlob.size > MAX_UPLOAD_BYTES) throw new Error('参考素材为空或超过 100 MB 限制');
+  if (sourceBlob.type && !sourceBlob.type.startsWith(`${kind}/`) && sourceBlob.type !== 'application/octet-stream') throw new Error('参考素材类型与参数不匹配');
+  const blob = kind === 'image' ? await prepareReferenceImageUpload(sourceBlob, activeSignal) : sourceBlob;
   const subtype = blob.type.split('/')[1]?.split(';')[0];
   const extension = ({ jpeg: 'jpg', png: 'png', webp: 'webp', gif: 'gif', mp4: 'mp4', webm: 'webm', mpeg: 'mp3', wav: 'wav', 'x-wav': 'wav', ogg: 'ogg', flac: 'flac' } as Record<string, string>)[subtype] || ({ image: 'png', video: 'mp4', audio: 'wav' } as const)[kind];
   const form = new FormData();

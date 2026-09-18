@@ -33,6 +33,103 @@ afterEach(() => {
 });
 
 describe('model request transport boundary', () => {
+  it.each([
+    { provider: 'grsai', referenceCount: 2 },
+    { provider: 'saved-grsai', referenceCount: 3 },
+    { provider: 'general', referenceCount: 3 },
+  ])('sends GRSAI native references from local assets in order ($provider)', async ({ provider, referenceCount }) => {
+    const connectionId = provider === 'general' ? 'saved-grsai' : provider;
+    const legacyModel = {
+      id: 'grsai-ref', name: 'Nano Banana 2', modelId: 'nano-banana-2', category: 'image' as const,
+      providerConfigId: connectionId, imageReferenceRequestMode: 'edits-multipart' as const,
+      executionProfile: { preset: 'openai-image' as const },
+    };
+    useAppStore.setState((state) => ({ config: {
+      ...state.config,
+      providers: { ...state.config.providers, [connectionId]: {
+        name: 'GRSAI', catalogId: 'grsai', apiKey: 'secret', baseUrl: 'https://grsai.dakka.com.cn/v1',
+        selectedModels: [{ id: 'nano-banana-2', name: 'Nano Banana 2', provider: 'grsai', category: 'image', imageReferenceRequestMode: 'edits-multipart' }],
+      } },
+      generalModels: [legacyModel],
+    }, nodes: Array.from({ length: referenceCount }, (_, index) => ({
+      id: `grs-ref-${index}`, type: 'ai-image', position: { x: 0, y: 0 },
+      data: { type: 'ai-image', label: `参考${index}`, imageUrl: `asset://localhost/grs-${index}.png`, sourceUrl: `https://expired.example/grs-${index}.png` },
+    })) }));
+    const savedConfig = structuredClone(useAppStore.getState().config);
+    const localFetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => (
+      new Response(String(url), { headers: { 'Content-Type': 'image/png' } })
+    ));
+    transportMocks.corsSafeFetch.mockResolvedValue(jsonResponse({ status: 'succeeded', results: [{ url: 'https://cdn.example/grs-result.png' }] }));
+    const result = await generateImagesBatch({
+      provider, model: provider === 'general' ? 'general/grsai-ref' : `${provider}/nano-banana-2`,
+      prompt: `${Array.from({ length: referenceCount }, (_, index) => `@{grs-ref-${index}:参考${index}}`).join('')} 合影`,
+      imageSize: '2K', aspectRatio: '16:9',
+    }, 1);
+    expect(result.results[0].url).toBe('https://cdn.example/grs-result.png');
+    expect(localFetch).toHaveBeenCalledTimes(referenceCount);
+    expect(transportMocks.corsSafeFetch).toHaveBeenCalledTimes(1);
+    const [url, init] = transportMocks.corsSafeFetch.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('https://grsai.dakka.com.cn/v1/api/generate');
+    const body = JSON.parse(init.body as string);
+    expect(Object.keys(body).sort()).toEqual(['aspectRatio', 'imageSize', 'images', 'model', 'prompt', 'replyType']);
+    expect(body).toMatchObject({ model: 'nano-banana-2', aspectRatio: '16:9', imageSize: '2K', replyType: 'json' });
+    expect(body.images.map((dataUrl: string) => atob(dataUrl.split(',')[1]))).toEqual(
+      Array.from({ length: referenceCount }, (_, index) => `asset://localhost/grs-${index}.png`),
+    );
+    expect(body.prompt).not.toContain('@{');
+    expect(useAppStore.getState().config).toEqual(savedConfig);
+  });
+
+  it('uses the GRSAI default base URL and native GPT size fields for text-only requests', async () => {
+    useAppStore.setState((state) => ({ config: { ...state.config,
+      providers: { grsai: { name: 'GRSAI', apiKey: 'secret' } },
+    } }));
+    transportMocks.corsSafeFetch.mockResolvedValue(jsonResponse({ status: 'succeeded', results: [{ url: 'https://cdn.example/gpt.png' }] }));
+    const result = await generateImagesBatch({ provider: 'grsai', model: 'grsai/gpt-image-2-vip', prompt: '海报', imageSize: '4K', aspectRatio: '16:9' }, 1);
+    expect(result.results[0]).toEqual({ url: 'https://cdn.example/gpt.png', width: 3840, height: 2160 });
+    const [url, init] = transportMocks.corsSafeFetch.mock.calls[0];
+    expect(url).toBe('https://grsai.dakka.com.cn/v1/api/generate');
+    expect(JSON.parse(init.body)).toEqual({ model: 'gpt-image-2-vip', prompt: '海报', images: [], aspectRatio: '3840x2160', quality: 'medium', replyType: 'json' });
+  });
+
+  it.each([
+    { status: 400, payload: { error: 'reference image rejected' }, message: 'reference image rejected' },
+    { status: 504, payload: { error: 'gateway timeout' }, message: '504' },
+    { status: 200, payload: { status: 'failed', error: 'generation failed' }, message: 'generation failed' },
+    { status: 200, payload: { status: 'violation', error: 'request rejected' }, message: 'request rejected' },
+    { status: 200, payload: { status: 'running', id: 'unfinished-task' }, message: '不要重复提交' },
+    { status: 200, payload: { status: 'succeeded', results: [] }, message: '未找到配置的结果' },
+  ])('does not resubmit GRSAI on failed/unknown responses ($message)', async ({ status, payload, message }) => {
+    useAppStore.setState((state) => ({ config: { ...state.config, providers: { grsai: { name: 'GRSAI', apiKey: 'secret' } } } }));
+    transportMocks.corsSafeFetch.mockResolvedValue(new Response(JSON.stringify(payload), { status, headers: { 'Content-Type': 'application/json' } }));
+    await expect(generateImagesBatch({ provider: 'grsai', model: 'grsai/nano-banana-2', prompt: '合影' }, 3)).rejects.toThrow(message);
+    expect(transportMocks.corsSafeFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps GRSAI batch successes and stops submitting when a later item fails', async () => {
+    useAppStore.setState((state) => ({ config: { ...state.config, providers: { grsai: { name: 'GRSAI', apiKey: 'secret' } } } }));
+    transportMocks.corsSafeFetch
+      .mockResolvedValueOnce(jsonResponse({ status: 'succeeded', results: [{ url: 'https://cdn.example/first.png' }] }))
+      .mockResolvedValueOnce(jsonResponse({ status: 'failed', error: 'failed' }));
+    const result = await generateImagesBatch({ provider: 'grsai', model: 'grsai/nano-banana-2', prompt: '合影' }, 3);
+    expect(result.results.map((item) => item.url)).toEqual(['https://cdn.example/first.png']);
+    expect(result.failedCount).toBe(2);
+    expect(transportMocks.corsSafeFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('cancels GRSAI without starting a second batch request', async () => {
+    useAppStore.setState((state) => ({ config: { ...state.config, providers: { grsai: { name: 'GRSAI', apiKey: 'secret' } } } }));
+    const controller = new AbortController();
+    transportMocks.corsSafeFetch.mockImplementation(async (_url, init) => {
+      expect(init.signal).toBe(controller.signal);
+      controller.abort();
+      return jsonResponse({ status: 'succeeded', results: [{ url: 'https://cdn.example/late.png' }] });
+    });
+    await expect(generateImagesBatch({ provider: 'grsai', model: 'grsai/nano-banana-2', prompt: '合影' }, 2, controller.signal))
+      .rejects.toMatchObject({ name: 'AbortError' });
+    expect(transportMocks.corsSafeFetch).toHaveBeenCalledTimes(1);
+  });
+
   it('deduplicates repeated node references: A B B uploads two images, A B C uploads three', async () => {
     useAppStore.setState((state) => ({ config: {
       ...state.config,
@@ -133,10 +230,10 @@ describe('model request transport boundary', () => {
     expect(transportMocks.corsSafeFetch.mock.calls.at(-1)![0]).toBe('https://cccapi.cn/v1/images/generations');
   });
 
-  it.each(['cccapi', 'custom-openai'])('respects an explicit JSON reference mode or an unknown gateway (%s)', async (catalogId) => {
+  it.each([true, false])('respects a custom gateway JSON reference mode (explicit mode: %s)', async (explicitMode) => {
     useAppStore.setState((state) => ({ config: { ...state.config, providers: {
-      ...state.config.providers, gateway: { name: 'gateway', apiKey: 'secret', baseUrl: 'https://gateway.example/v1', catalogId,
-        selectedModels: catalogId === 'cccapi' ? [{ id: 'gpt-image-2', name: 'image', provider: 'cccapi', category: 'image', imageReferenceRequestMode: 'generation-json-image-urls' }] : [],
+      ...state.config.providers, gateway: { name: 'gateway', apiKey: 'secret', baseUrl: 'https://gateway.example/v1', catalogId: 'custom-openai',
+        selectedModels: explicitMode ? [{ id: 'gpt-image-2', name: 'image', provider: 'gateway', category: 'image', imageReferenceRequestMode: 'generation-json-image-urls' }] : [],
       },
     } } }));
     transportMocks.corsSafeFetch.mockResolvedValue(jsonResponse({ data: [{ url: 'https://cdn.example/result.png' }] }));
@@ -144,6 +241,104 @@ describe('model request transport boundary', () => {
     const [url, init] = transportMocks.corsSafeFetch.mock.calls[0] as [string, RequestInit];
     expect(url).toBe('https://gateway.example/v1/images/generations');
     expect(JSON.parse(init.body as string).image_urls).toEqual(['https://cdn.example/ref.png']);
+  });
+
+  it.each([
+    { referenceCount: 2, legacyMode: 'generation-json-image-urls' as const, legacyPreset: 'custom' as const },
+    { referenceCount: 3, legacyMode: 'generation-json-image-data-urls' as const, legacyPreset: 'openai-image' as const },
+  ])('uses the CCC Sunburst standard contract despite legacy settings ($referenceCount references)', async ({ referenceCount, legacyMode, legacyPreset }) => {
+    const modelId = 'gpt-image-2.5-sunburst';
+    const legacyProfile = {
+      preset: legacyPreset,
+      protocol: {
+        version: 2 as const,
+        mode: 'sync' as const,
+        submit: { method: 'POST' as const, path: '/images/generations', body: {
+          model: '{{model}}', prompt: '{{prompt}}', image_urls: '{{imageUrls}}', resolution: '{{imageSize}}',
+        } },
+        response: { type: 'json' as const, result: { urlPath: 'data.*.url' } },
+      },
+    };
+    useAppStore.setState((state) => ({ config: {
+      ...state.config,
+      providers: { ...state.config.providers, ccc: {
+        name: 'CCC API', apiKey: 'secret', baseUrl: 'https://cccapi.cn/v1', catalogId: 'cccapi',
+        selectedModels: [{ id: modelId, name: modelId, category: 'image', provider: 'cccapi',
+          imageReferenceRequestMode: legacyMode, executionProfile: legacyProfile }],
+      } },
+      generalModels: [{ id: modelId, name: modelId, modelId, category: 'image', providerConfigId: 'ccc',
+        imageReferenceRequestMode: legacyMode, executionProfile: legacyProfile }],
+    }, nodes: Array.from({ length: referenceCount }, (_, index) => ({
+      id: `person-${index}`, type: 'ai-image', position: { x: 0, y: 0 },
+      data: { type: 'ai-image', label: `人物${index + 1}`, imageUrl: `asset://localhost/person-${index}.png`,
+        sourceUrl: `https://expired.example/person-${index}.png` },
+    })) }));
+    const savedConfig = useAppStore.getState().config;
+    const localFetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+      if (!String(url).startsWith('asset://localhost/person-')) throw new Error('Unexpected upload');
+      return new Response(String(url), { headers: { 'Content-Type': 'image/png' } });
+    });
+    transportMocks.corsSafeFetch.mockImplementation(async () => jsonResponse({ data: [{ b64_json: 'aW1hZ2U=' }] }));
+
+    const params = { provider: 'general', model: `general/${modelId}`, imageSize: '2K', aspectRatio: '16:9',
+      prompt: Array.from({ length: referenceCount }, (_, index) => `@{person-${index}:人物${index + 1}}`).join('') + '一起合影' };
+    await expect(generateImagesBatch(params, 1)).resolves.toMatchObject({
+      results: [{ url: 'data:image/png;base64,aW1hZ2U=' }],
+    });
+    expect(transportMocks.corsSafeFetch).toHaveBeenCalledTimes(1);
+    const [url, init] = transportMocks.corsSafeFetch.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('https://cccapi.cn/v1/images/edits');
+    const body = init.body as FormData;
+    expect([...new Set(body.keys())].sort()).toEqual(['image[]', 'model', 'n', 'prompt', 'size']);
+    expect(body.get('model')).toBe(modelId);
+    expect(body.get('n')).toBe('1');
+    expect(body.get('size')).toBe('3648x2048');
+    expect(body.get('prompt')).toContain(`本次请求附带 ${referenceCount} 张参考图`);
+    const files = body.getAll('image[]') as File[];
+    expect(await Promise.all(files.map((file) => file.text()))).toEqual(
+      Array.from({ length: referenceCount }, (_, index) => `asset://localhost/person-${index}.png`),
+    );
+    expect(localFetch).toHaveBeenCalledTimes(referenceCount);
+
+    await expect(generateImagesBatch({ ...params, prompt: '风景' }, 1)).resolves.toMatchObject({
+      results: [{ url: 'data:image/png;base64,aW1hZ2U=' }],
+    });
+    const [generationUrl, generationInit] = transportMocks.corsSafeFetch.mock.calls[1] as [string, RequestInit];
+    expect(generationUrl).toBe('https://cccapi.cn/v1/images/generations');
+    expect(JSON.parse(generationInit.body as string)).toEqual({ model: modelId, prompt: '风景', n: 1, size: '3648x2048' });
+    expect(useAppStore.getState().config).toBe(savedConfig);
+    expect(savedConfig.generalModels?.[0].executionProfile).toEqual(legacyProfile);
+  });
+
+  it.each([
+    { catalogId: 'custom-openai', modelId: 'gpt-image-2.5-sunburst' },
+    { catalogId: 'cccapi', modelId: 'vendor-image' },
+    { catalogId: 'custom-openai', modelId: 'nano-banana-2' },
+    { catalogId: 'grsai', modelId: 'vendor-image' },
+  ])('preserves the explicit protocol outside documented built-in image contracts ($catalogId/$modelId)', async ({ catalogId, modelId }) => {
+    useAppStore.setState((state) => ({ config: {
+      ...state.config,
+      providers: { ...state.config.providers, custom: {
+        name: '自定义接口', apiKey: 'secret', baseUrl: 'https://gateway.example/v1', catalogId,
+      } },
+      generalModels: [{ id: 'custom-image', name: modelId, modelId, category: 'image', providerConfigId: 'custom',
+        executionProfile: { preset: 'custom', protocol: {
+          version: 2, mode: 'sync',
+          submit: { method: 'POST', path: '/vendor/image-render', body: {
+            model: '{{model}}', prompt: '{{prompt}}', images: '{{imageUrls}}',
+          } },
+          response: { type: 'json', result: { urlPath: 'output.image' } },
+        } },
+      }],
+    } }));
+    transportMocks.corsSafeFetch.mockResolvedValue(jsonResponse({ output: { image: 'https://cdn.example/result.png' } }));
+    await expect(generateImagesBatch({
+      provider: 'general', model: 'general/custom-image', prompt: 'edit', image_urls: ['https://cdn.example/reference.png'],
+    }, 1)).resolves.toMatchObject({ results: [{ url: 'https://cdn.example/result.png' }] });
+    expect(transportMocks.corsSafeFetch).toHaveBeenCalledTimes(1);
+    const [url, init] = transportMocks.corsSafeFetch.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('https://gateway.example/v1/vendor/image-render');
+    expect(JSON.parse(init.body as string)).toMatchObject({ model: modelId, images: ['https://cdn.example/reference.png'] });
   });
 
   it.each([false, true])('submits the current ratio after editing an image node (drag duplicate: %s)', async (duplicate) => {

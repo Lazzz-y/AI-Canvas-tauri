@@ -61,6 +61,19 @@ function sanitizeMultipartToken(value: string, fallback: string): string {
   return sanitized || fallback;
 }
 
+function resolveFileMetadata(value: Record<string, ProtocolJsonValue>, sourceMime: string): { filename: string; contentType: string } {
+  const imageMime = sourceMime.toLowerCase().startsWith('image/') ? sourceMime.toLowerCase() : undefined;
+  const contentType = imageMime ?? (typeof value.contentType === 'string' ? value.contentType : sourceMime);
+  let filename = sanitizeMultipartToken(typeof value.filename === 'string' ? value.filename : 'upload.bin', 'upload.bin');
+  const extension = ({ 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif', 'image/avif': 'avif' } as Record<string, string>)[contentType];
+  // 图片可能在上传前重编码，声明的旧后缀/MIME 不能盖过真实 data URL 类型。
+  if (extension && !filename.toLowerCase().endsWith(`.${extension}`)
+    && !(contentType === 'image/jpeg' && /\.jpeg$/i.test(filename))) {
+    filename = `${filename.replace(/\.[^./\\]*$/, '')}.${extension}`;
+  }
+  return { filename, contentType };
+}
+
 function createMultipartBoundary(): string {
   const randomPart = globalThis.crypto?.randomUUID?.().replace(/-/g, '')
     ?? `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
@@ -96,13 +109,10 @@ function serializeMultipartBody(body: Record<string, ProtocolJsonValue>, boundar
       if (configuredMime !== undefined && (typeof configuredMime !== 'string' || !MIME_TYPE_RE.test(configuredMime))) {
         throw new Error(`multipart 文件字段 ${name} 的 contentType 无效`);
       }
-      const filename = sanitizeMultipartToken(
-        typeof value.filename === 'string' ? value.filename : 'upload.bin',
-        'upload.bin',
-      );
+      const { filename, contentType } = resolveFileMetadata(value, parsed.mimeType);
       appendText(`--${boundary}\r\n`);
       appendText(`Content-Disposition: form-data; name="${safeName}"; filename="${filename}"\r\n`);
-      appendText(`Content-Type: ${configuredMime ?? parsed.mimeType}\r\n\r\n`);
+      appendText(`Content-Type: ${contentType}\r\n\r\n`);
       chunks.push(parsed.bytes);
       appendText('\r\n');
       return;
@@ -155,8 +165,11 @@ export function redactModelProtocolMultipartPreview(value: ProtocolJsonValue): P
     }
     if (Object.hasOwn(value, '$file') && typeof value.$file === 'string') {
       const parsed = parseBase64DataUrl(value.$file);
+      const metadata = resolveFileMetadata(value, parsed.mimeType);
       return {
         ...value,
+        ...(typeof value.filename === 'string' ? { filename: metadata.filename } : {}),
+        ...(value.contentType !== undefined ? { contentType: metadata.contentType } : {}),
         $file: `[data URL ${parsed.mimeType}, ${parsed.bytes.byteLength} bytes]`,
       };
     }

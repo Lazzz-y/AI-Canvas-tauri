@@ -110,6 +110,54 @@ describe('AgentCenterPanel', () => {
     expect(markup).not.toContain('aria-checked');
     expect(markup).not.toContain('移除智能体 短剧制作助手');
   });
+
+  it('大纲默认折叠，完整展示多层入口并合并重复的目录和 Skill', () => {
+    const markup = renderToStaticMarkup(
+      <AgentPackageCard
+        installation={installation({ entrypoints: [
+          'AGENTS.md',
+          '02-剧本创作/writer/SKILL.md',
+          './02-剧本创作\\writer\\SKILL.md',
+          '海外短剧/02-剧本创作/optimizer/SKILL.md',
+          ...Array.from({ length: 28 }, (_, index) => `04-分镜设计/shot-${index}/SKILL.md`),
+        ] })}
+        busy={false}
+        allowInstall
+        onToggle={() => {}}
+        onToggleMcpSkillRead={() => {}}
+        onRemove={() => {}}
+      />,
+    );
+
+    expect(markup).toContain('智能体大纲');
+    expect(markup.match(/<details[^>]*>/)?.[0]).not.toContain('open');
+    expect(markup).toContain('AGENTS.md');
+    expect(markup).toContain('02-剧本创作');
+    expect(markup).toContain('海外短剧');
+    expect(markup.match(/>writer</g)).toHaveLength(1);
+    expect(markup).toContain('optimizer');
+    for (let index = 0; index < 28; index += 1) {
+      expect(markup).toContain(`>shot-${index}<`);
+    }
+  });
+
+  it('停用和只读卡片仍可浏览安装目录，包内文本不会成为 HTML', () => {
+    const markup = renderToStaticMarkup(
+      <AgentPackageCard
+        installation={installation({ enabled: false, entrypoints: ['<script>alert(1)</script>/SKILL.md'] })}
+        busy={false}
+        allowInstall={false}
+        onToggle={() => {}}
+        onToggleMcpSkillRead={() => {}}
+        onRemove={() => {}}
+      />,
+    );
+
+    expect(markup).toContain('智能体大纲');
+    expect(markup).toContain('&lt;script&gt;');
+    expect(markup).not.toContain('<script>');
+    expect(markup).not.toContain('role="switch"');
+  });
 });
 
 describe('EmptyChatState', () => {

@@ -68,6 +68,13 @@
 
 A–D 历史联合复核未覆盖真实桌面 WebView、双窗口审批、真实厂商请求和付费生成；不能据此认定 P5-C 完成。Agent Package 的未完成范围和当时测试限制保留在原记录中，恢复开发时重新验证。
 
+## 智能体中心卡片与大纲
+
+- 范围：`AgentCenterPanel.tsx` 的安装卡片采用顶部紧凑操作行，下方说明、权限和大纲使用整行宽度。
+- 大纲：默认折叠，按安装记录的 `entrypoints` 显示目录与 Skill 入口，各目录可独立折叠；包括停用包，不读取或执行包内正文。目录代表安装时已识别的入口，不是全部资产文件；扫描上限和预检提醒仍由原生导入流程负责。
+- 状态：已实现。定向 ESLint、应用/测试类型检查及面板、安装目录、Skill 服务回归通过；实际组件的隔离浏览器检查通过默认折叠、鼠标/键盘操作、长名称、320/400/600px 宽度和明暗主题。真实 Tauri 安装包目录尚未进行界面验收。
+- 回滚：撤销本次面板与对应测试改动即可，不涉及存储格式、原生权限或依赖变化。
+
 ## 验证入口
 
 - 权限：[policyEngine.test.ts](../tests/services/chat/policyEngine.test.ts)；控制与预算：[agentTaskControl.test.ts](../tests/services/chat/agentTaskControl.test.ts)、[agentBudgetService.test.ts](../tests/services/chat/agentBudgetService.test.ts)。

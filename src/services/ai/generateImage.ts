@@ -32,8 +32,9 @@ import { generateImageStandardBatch } from './providers/standardImage';
 import { generateVolcengineImagesBatch } from './providers/volcengineImage';
 import { runConfiguredModelProtocol } from './modelProtocolRuntime';
 import { mediaProviderRegistry } from './mediaProviderRegistry';
-import { modelProtocolUsesVariable, resolveModelExecutionProfile } from './modelProtocol';
+import { executeModelProtocol, modelProtocolUsesVariable, resolveModelExecutionProfile } from './modelProtocol';
 import { getProviderDefinition } from './providerCatalogService';
+import { resolveBuiltInImageRequestContract, validateBuiltInImageResponse } from './imageRequestContracts';
 
 function hasReferenceImageFile(value: unknown): boolean {
   if (!value || typeof value !== 'object') return false;
@@ -133,21 +134,27 @@ export async function generateImagesBatch(
   const connectionId = generalModel?.providerConfigId ?? provider;
   const providerConfig = config.providers[connectionId];
   const modelName = generalModel?.modelId ?? extractModelName(model, provider);
-  // Older nodes may still use a provider ID, or predate the catalog reference-mode field.
-  // Explicit user settings win; never infer multipart solely from a model's name.
-  const imageReferenceRequestMode = generalModel?.imageReferenceRequestMode
-    ?? (generalModel?.executionProfile?.preset === 'custom' ? undefined
-      : providerConfig?.selectedModels?.find((item) => item.id === modelName)?.imageReferenceRequestMode
-        ?? getProviderDefinition(connectionId, providerConfig)?.models
-          ?.find((item) => item.id === modelName)?.imageReferenceRequestMode);
+  const providerDefinition = getProviderDefinition(connectionId, providerConfig);
+  const catalogModel = providerDefinition?.models?.find((item) => item.id === modelName);
+  // 已确认的内置合同优先，未知模型、自定义连接与工作流保持自己的协议。
+  const builtInContract = params.workflowId ? undefined
+    : resolveBuiltInImageRequestContract(providerDefinition, modelName, imageSize, aspectRatio);
+  const executionProfile = builtInContract ? undefined : generalModel?.executionProfile;
+  const imageReferenceRequestMode = builtInContract?.kind === 'standard' ? builtInContract.imageReferenceRequestMode
+    : builtInContract ? undefined
+    : generalModel?.imageReferenceRequestMode
+      ?? (executionProfile?.preset === 'custom' ? undefined
+        : providerConfig?.selectedModels?.find((item) => item.id === modelName)?.imageReferenceRequestMode
+          ?? catalogModel?.imageReferenceRequestMode);
   const usesImageDataUrls = !params.workflowId
-    && imageReferenceRequestMode === 'generation-json-image-data-urls';
+    && (builtInContract?.kind === 'protocol' && builtInContract.referenceInput === 'data-url'
+      || imageReferenceRequestMode === 'generation-json-image-data-urls');
   const usesImageMultipart = !params.workflowId
-    && generalModel?.executionProfile?.preset !== 'custom'
+    && executionProfile?.preset !== 'custom'
     && imageReferenceRequestMode === 'edits-multipart';
 
-  const customProtocol = generalModel?.executionProfile?.preset === 'custom'
-    ? resolveModelExecutionProfile(generalModel.executionProfile)
+  const customProtocol = executionProfile?.preset === 'custom'
+    ? resolveModelExecutionProfile(executionProfile)
     : undefined;
   const usesCustomImageFiles = customProtocol?.submit.bodyEncoding === 'multipart'
     && hasReferenceImageFile(customProtocol.submit.body);
@@ -232,6 +239,33 @@ export async function generateImagesBatch(
 
   if (!prompt.trim() && provider !== 'runninghub') throw new Error('提示词不能为空');
 
+  if (builtInContract?.kind === 'protocol') {
+    const apiKey = providerConfig?.apiKey || '';
+    const baseUrl = providerConfig?.baseUrl?.trim() || providerDefinition?.defaultBaseUrl || '';
+    if (!apiKey) throw new Error(`未配置 ${providerDefinition?.name} 的 API Key\n请在「设置 → API Key」中配置`);
+    const results: ImageGenerationResult[] = [];
+    // 此合同一次只生成一张；顺序执行用户请求的数量，失败即停止，禁止重放提交。
+    for (let index = 0; index < requestedCount; index += 1) {
+      signal?.throwIfAborted();
+      try {
+        const result = await executeModelProtocol({
+          apiKey, baseUrl, protocol: builtInContract.protocol,
+          variables: { model: modelName, prompt, imageUrls: allImageUrls },
+          validateResponse: validateBuiltInImageResponse,
+          signal,
+        });
+        signal?.throwIfAborted();
+        const url = result.urls?.[0];
+        if (!url) throw new Error('图片生成返回结果为空');
+        results.push({ url, ...builtInContract.dimensions });
+      } catch (error) {
+        if (signal?.aborted || (error instanceof Error && error.name === 'AbortError') || !results.length) throw error;
+        break;
+      }
+    }
+    return { requestedCount, results, failedCount: requestedCount - results.length };
+  }
+
   const registeredAdapter = mediaProviderRegistry.getImageAdapter(provider);
   if (registeredAdapter) {
     return registeredAdapter.generateImage({
@@ -257,8 +291,8 @@ export async function generateImagesBatch(
       const dimensions = mapImageDimensions(imageSize, aspectRatio);
       const hasExplicitStandardRequestMode = allImageUrls.length > 0
         && imageReferenceRequestMode !== undefined
-        && gm.executionProfile?.preset !== 'custom';
-      if (gm.executionProfile && !hasExplicitStandardRequestMode) {
+        && executionProfile?.preset !== 'custom';
+      if (executionProfile && !hasExplicitStandardRequestMode) {
         const urls = await runConfiguredModelProtocol({
           model: gm,
           category: 'image',
