@@ -1,7 +1,7 @@
 # ComfyUI 工作流集成说明
 
 > 本文档描述 AI Canvas 如何导入、管理和执行 ComfyUI 工作流，包括 IO 节点识别、内容与参数注入规则、结果取回和编辑回写链路。
-> 最后更新：2026-09-17。范围、验证与回滚见[可靠性修复](./plans/2026-09-08-comfyui-reliability.md)、[助手多服务器支持](./plans/2026-09-08-comfyui-assistant-servers.md)和[打开与编辑体验](./plans/2026-09-08-comfyui-editor-experience.md)。
+> 最后更新：2026-09-18。范围、验证与回滚见[可靠性修复](./plans/2026-09-08-comfyui-reliability.md)、[助手多服务器支持](./plans/2026-09-08-comfyui-assistant-servers.md)和[打开与编辑体验](./plans/2026-09-08-comfyui-editor-experience.md)。
 
 ## 1. 概览
 
@@ -67,7 +67,7 @@ ComfyUI 在 AI Canvas 里是一种 **provider**：工作流导入后会出现在
 
 ### 4.2 内置工作流播种
 
-[builtinWorkflows.ts](../src/services/builtinWorkflows.ts) 内置了 6 个 MiniMax H3 视频工作流（文生/图生/参考生 × 普通/Turbo）、2 个 AuK 和 3 个 Qwen3 音频工作流。每项可独立声明分类，未声明时保留视频分类。API JSON 打包在 `src/assets/comfyWorkflows/` 下，界面格式放在同级 `ui/` 里。
+[builtinWorkflows.ts](../src/services/builtinWorkflows.ts) 内置了 8 个 MiniMax H3 视频工作流（原有文生/图生/参考生 × 普通/Turbo，加 2 个 PDD）、2 个 AuK、3 个 Qwen3 和 2 个 Breeze TTS 2 音频工作流。每项可独立声明分类，未声明时保留视频分类。API JSON 打包在 `src/assets/comfyWorkflows/` 下，界面格式放在同级 `ui/` 里。
 
 | AuK 工作流 | 默认输入 | 输出 |
 |---|---|---|
@@ -352,3 +352,33 @@ Qwen 验证入口为 `builtinWorkflows.test.ts`、`audioSpeechSettings.test.ts` 
 | [tests/components/workflowEditorInteraction.test.tsx](../tests/components/workflowEditorInteraction.test.tsx) | 加载反馈、重复点击与失败重试交互 |
 | [tests/services/comfyTaskRecovery.test.ts](../tests/services/comfyTaskRecovery.test.ts) | 取消、断线、续查与过期回执回归 |
 | [tests/services/comfyVideoParams.test.ts](../tests/services/comfyVideoParams.test.ts) | 视频参数注入的回归用例 |
+
+
+### H3 PDD 与 Breeze TTS 2 内置工作流
+
+四项沿用内置 ID 的增量补充机制：已安装版本升级时只补新项，不覆盖用户编辑或恢复用户删除的旧项。来自用户提供的四份 API JSON；没有随附界面布局，`editableContent` 留空，打开编辑走既有 API 图导入路径。
+
+| 模型菜单名称 | 默认输入 | 其他输入与输出 |
+|---|---|---|
+| MiniMax H3 PDD 图生视频 | 提示词 7；图片 27 | 视频含 H3 生成音频；单张参考图 |
+| MiniMax H3 PDD 图生视频＋参考音频 | 提示词 19；图片 35；音频 28 | 音频是生成参考，不是固定原声强制配嘴；单张参考图 |
+| Breeze TTS 2 声音克隆 | 台词 12；参考音频 8 | Whisper 转写原文与参考音频共同进入克隆节点，PreviewAudio 返回声音 |
+| Breeze TTS 2 声音设计 | 台词 4 | 可通过工作流输入节点 5 单独填写音色描述；PreviewAudio / SaveAudioAdvanced 返回声音 |
+
+添加参考图或音频时使用对应工作流输入；声音设计若显式填写节点 5，也需显式给节点 4 赋台词，遵循现有“已指定同类输入则不走默认值”的规则。图中原有示例文件名保留，实际生成前应提供自己的媒体。模型和自定义节点仍由所选 ComfyUI 服务提供，内置资源不会安装或启动它们。
+
+H3 采用 Ref2VA INT8 主模型与 Ref2VA PDD 8-step 配对、Euler、Sigma Shift 12/3、24fps。依赖 MiniMax H3/PDD、ResolutionSelector 和 ComfyMathExpression 等图内节点；分辨率和时长沿用画布视频参数注入。带参考音频的源图曾把分辨率输出接到 length，内置副本已改为宽高连接 ResolutionSelector、秒数经与另一份图相同的 17n+5 公式转换帧数。两项均只提供一个图片输入，不等同于多图短剧工作流。
+
+Breeze 依赖 ComfyUI-Breeze-TTS-2，克隆还需 whisper-large-v3-turbo；保留用户的模型与采样设置。克隆源图曾把情感描述当作参考音频原文，内置副本改接 Whisper 的 transcript 输出，并移除该未使用的情感文本节点。情绪可使用台词里的发声标签；此项不增加 Voice Direction 模式。
+
+验证入口：`tests/services/builtinWorkflows.test.ts`，覆盖增量补充、默认输入、模拟提交后的图片/音频/台词及分辨率时长、参考转写接线、原图不被提交参数改写。真实 GPU 生成和声音试听需在目标 ComfyUI 另行验收，模拟请求不代表生成质量已验证。
+
+本批接入验证：6 个相关测试文件共 81 项通过，应用与测试类型检查、定向 ESLint 和 release 构建通过。更新后通过 MCP 读取全部 15 项工作流，新增四份执行 JSON 与源码逐字一致，原 11 项元数据保留；未执行真实生成。
+
+### 空视频参考的编辑预览
+
+从 API 打开时，明确为空的 VHS 上传视频输入会同时清理独立预览参数、旧媒体地址和画面，防止控件为空却显示首个默认文件。重新选择视频恢复正常预览。只处理新载入的 API 图，不覆盖已有标签的未保存修改，也不改变有素材的输入；空分支在执行时仍由提交器移除。验证入口：`comfyBridgeSaveIdentity.test.ts`。
+
+### ComfyUI 编辑窗口直接运行可选参考
+
+AI Canvas 提交器和 ComfyUI 自带运行按钮是两个入口。桥接在 ComfyUI 的 queuePrompt 边界只对执行图副本清理空的 H3 参考加载节点：必须所有消费者均为 H3 对应可选参考槽，否则保留。编辑图、另存与重新打开时仍保留全部上传位置。此规则不改文件权限、不使用占位文件、不自动执行或重试。测试覆盖零素材、多素材、空音频错误连接、必填用途保护、保存及重复安装。

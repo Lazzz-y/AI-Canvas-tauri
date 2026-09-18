@@ -1298,6 +1298,90 @@
   };
 
   // 仅调整视口，不改节点布局；避免导出文件的屏幕偏移让节点落在可视区外。
+  // 只清理执行副本；编辑图和保存模板必须保留可上传的空槽。
+  const pruneEmptyH3References = (output) => {
+    if (!output || typeof output !== 'object') return output;
+    const result = Object.fromEntries(Object.entries(output).map(([id, node]) => [
+      id, { ...node, inputs: { ...node.inputs } },
+    ]));
+    for (const [id, node] of Object.entries(result)) {
+      const kind = node.class_type === 'LoadImage' ? 'image'
+        : node.class_type === 'LoadAudio' ? 'audio'
+          : /^VHS_LoadVideo(?:FFmpeg)?$/.test(node.class_type) ? 'video' : null;
+      if (!kind || !Object.prototype.hasOwnProperty.call(node.inputs, kind)) continue;
+      const value = node.inputs[kind];
+      if (value !== null && !(typeof value === 'string' && !value.trim())) continue;
+      const refs = [];
+      let required = false;
+      for (const consumer of Object.values(result)) {
+        for (const [key, link] of Object.entries(consumer.inputs)) {
+          if (!Array.isArray(link) || String(link[0]) !== id) continue;
+          const expected = kind === 'image' ? /^ref_images\.ref_image_\d+$/
+            : kind === 'audio' ? /^ref_audios\.ref_audio_\d+$/ : /^ref_videos\.ref_video_\d+$/;
+          if (consumer.class_type === 'MiniMaxH3ReferenceToVideo' && expected.test(key) && link[1] === 0) {
+            refs.push([consumer.inputs, key]);
+          } else required = true;
+        }
+      }
+      if (required || !refs.length) continue;
+      for (const [inputs, key] of refs) delete inputs[key];
+      delete result[id];
+    }
+    return result;
+  };
+
+  const guardedQueueClients = new WeakSet();
+  const installOptionalReferenceQueueGuard = () => {
+    const client = window.comfyAPI?.api?.api;
+    if (!client || typeof client.queuePrompt !== 'function') {
+      throw new Error('ComfyUI 提交接口尚未就绪，无法启用可选素材，请稍后重新打开工作流');
+    }
+    if (guardedQueueClients.has(client)) return;
+    const original = client.queuePrompt;
+    client.queuePrompt = function (number, prompt, ...args) {
+      const output = prompt?.output;
+      if (!output || !Object.values(output).some((node) => node?.class_type === 'MiniMaxH3ReferenceToVideo')) {
+        return original.call(this, number, prompt, ...args);
+      }
+      return original.call(this, number, { ...prompt, output: pruneEmptyH3References(output) }, ...args);
+    };
+    guardedQueueClients.add(client);
+  };
+
+  // VHS 在节点创建时可能预览文件列表的首项；空 API 输入必须同步清掉独立预览。
+  const clearEmptyVideoPreviews = (app, api) => {
+    for (const node of graphNodes(app)) {
+      const input = api[String(node.id)];
+      if (!/^VHS_LoadVideo(?:FFmpeg)?$/.test(input?.class_type || '')
+        || typeof input.inputs?.video !== 'string' || input.inputs.video.trim()) continue;
+      const file = node.widgets?.find((widget) => widget.name === 'video');
+      const preview = node.widgets?.find((widget) => widget.name === 'videopreview');
+      if (!file || !preview) continue;
+      const clear = () => {
+        preview.value = { ...preview.value, hidden: true, paused: true, params: {} };
+        if (preview.parentEl) preview.parentEl.hidden = true;
+        preview.videoEl?.pause?.();
+        for (const media of [preview.videoEl, preview.imgEl]) {
+          if (!media) continue;
+          media.removeAttribute?.('src');
+          media.hidden = true;
+        }
+        preview.aspectRatio = undefined;
+        delete node.video_query;
+        node.setDirtyCanvas?.(true, true);
+      };
+      const original = file.callback;
+      file.callback = function (value, ...args) {
+        if (typeof value !== 'string' || !value.trim()) { clear(); return; }
+        preview.value = { ...preview.value, hidden: false, paused: false };
+        if (preview.parentEl) preview.parentEl.hidden = false;
+        return original?.call(this, value, ...args);
+      };
+      file.value = '';
+      clear();
+    }
+  };
+
   const fitLoadedGraph = (app) => {
     const nodes = graphNodes(app).filter((node) => node.pos && node.size
       && [...node.pos, ...node.size].every(Number.isFinite));
@@ -1340,6 +1424,7 @@
     loadingWorkflow = true;
     try {
       const app = await waitForComfyApp();
+      installOptionalReferenceQueueGuard();
       const editorContext = {
         workflowId: payload.workflowId || null,
         name: payload.workflowName || '',
@@ -1371,7 +1456,10 @@
       } else if (payload.editableJson) {
         detail = '编辑布局为空或损坏，已从 API 数据恢复节点';
       }
-      if (source === 'api') await app.loadApiJson(api, editorContext.fileName);
+      if (source === 'api') {
+        await app.loadApiJson(api, editorContext.fileName);
+        clearEmptyVideoPreviews(app, api);
+      }
       const nodeCount = verifyGraph(app);
       fitLoadedGraph(app);
       const active = activeWorkflowFor(app);

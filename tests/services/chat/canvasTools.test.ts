@@ -56,6 +56,44 @@ beforeEach(() => {
 });
 
 describe('canvas agent tools', () => {
+  it('renames visible media titles and text labels with one history snapshot', async () => {
+    const media = node('n1', {
+      type: 'source-image', fileName: 'mcp-upload-original.png',
+      filePath: 'D:/data/original.png', imageUrl: 'asset://localhost/D:/data/original.png',
+      prompt: '保留角色提示词',
+    });
+    useAppStore.setState({ nodes: [media, useAppStore.getState().nodes[1]] });
+    const beforeNodes = useAppStore.getState().nodes;
+    const beforeEdges = useAppStore.getState().edges;
+    const commit = vi.spyOn(useAppStore.getState(), 'commitToHistory');
+    const result = await getAgentTool('canvas_update_nodes')!.execute(context(), {
+      nodeIds: ['n1', 'n2'], label: '  角色｜小满｜白底全身  ',
+    });
+    expect(result.status).toBe('success');
+    const [renamedMedia, renamedText] = useAppStore.getState().nodes;
+    expect(renamedMedia.data).toEqual({
+      ...media.data, label: '角色｜小满｜白底全身', fileName: '角色｜小满｜白底全身',
+    });
+    expect(renamedText.data.label).toBe('角色｜小满｜白底全身');
+    expect(renamedText.data.fileName).toBeUndefined();
+    expect(useAppStore.getState().edges).toEqual(beforeEdges);
+    const queried = await getAgentTool('canvas_query')!.execute(context(), { detail: true });
+    expect(JSON.parse(queried.modelContent).nodes.map((item: { displayLabel: string }) => item.displayLabel))
+      .toEqual(['角色｜小满｜白底全身', '角色｜小满｜白底全身']);
+    expect(queried.modelContent).not.toContain('D:/data');
+    expect(commit).toHaveBeenCalledTimes(1);
+    expect(useAppStore.getState().history[0].nodes).toEqual(beforeNodes);
+  });
+
+  it('preserves a media display alias when editing only its prompt', async () => {
+    useAppStore.setState({ nodes: [node('n1', { fileName: 'original.png' })] });
+    const result = await getAgentTool('canvas_update_nodes')!.execute(context(), {
+      nodeIds: ['n1'], prompt: 'new prompt',
+    });
+    expect(result.status).toBe('success');
+    expect(useAppStore.getState().nodes[0].data.fileName).toBe('original.png');
+  });
+
   it('registers advanced canvas operations with closed schemas', () => {
     const ids = [
       'canvas_duplicate_node',
