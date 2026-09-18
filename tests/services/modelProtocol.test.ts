@@ -1230,7 +1230,7 @@ describe('declarative model execution protocol', () => {
     const preview = previewModelProtocolRequest(options);
     expect(preview.body).toEqual({ 'image[]': [
       { $file: '[data URL image/png, 5 bytes]', filename: 'reference.png' },
-      { $file: '[data URL image/jpeg, 5 bytes]', filename: 'reference.png' },
+      { $file: '[data URL image/jpeg, 5 bytes]', filename: 'reference.jpg' },
     ] });
     expect(JSON.stringify(preview)).not.toContain('aGVsbG8=');
     expect(JSON.stringify(preview)).not.toContain('d29ybGQ=');

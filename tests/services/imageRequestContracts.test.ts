@@ -1,0 +1,76 @@
+import { describe, expect, it } from 'vitest';
+import { resolveBuiltInImageRequestContract, validateBuiltInImageResponse } from '../../src/services/ai/imageRequestContracts';
+import { getProviderDefinition } from '../../src/services/ai/providerCatalogService';
+import { previewModelProtocolRequest, validateModelExecutionProtocol } from '../../src/services/ai/modelProtocol';
+
+function contractFor(model: string, size = '2K', ratio = '16:9') {
+  const contract = resolveBuiltInImageRequestContract(getProviderDefinition('grsai'), model, size, ratio);
+  if (contract?.kind !== 'protocol') throw new Error('Expected a documented GRSAI protocol');
+  return contract;
+}
+
+describe('built-in image request contracts', () => {
+  it('reuses the CCC catalog contract without guessing from a GPT model name', () => {
+    expect(resolveBuiltInImageRequestContract(getProviderDefinition('cccapi'), 'gpt-image-2.5-sunburst', '2K', '16:9'))
+      .toEqual({ kind: 'standard', imageReferenceRequestMode: 'edits-multipart' });
+    for (const provider of ['custom-openai', 'google', 'xai']) {
+      expect(resolveBuiltInImageRequestContract(getProviderDefinition(provider), 'gpt-image-2.5-sunburst', '2K', '16:9')).toBeUndefined();
+    }
+    expect(resolveBuiltInImageRequestContract(getProviderDefinition('cccapi'), 'vendor-image', '2K', '16:9')).toBeUndefined();
+    expect(resolveBuiltInImageRequestContract(getProviderDefinition('grsai'), 'undocumented-image', '2K', '16:9')).toBeUndefined();
+  });
+
+  it('maps Nano Banana references and sizes to native JSON fields through the shared protocol engine', () => {
+    const { protocol } = contractFor('nano-banana-2');
+    expect(validateModelExecutionProtocol(protocol)).toEqual([]);
+    const request = previewModelProtocolRequest({
+      baseUrl: 'https://gateway.example/v1', protocol,
+      variables: { model: 'nano-banana-2', prompt: '合影', imageUrls: ['https://cdn.example/a.png', 'https://cdn.example/b.png'] },
+    });
+    expect(request.relativeUrl).toBe('/v1/api/generate');
+    expect(request.body).toEqual({
+      model: 'nano-banana-2', prompt: '合影', images: ['https://cdn.example/a.png', 'https://cdn.example/b.png'],
+      aspectRatio: '16:9', imageSize: '2K', replyType: 'json',
+    });
+  });
+
+  it.each(['gpt-image-2', 'gpt-image-2.5'])('keeps the documented 1K ratio contract for %s', (model) => {
+    const contract = contractFor(model, '4K');
+    expect(contract.protocol.submit.body).toMatchObject({ aspectRatio: '16:9', quality: 'auto' });
+    expect(contract.dimensions).toEqual({ width: 1672, height: 941 });
+    expect(contract.protocol.submit.body).not.toHaveProperty('imageSize');
+    expect(contract.protocol.submit.body).not.toHaveProperty('resolution');
+  });
+
+  it.each(['gpt-image-2-vip', 'gpt-image-2.5-flare', 'gpt-image-2.5-sunburst'])('uses documented pixel sizes for %s', (model) => {
+    const contract = contractFor(model);
+    expect(contract.protocol.submit.body).toMatchObject({ aspectRatio: '2048x1152', quality: 'medium' });
+    expect(contract.dimensions).toEqual({ width: 2048, height: 1152 });
+    expect(validateModelExecutionProtocol(contract.protocol)).toEqual([]);
+  });
+
+  it.each(['1:1', '16:9', '9:16', '4:3', '3:4', '3:2', '2:3', '5:4', '4:5', '21:9', '9:21', '2:1', '1:2'])(
+    'keeps 4K GPT pixels within the documented limits (%s)', (ratio) => {
+      const { width, height } = contractFor('gpt-image-2-vip', '4K', ratio).dimensions;
+      expect(Math.max(width, height)).toBeLessThanOrEqual(3840);
+      expect(width % 16).toBe(0);
+      expect(height % 16).toBe(0);
+      expect(width * height).toBeLessThanOrEqual(8294400);
+      expect(width * height).toBeGreaterThanOrEqual(655360);
+    },
+  );
+
+  it('rejects unsupported parameters before requesting a generation', () => {
+    expect(() => contractFor('nano-banana-pro', '8K')).toThrow('不支持图片档位');
+    expect(() => contractFor('nano-banana-pro', '2K', '1:8')).toThrow('不支持比例');
+    expect(contractFor('nano-banana-2', '2K', '1:8').protocol.submit.body).toMatchObject({ aspectRatio: '1:8' });
+    expect(contractFor('nano-banana-2', '720p').protocol.submit.body).toMatchObject({ imageSize: '1K' });
+    expect(contractFor('gpt-image-2-vip', '4K', 'auto').protocol.submit.body).toMatchObject({ aspectRatio: 'auto' });
+  });
+
+  it('does not treat failed or unfinished task responses as generated images', () => {
+    expect(() => validateBuiltInImageResponse({ status: 'failed', error: 'reference rejected' })).toThrow('reference rejected');
+    expect(() => validateBuiltInImageResponse({ status: 'running', id: 'task-id' })).toThrow('不要重复提交');
+    expect(() => validateBuiltInImageResponse({ status: 'succeeded' })).not.toThrow();
+  });
+});

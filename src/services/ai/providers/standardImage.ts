@@ -86,8 +86,7 @@ async function buildImageEditsBody(
   for (const [index, url] of imageUrls.entries()) {
     signal?.throwIfAborted();
     const file = await loadReferenceImage(url, index, signal);
-    const blob = isOpenAIGptImageModel(params.modelName)
-      ? await prepareReferenceImageUpload(file.blob, signal) : file.blob;
+    const blob = await prepareReferenceImageUpload(file.blob, signal);
     const filename = blob === file.blob ? file.filename : `reference-${index + 1}.jpg`;
     formData.append('image[]', blob, filename);
   }

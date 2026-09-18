@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { prepareReferenceImageUpload } from '../../src/services/ai/referenceImageUpload';
+import { mapReferenceImagesInOrder, prepareReferenceImageUpload } from '../../src/services/ai/referenceImageUpload';
 
 function png(color = 2, extra?: 'tRNS' | 'acTL', width = 3648): Blob {
   const chunk = (name: string, data: Uint8Array) => {
@@ -24,15 +24,17 @@ const close = vi.fn();
 const decode = vi.fn();
 const draw = vi.fn();
 const encode = vi.fn();
+const readPixels = vi.fn();
 const sizes: number[][] = [];
 beforeEach(() => {
   vi.clearAllMocks(); sizes.length = 0;
   decode.mockResolvedValue({ width: 3648, height: 2048, close });
   encode.mockResolvedValue(new Blob(['jpeg'], { type: 'image/jpeg' }));
+  readPixels.mockImplementation((_x, _y, width, height) => ({ data: new Uint8ClampedArray(width * height * 4).fill(255) }));
   vi.stubGlobal('createImageBitmap', decode);
   vi.stubGlobal('OffscreenCanvas', class {
     constructor(width: number, height: number) { sizes.push([width, height]); }
-    getContext() { return { drawImage: draw }; }
+    getContext() { return { drawImage: draw, getImageData: readPixels }; }
     convertToBlob = encode;
   });
 });
@@ -50,12 +52,39 @@ describe('临时参考图上传副本', () => {
     expect(original.type).toBe('image/png');
   });
 
-  it.each([png(6), png(2, 'tRNS'), png(2, 'acTL'), png(3), png(2, undefined, 20000)])(
-    '透明、动画、索引色及超大图片保持原字节', async (original) => {
+  it.each([png(2, 'acTL'), png(3), png(2, undefined, 20000)])(
+    '动画、索引色及超大图片保持原字节', async (original) => {
       expect(await prepareReferenceImageUpload(original)).toBe(original);
       expect(decode).not.toHaveBeenCalled();
     },
   );
+
+  it.each([png(6), png(2, 'tRNS')])('声明 alpha 但像素全不透明时仍可压缩', async (original) => {
+    expect((await prepareReferenceImageUpload(original)).type).toBe('image/jpeg');
+    expect(readPixels).toHaveBeenCalledTimes(16);
+    expect(readPixels.mock.calls.every((args) => args[3] <= 128)).toBe(true);
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it.each([0, 254])('保留任何真实透明像素，包括 alpha=%s', async (alpha) => {
+    readPixels.mockImplementation((_x, y, width, height) => {
+      const data = new Uint8ClampedArray(width * height * 4).fill(255);
+      if (y === 1920) data[data.length - 1] = alpha;
+      return { data };
+    });
+    const original = png(6);
+    expect(await prepareReferenceImageUpload(original)).toBe(original);
+    expect(encode).not.toHaveBeenCalled();
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it('alpha 检测失败时保留原图', async () => {
+    readPixels.mockImplementationOnce(() => { throw new Error('unavailable'); });
+    const original = png(6);
+    expect(await prepareReferenceImageUpload(original)).toBe(original);
+    expect(encode).not.toHaveBeenCalled();
+    expect(close).toHaveBeenCalledOnce();
+  });
 
   it('小图、JPEG 和不支持解码的运行时保持原字节', async () => {
     const small = new Blob(['png'], { type: 'image/png' });
@@ -83,6 +112,68 @@ describe('临时参考图上传副本', () => {
       return new Blob(['jpeg'], { type: 'image/jpeg' });
     });
     await expect(prepareReferenceImageUpload(png(), controller.signal)).rejects.toMatchObject({ name: 'AbortError' });
-    expect(close).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(close).toHaveBeenCalledOnce());
+  });
+
+  it('跨调用共用一个解码槽，排队取消不解码，也不抢占仍在编码的槽', async () => {
+    let release!: (blob: Blob) => void;
+    encode.mockImplementationOnce(() => new Promise<Blob>((resolve) => { release = resolve; }));
+    const first = prepareReferenceImageUpload(png());
+    await vi.waitFor(() => expect(encode).toHaveBeenCalledOnce());
+    const controller = new AbortController();
+    const cancelled = prepareReferenceImageUpload(png(), controller.signal);
+    const stopped = expect(cancelled).rejects.toMatchObject({ name: 'AbortError' });
+    const third = prepareReferenceImageUpload(png());
+    controller.abort();
+    await stopped;
+    expect(decode).toHaveBeenCalledOnce();
+    release(new Blob(['first'], { type: 'image/jpeg' }));
+    expect(await (await first).text()).toBe('first');
+    expect(await (await third).text()).toBe('jpeg');
+    expect(decode).toHaveBeenCalledTimes(2);
+    expect(close).toHaveBeenCalledTimes(2);
+  });
+
+  it('双并发乱序完成仍保留每个引用的位置和重复项', async () => {
+    const releases: Array<() => void> = [];
+    const started: number[] = [];
+    const pending = mapReferenceImagesInOrder(['A', 'B', 'A'], async (value, index) => {
+      started.push(index);
+      await new Promise<void>((resolve) => { releases[index] = resolve; });
+      return value;
+    });
+    expect(started).toEqual([0, 1]);
+    releases[1]();
+    await vi.waitFor(() => expect(started).toEqual([0, 1, 2]));
+    releases[2](); releases[0]();
+    expect(await pending).toEqual(['A', 'B', 'A']);
+  });
+
+  it('取消正在编码的图片后，后续图片等资源真正释放才解码', async () => {
+    let release!: (blob: Blob) => void;
+    encode.mockImplementationOnce(() => new Promise<Blob>((resolve) => { release = resolve; }));
+    const controller = new AbortController();
+    const active = prepareReferenceImageUpload(png(), controller.signal);
+    await vi.waitFor(() => expect(encode).toHaveBeenCalledOnce());
+    const stopped = expect(active).rejects.toMatchObject({ name: 'AbortError' });
+    controller.abort();
+    await stopped;
+    const next = prepareReferenceImageUpload(png());
+    await Promise.resolve();
+    expect(decode).toHaveBeenCalledOnce();
+    expect(close).not.toHaveBeenCalled();
+    release(new Blob(['cancelled'], { type: 'image/jpeg' }));
+    expect(await (await next).text()).toBe('jpeg');
+    expect(close).toHaveBeenCalledTimes(2);
+  });
+
+  it('失败或取消时不领取后续图片，不返回删掉失败项的数组', async () => {
+    const prepare = vi.fn(async (value: string) => { if (value === 'A') throw new Error('读取失败'); return value; });
+    await expect(mapReferenceImagesInOrder(['A', 'B', 'C'], prepare)).rejects.toThrow('读取失败');
+    expect(prepare).toHaveBeenCalledTimes(2);
+    const controller = new AbortController();
+    const cancel = vi.fn(async () => { controller.abort(); return 'image'; });
+    await expect(mapReferenceImagesInOrder(['A', 'B', 'C'], cancel, controller.signal)).rejects.toMatchObject({ name: 'AbortError' });
+    expect(cancel).toHaveBeenCalledOnce();
   });
 });

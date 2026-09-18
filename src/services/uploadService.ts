@@ -24,6 +24,7 @@ import {
   type MediaDataUrlKind,
 } from './fileService';
 import { invoke } from '@tauri-apps/api/core';
+import { MIN_REFERENCE_REENCODE_BYTES, prepareReferenceImageUpload } from './ai/referenceImageUpload';
 
 const DEFAULT_UPLOAD_BASE = APIMART_BASE_URL;
 
@@ -294,6 +295,23 @@ async function dataUrlToBlob(
   return { blob: new Blob(parts, { type: mime }), ext: mime.split('/')[1] || 'png' };
 }
 
+/** 内联图片也复用上传压缩；分块编解码，未转换时保留原 data URL。 */
+export async function prepareReferenceImageDataUrl(dataUrl: string, signal?: AbortSignal): Promise<string> {
+  signal?.throwIfAborted();
+  if (!/^data:image\/png(?:;[^,]*)?;base64,/i.test(dataUrl)
+    || dataUrl.length <= MIN_REFERENCE_REENCODE_BYTES * 4 / 3) return dataUrl;
+  const bytesBeforeCompression = await assertMediaDataUrlWithinLimitAsync(dataUrl, 'image', '参考图', signal);
+  if (bytesBeforeCompression <= MIN_REFERENCE_REENCODE_BYTES
+    || typeof createImageBitmap !== 'function' || typeof OffscreenCanvas !== 'function') return dataUrl;
+  const { blob } = await dataUrlToBlob(dataUrl, signal);
+  const prepared = await prepareReferenceImageUpload(blob, signal);
+  if (prepared === blob) return dataUrl;
+  const bytes = new Uint8Array(await prepared.arrayBuffer());
+  const encoded = await bytePartsToBase64Async([bytes], signal);
+  signal?.throwIfAborted();
+  return `data:${prepared.type};base64,${encoded}`;
+}
+
 /** fetch URL → Blob（Tauri asset protocol 的本地 URL 可通过 fetch 获取） */
 async function fetchUrlToBlob(
   url: string,
@@ -325,9 +343,11 @@ async function urlToBlob(
   label = mediaKindLabel(kind),
   signal?: AbortSignal,
 ): Promise<{ blob: Blob; ext: string }> {
-  return isMediaDataUrl(url)
+  const source = await (isMediaDataUrl(url)
     ? dataUrlToBlob(url, signal)
-    : fetchUrlToBlob(url, kind, label, signal);
+    : fetchUrlToBlob(url, kind, label, signal));
+  const blob = kind === 'image' ? await prepareReferenceImageUpload(source.blob, signal) : source.blob;
+  return blob === source.blob ? source : { blob, ext: 'jpg' };
 }
 
 // ── APIMart 上传 ──
@@ -616,7 +636,7 @@ export async function resolveMediaReferenceUrl(
       signal,
     );
     consumeMediaDataUrlBudgetBytes(dataUrlBudget, bytes);
-    return url;
+    return kind === 'image' ? prepareReferenceImageDataUrl(url, signal) : url;
   }
 
   if (mode === 'dataUrl') {
@@ -629,7 +649,7 @@ export async function resolveMediaReferenceUrl(
     if (!dataUrl) {
       throw new Error(`无法读取本地${kind === 'video' ? '视频' : kind === 'audio' ? '音频' : '图片'}参考，请重新导入文件`);
     }
-    return dataUrl;
+    return kind === 'image' ? prepareReferenceImageDataUrl(dataUrl, signal) : dataUrl;
   }
 
   // APIMart 的 /uploads/images 只接受图片；uploadToRemote 会让视频/音频走通用图床，
