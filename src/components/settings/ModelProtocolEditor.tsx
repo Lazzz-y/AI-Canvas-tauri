@@ -43,6 +43,7 @@ import {
 import PopupCloseButton from '../shared/PopupCloseButton';
 import { describeProtocolTestRunBlocker, type ProtocolChoice } from './modelProtocolTestRun';
 import { useT } from '../../i18n';
+import { copyText } from '../../services/clipboardService';
 
 type EditorView = 'form' | 'json';
 type JsonFieldKind = 'object' | 'value';
@@ -316,6 +317,8 @@ export default function ModelProtocolEditor({
   const [protocol, setProtocol] = useState<NormalizedModelExecutionProtocol>(initialProtocol);
   const [view, setView] = useState<EditorView>('form');
   const [protocolJson, setProtocolJson] = useState(() => serializeJson(initialProtocol));
+  const [copyStatus, setCopyStatus] = useState<'idle' | 'copying' | 'success' | 'error'>('idle');
+  const protocolHelpRef = useRef<HTMLElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [formRevision, setFormRevision] = useState(0);
   const [previewVariablesJson, setPreviewVariablesJson] = useState(
@@ -1417,7 +1420,53 @@ export default function ModelProtocolEditor({
             </div>
           </div>
 
-          <label htmlFor={protocolJsonId}>{t('声明式协议 JSON')}</label>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <label htmlFor={protocolJsonId}>{t('声明式协议 JSON')}</label>
+            <div className="flex items-center gap-2">
+              <span role="status" className="text-xs text-canvas-text-secondary">
+                {copyStatus === 'success' ? t('已复制') : copyStatus === 'error' ? t('复制失败，请重试') : ''}
+              </span>
+              <button
+                type="button"
+                className="ui-btn ui-btn--sm"
+                disabled={copyStatus === 'copying'}
+                onClick={async () => {
+                  setCopyStatus('copying');
+                  const instructions = [
+                    '请根据我随后提供的需求和厂商 API 文档，修改下面的 AI Canvas 声明式调用协议。',
+                    `模型：${model.name}；类别：${model.category}`,
+                    '',
+                    '## 修改要求',
+                    '- 返回完整、可直接替换的 JSON，并简要说明修改原因。',
+                    '- 不要编造接口路径、参考素材字段、模型能力或响应结构；信息不足时指出缺少的文档。',
+                    '- 保留与需求无关的现有配置；不要把 API Key、令牌或本地文件路径写入 JSON。鉴权由应用注入。',
+                    '- 仅使用下列当前类别可用的变量；保留双花括号模板，不要替换成示例值。',
+                    '- 多参考素材的 $forEach 仅用于 JSON body 数组元素，格式为 {"$forEach":"{{referenceImageUrls}}","$value":{"image_url":{"url":"{{referenceImageUrls}}"}}}；字段形状必须以厂商文档为准。根变量仅允许 referenceImageUrls/referenceVideoUrls/referenceAudioUrls，并且必须属于下列可用变量。',
+                    '- 可选数组元素使用 {"$whenPresent":"{{imageUrls.0}}","$value":{...}}；条件必须是完整变量模板，禁止表达式或动态键。',
+                    '- 异步任务通过 response.taskIdPath 提取任务 ID，在 poll 中使用 {{submit.task_id}}，不要写死任务编号。',
+                    '',
+                    '## 可用参数与变量说明',
+                    '变量可用于 path、query、headers 或 body，调用时替换为节点中的实际值。',
+                    ...availableVariables.map((variable) => `- {{${variable}}}：${getVariableTooltip(variable)}`),
+                    `- {{submit.task_id}}：${SUBMIT_TASK_ID_DESCRIPTION}`,
+                    '',
+                    '## 配置说明',
+                    protocolHelpRef.current?.innerText ?? '',
+                    '',
+                    '## 当前 JSON 草稿（可能尚未通过校验，请检查）',
+                    '```json',
+                    protocolJson,
+                    '```',
+                  ].join('\n');
+                  const safeText = apiKey ? instructions.split(apiKey).join('[REDACTED]') : instructions;
+                  setCopyStatus(await copyText(safeText) ? 'success' : 'error');
+                }}
+              >
+                <Icon icon="lucide:copy" width="14" />
+                {t('复制给AI修改')}
+              </button>
+            </div>
+          </div>
           <textarea
             id={protocolJsonId}
             value={protocolJson}
@@ -1427,7 +1476,7 @@ export default function ModelProtocolEditor({
             onChange={(event) => updateCustomJson(event.target.value)}
           />
 
-          <aside id={protocolJsonHelpId} className="provider-protocol-json-help">
+          <aside ref={protocolHelpRef} id={protocolJsonHelpId} className="provider-protocol-json-help">
             <div className="provider-protocol-json-guide-title">
               <Icon icon="mdi:information-outline" width="13" />
               <strong>{t('配置说明')}</strong>
