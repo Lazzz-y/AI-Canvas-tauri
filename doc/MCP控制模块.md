@@ -75,3 +75,12 @@ MCP 设置中的「工具发现方式」默认按需加载，对应可选配置 
 - 历史：[本机 MCP](./history/2026-09-07-跨模块实施记录归档.md#mcp-local)、[全面控制](./history/2026-09-07-跨模块实施记录归档.md#mcp-full)、[HTTP 传输](./history/2026-09-07-跨模块实施记录归档.md#mcp-http)。
 
 返回[文档导航](./文档导航.md)。
+
+
+## ComfyUI 默认工作流输入
+
+`workflow_create` / `workflow_update` 支持 `defaultNodes`，可包含 `prompt`、`image`、`video`、`audio`，值为对应 IO 节点 ID。例如 `{"defaultNodes":{"prompt":"19"}}`。默认目标必须存在于执行图且与 IO 类型一致；创建未提供 IO 清单时从执行 JSON 识别。
+
+更新时该对象整体替换，省略则保留，传 `{}` 清空。需要保留其他类型时先 `workflow_get` 再合并后提交。改图导致既有默认目标失效时须同时修正或清空默认值；失败不会写入 Store。此字段仅适用于 ComfyUI，不能改写 RunningHub 或 workflow-api 的参数定义。
+
+默认媒体输入是优先槽而非启用上传的必要条件，所有 ComfyUI 工作流的普通 @ 图片、视频、音频都会按同类引用顺序自动匹配剩余上传槽。规则见 [ComfyUI工作流集成说明](./ComfyUI工作流集成说明.md#6-默认节点-defaultnodes)。

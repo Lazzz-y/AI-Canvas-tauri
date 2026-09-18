@@ -107,7 +107,7 @@ describe('ComfyUI audio IO injection', () => {
     expect(submittedWorkflow()['1'].inputs.audio).toBe('upload_123.mp3');
   });
 
-  it('prefers an explicitly assigned audio input over the connected fallback', async () => {
+  it('deduplicates an explicit audio also present in ordinary references', async () => {
     registerWorkflow(workflowJson(), [{ nodeId: '1', title: '参考音色', type: 'audio' }]);
 
     await executeComfyUIAudioGenerate(
@@ -119,7 +119,7 @@ describe('ComfyUI audio IO injection', () => {
         workflowInputs: { '1': 'data:audio/wav;base64,QUJD' },
       },
       undefined,
-      ['data:audio/mpeg;base64,RkFMTEJBQ0s='],
+      ['data:audio/wav;base64,QUJD'],
     );
 
     const uploadCalls = mocks.corsSafeFetch.mock.calls.filter(
@@ -133,26 +133,20 @@ describe('ComfyUI audio IO injection', () => {
     expect(submittedWorkflow()['1'].inputs.audio).toBe('upload_123.mp3');
   });
 
-  it('skips path-based audio nodes instead of writing an input-dir filename', async () => {
+  it('rejects audio references when only host-path inputs exist', async () => {
     registerWorkflow(
       workflowJson({ audio_file: '/host/path/voice.wav' }),
       [{ nodeId: '1', title: 'VHS 路径音频', type: 'audio' }],
     );
 
-    await executeComfyUIAudioGenerate(
+    await expect(executeComfyUIAudioGenerate(
       { prompt: '台词', model: 'wf', provider: 'comfyui', workflowId: 'wf-1' },
-      undefined,
-      ['data:audio/mpeg;base64,QUJD'],
-    );
-
-    expect(mocks.corsSafeFetch).not.toHaveBeenCalledWith(
-      'http://comfy.test:8188/upload/image',
-      expect.anything(),
-    );
-    expect(submittedWorkflow()['1'].inputs).toEqual({ audio_file: '/host/path/voice.wav' });
+      undefined, ['data:audio/mpeg;base64,QUJD'],
+    )).rejects.toThrow('音频上传槽不足');
+    expect(mocks.corsSafeFetch).not.toHaveBeenCalled();
   });
 
-  it('leaves workflows without an audio IO node untouched', async () => {
+  it('infers audio upload IO from API JSON when the saved IO list is absent', async () => {
     registerWorkflow(workflowJson(), []);
 
     await executeComfyUIAudioGenerate(
@@ -161,6 +155,13 @@ describe('ComfyUI audio IO injection', () => {
       ['data:audio/mpeg;base64,QUJD'],
     );
 
-    expect(submittedWorkflow()['1'].inputs.audio).toBe('placeholder.mp3');
+    expect(submittedWorkflow()['1'].inputs.audio).toBe('upload_123.mp3');
   });
+});
+
+it('无音频加载槽时不静默丢弃音频', async () => {
+  registerWorkflow(JSON.stringify({ '2': { class_type: 'SaveAudio', inputs: {} } }), []);
+  await expect(executeComfyUIAudioGenerate({ prompt: '台词', model: 'wf', provider: 'comfyui', workflowId: 'wf-1' }, undefined,
+    ['data:audio/wav;base64,YQ=='])).rejects.toThrow('音频上传槽不足');
+  expect(mocks.corsSafeFetch).not.toHaveBeenCalled();
 });

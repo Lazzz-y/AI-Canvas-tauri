@@ -307,7 +307,7 @@ describe('内置 AuK 音频工作流', () => {
     await executeComfyUIAudioGenerate({
       prompt: '台词', model: 'wf', provider: 'comfyui', workflowId: workflow.id,
       workflowInputs: { '7': explicit },
-    }, undefined, ['data:audio/wav;base64,QVVLLU9USEVS']);
+    }, undefined, [explicit]);
     const uploads = mocks.corsSafeFetch.mock.calls.filter(([url]) => String(url).endsWith('/upload/image'));
     expect(uploads).toHaveLength(1);
     const body = uploads[0][1].body as FormData;
@@ -453,7 +453,7 @@ describe('内置 Qwen3 音频工作流', () => {
     install(id);
     const explicitReference = `data:audio/wav;base64,${btoa(id)}`;
     await executeComfyUIAudioGenerate({ prompt: '默认台词', model: 'wf', provider: 'comfyui', workflowId: id,
-      workflowInputs: { '3': '显式新台词', '1': explicitReference } }, undefined, ['data:audio/wav;base64,T1RIRVI=']);
+      workflowInputs: { '3': '显式新台词', '1': explicitReference } }, undefined, [explicitReference]);
     const graph = submittedWorkflow();
     expect(graph['3'].inputs.target_text).toBe('显式新台词');
     expect(graph['3'].inputs.ref_text).toEqual(['2', 0]);

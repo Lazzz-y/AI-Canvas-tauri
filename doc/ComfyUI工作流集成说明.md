@@ -154,13 +154,15 @@ Qwen 验证入口为 `builtinWorkflows.test.ts`、`audioSpeechSettings.test.ts` 
 
 ## 6. 默认节点 defaultNodes
 
-工作流管理面板里点节点徽章可以把它设为该类型的默认节点（徽章变 ★）。语义是：
+工作流管理面板里点节点徽章可以把它设为该类型的默认节点（徽章变 ★）。
 
-> 用户**没有** `@` 该类型的任何节点时，提示词框里的同类内容自动送进这个节点。
+- 提示词：未显式指定 prompt IO 时写默认提示词节点；显式填写 prompt IO 时保持原来的逐节点赋值规则。
+- 图片、视频、音频：直接在提示词里 @ 素材即可。同类按引用先后依次填写上传型 IO；有默认节点时优先填默认节点，其余按 IO 列表顺序；无默认设置也会自动匹配。
+- 显式赋值的媒体槽优先保留。同一素材也出现在普通引用时不重复分配；其余普通引用继续填未显式赋值的槽。
+- 无上传型输入或引用数量超过剩余槽数时，在上传和提交前报错，不静默丢弃素材。仅接受主机路径或已连线的输入不占用引用次序。
+- 三种输出工作流（图片、视频、音频）均传递三类参考。ComfyUI 直接 @ 的引用优先于连线及参考面板；图片工作流的项目风格母图追加在直接引用后，并写明实际编号。RunningHub 和 workflow-api 沿用各自协议。
 
-优先级规则在 `submitComfyUIWorkflow` 里（[comfyWorkflowService.ts](../src/services/comfyWorkflowService.ts)）：**某个类型只要被 `@` 过一次，该类型就完全按用户的赋值走，默认节点不再介入。** 类型之间互不影响 —— `@` 了提示词节点，图片的默认节点照常生效。
-
-在 ComfyUI 里改完结构存回来时，指向已不存在节点的默认设置会被 `pruneDefaultNodes` 丢掉。
+在 ComfyUI 里改完结构存回来时，指向已不存在节点的默认设置会被 `pruneDefaultNodes` 丢掉。MCP 可通过 `workflow_create` / `workflow_update` 的 `defaultNodes` 设置默认输入，详见 [MCP控制模块](./MCP控制模块.md)。
 
 ## 7. 执行链路
 
@@ -169,9 +171,9 @@ Qwen 验证入口为 `builtinWorkflows.test.ts`、`audioSpeechSettings.test.ts` 
 1. **预存待续任务** —— 在提交之前写 `savePendingTask`（`submitted: false`），拿到 `prompt_id` 后才具备续查条件；
 2. **解析工作流** —— 从 store 取 `fileContent` 并 `JSON.parse`，得到可改的 `workflowObj`；
 3. **注入提示词** → `injectPromptsIntoWorkflow`；
-4. **注入显式图片/视频** → `injectExplicitMediaIntoWorkflow`（上传后写文件名）；
-5. **注入默认媒体** → `injectDefaultMediaIntoWorkflow`（图片/视频）；
-6. **注入音频** → `injectAudioIntoWorkflow`；
+4. **规划三类媒体槽位** → `injectMediaIntoWorkflow`，验证显式引用、可用槽及溢出；
+5. **上传并回填** → 显式槽优先、普通素材顺序分配，保留上传子目录；
+6. **清理空可选参考支路**，保留必填用途和原模板；
 7. **查节点声明** → `resolveVideoParamSpecs`，只为需要校验的字段问 `/object_info/{class}`；
 8. **注入视频参数** → `injectVideoParamsIntoWorkflow`；
 9. **提交** → `POST /prompt`，拿到 `prompt_id` 后回填待续任务（`submitted: true`）；
@@ -204,9 +206,9 @@ Qwen 验证入口为 `builtinWorkflows.test.ts`、`audioSpeechSettings.test.ts` 
 | 视频 | `video`，没有就试 `file`（核心 `LoadVideo` 用的是 `file`） |
 | 音频 | `audio`（并同步 `upload` 字段） |
 
-**默认媒体注入会跳过不接受上传文件名的节点**（例如音频只有 `audio_file`，视频既没有字符串 `video` 也没有字符串 `file`）。显式 `@` 图片/视频无法解析素材或找不到可写字段时，在上传和提交前报错。显式视频与图片复用上传通道，回填时包含返回的子目录；未被指定的同类 IO 保持原值。
+上传输入支持已有的字符串或 null/undefined 空值，保留连线。显式引用未解析或指定不可上传输入时先报错；主机路径加载节点在自动分配时跳过。三类媒体统一保留上传返回的子目录。
 
-`injectDefaultMediaIntoWorkflow` 还会处理 autogrow 可选参考位：ComfyUI 的可选槽形如 `ref_images.ref_image_1`（键名带点号），用户这次带的参考图不够填满时，没轮到的槽会连同下游链路一起摘掉，避免残留的示例文件名让工作流报错。只有整条链路终点全是可选槽才摘，否则一律保留。
+`injectMediaIntoWorkflow` 在用户带来普通参考媒体时，也会尝试摘掉未填的可选参考支路，避免使用模板旧素材。只有终点均为可选输入才清理；必填用途保留。纯显式赋值保持其余非空输入；完全不传素材时也保留模板已配置的文件。
 
 提交前还会统一检查图片、视频和音频上传节点。导入工作流把未选择文件保存为 `null` 或空字符串时，若该节点只连接到 autogrow 槽或 `/object_info` 声明的 `optional` 输入，会自动移除空连接与无用支路；必填连接、独立终点和无法确认的结构保持不变，避免为了绕过空素材而破坏工作流主体。这项清理适用于所有本地 ComfyUI 工作流，不依赖特定自定义节点名称。
 
@@ -389,7 +391,7 @@ AI Canvas 提交器和 ComfyUI 自带运行按钮是两个入口。桥接在 Com
 `builtin-minimax-h3-pdd-r2v` 对应 **MiniMax H3 PDD 自由参考（图片·视频·音频可选）**，资源为 `minimax-h3-pdd-r2v.json`。采用 Ref2VA INT8 主模型、配套 PDD 8-step、Qwen3-VL 32B 编码器以及视频/音频 VAE，生成画面和音轨。
 
 - 34 个执行节点、16 个 IO：提示词19、图片101–109、视频201–203、音频301–303。15 个媒体输入均为空文件名，无示例素材；未提供的可选支路按既有提交逻辑移除。
-- 默认提示词19、图片101、视频201。音频不设单一默认节点，以兼容现有执行器依次填充三个音频槽；显式指定工作流素材输入仍可使用。此默认配置仅针对本内置项，不能视为“所有工作流免设默认自动匹配”已实现。
+- 默认提示词19、图片101、视频201。音频沿 IO 顺序填充三个槽；显式指定工作流素材输入仍可使用。所有 ComfyUI 工作流均可在没有默认媒体节点时自动分配直接引用。
 - 图片0–9张、视频0–3段、音频0–3段，三类总计≤12；视频与音频每段2–15秒，各类型合计≤15秒。当前这些仍是素材准备要求，未增加自动时长或混合总数校验。
 - API 图导入编辑，不附加界面布局；视频只接画面参考，独立音频槽接参考声音。保持24fps、9:16模板比例和秒数到帧数的既有换算。
 - 通过内置 ID 增量播种，原15项与已编辑/已删除记录不被覆盖。此前通过 MCP 导入的同名用户工作流保留，与内置项是独立记录。
@@ -397,3 +399,7 @@ AI Canvas 提交器和 ComfyUI 自带运行按钮是两个入口。桥接在 Com
 验证入口：`builtinWorkflows.test.ts` 覆盖从15项升级、用户数据保留、空媒体模板、五份模型、零输入、每类数量上限、混合12份、默认提示词、三音频排序、跳空槽与提交副本不修改源图；`comfyBridgeSaveIdentity.test.ts` 覆盖编辑窗口直接运行的空参考清理。均为模拟提交验证，不代表真实推理质量或时长限制已自动验证。
 
 本项接入检查：243 项相关测试、应用和测试类型检查、定向 ESLint、生产前端构建通过；产物包含内置注册与 JSON 资源。未执行真实生成，未更新或重启已安装应用。
+
+统一媒体映射验证入口：`comfyDefaultIONodes.test.ts`、`comfyWorkflowAudioIO.test.ts`、`comfyMediaRouting.test.ts`、`generateVideo.test.ts`，覆盖无默认、多音频、三类型顺序、显式去重、跨类型入口、主机路径跳过和上传前溢出拒绝。模拟提交不代表真实模型生成效果已验收。
+
+统一映射接入检查：限定正式 tests 目录的28个相关测试文件共807项通过，应用/测试类型检查、定向ESLint和生产前端构建通过。未提交真实生成，运行中的安装版需更新后才使用此逻辑。

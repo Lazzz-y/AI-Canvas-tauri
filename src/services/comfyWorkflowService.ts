@@ -4,6 +4,7 @@
  * Handles workflow JSON mutation, image upload, submission, and result polling.
  */
 import { applyAudioSpeechSettings, audioSpeechModeIssue, resolveAudioSpeechWorkflow, stripAudioSpeechReferences } from './ai/audioSpeechSettings';
+import { extractComfyUIIONodes } from './comfyUIWindowService';
 import { isRemoteMediaUrl } from '../utils/mediaUrl';
 import { useAppStore } from '../store/useAppStore';
 import { comfyBaseUrlFor } from './comfyServers';
@@ -460,111 +461,70 @@ async function uploadMediaToComfyUI(
   return uploadResult;
 }
 
-/** 将显式指定的图片/视频上传并注入对应 IO 节点。 */
-async function injectExplicitMediaIntoWorkflow(
-  workflowObj: Record<string, Record<string, unknown>>,
-  workflowInputs: Record<string, string> | undefined,
-  ioNodes: WorkflowIONode[],
-  baseUrl: string,
-  signal?: AbortSignal,
-): Promise<void> {
-  if (!workflowInputs || Object.keys(workflowInputs).length === 0) return;
-
-  // 构建 nodeId → type 映射
-  const typeMap = new Map(ioNodes.map((io) => [io.nodeId, io.type]));
-
-  const mentionedNodeIds = Object.keys(workflowInputs);
-  for (const ioNodeId of mentionedNodeIds) {
-    const kind = typeMap.get(ioNodeId);
-    if (kind !== 'image' && kind !== 'video') continue;
-
-    const rawValue = workflowInputs[ioNodeId];
-    // 解析 @{nodeId:label} 引用，获取实际图片 URL
-    const resolvedValue = rawValue !== undefined ? resolveNodeReferences(rawValue) : '';
-    if (!resolvedValue || !resolvedValue.trim() || resolvedValue.trim().startsWith('@{')) {
-      throw new Error(`${COMFY_MEDIA_LABEL[kind]}节点 #${ioNodeId} 的引用未解析，请重新选择素材`);
-    }
-
-    const imageUrl = resolvedValue.trim();
-
-    const inputs = workflowObj[ioNodeId]?.inputs as Record<string, unknown> | undefined;
-    const inputKey = inputs && mediaLoaderInputKey(inputs, kind);
-    if (!inputs || !inputKey) {
-      throw new Error(`${COMFY_MEDIA_LABEL[kind]}节点 #${ioNodeId} 不接受上传文件名，请改用上传型加载节点`);
-    }
-    const uploadResult = await uploadMediaToComfyUI(baseUrl, imageUrl, kind, signal);
-    inputs[inputKey] = uploadResult.subfolder ? `${uploadResult.subfolder}/${uploadResult.name}` : uploadResult.name;
-    // 标准 ComfyUI LoadImage 节点还需要 upload 字段
-    if (inputs.upload !== undefined) {
-      inputs.upload = kind;
-    }
-  }
-}
-
-/**
- * 将音频注入到 ComfyUI workflow JSON 的 audio 类型 IO 节点中。
- * ComfyUI 内置 LoadAudio 的输入名为 audio，取值是 input 目录下的文件名
- * （VideoHelperSuite 的 VHS_LoadAudioUpload 同名），所以上传后写文件名即可。
- * 未显式赋值的 audio IO 节点按顺序用连线音频兜底 —— 角色库绑定的声音正是这样进来的。
- */
-async function injectAudioIntoWorkflow(
-  workflowObj: Record<string, Record<string, unknown>>,
-  workflowInputs: Record<string, string> | undefined,
-  ioNodes: WorkflowIONode[],
-  baseUrl: string,
-  referenceAudioUrls: string[],
-  signal?: AbortSignal,
-  /** 指定了默认音频节点且用户没 @ 音频节点时，只填这一个 */
-  defaultAudioNodeId?: string,
-): Promise<void> {
-  const allAudioIoNodeIds = ioNodes
-    .filter((io) => io.type === 'audio')
-    .map((io) => io.nodeId);
-  const audioIoNodeIds = defaultAudioNodeId && allAudioIoNodeIds.includes(defaultAudioNodeId)
-    ? [defaultAudioNodeId]
-    : allAudioIoNodeIds;
-  if (audioIoNodeIds.length === 0) return;
-
-  const fallbackUrls = [...referenceAudioUrls];
-  for (const ioNodeId of audioIoNodeIds) {
-    const rawValue = workflowInputs?.[ioNodeId];
-    const resolvedValue = rawValue !== undefined ? resolveNodeReferences(rawValue).trim() : '';
-    // 显式赋值优先；解析后仍是 @{...} 占位符视为未赋值
-    const explicitUrl = resolvedValue && !resolvedValue.startsWith('@{') ? resolvedValue : '';
-    const audioUrl = explicitUrl || fallbackUrls.shift() || '';
-    if (!audioUrl) continue;
-
-    const jsonNode = workflowObj[ioNodeId];
-    const inputs = jsonNode?.inputs as Record<string, unknown> | undefined;
-    if (!inputs) continue;
-
-    // VHS 的路径变体（VHS_LoadAudio）读的是 ComfyUI 主机上的绝对路径，
-    // 上传到 input 目录得到的文件名对它无效，宁可跳过也不写入错误的路径。
-    if (inputs.audio === undefined && inputs.audio_file !== undefined) {
-      console.warn('[comfyWorkflowService] 该音频节点按主机路径取音频，已跳过注入', ioNodeId);
-      continue;
-    }
-
-    const uploadResult = await uploadMediaToComfyUI(baseUrl, audioUrl, 'audio', signal);
-    // 内置 LoadAudio 与 VHS_LoadAudioUpload 的输入名都是 audio，取值为 input 目录下的文件名
-    inputs.audio = uploadResult.name;
-    if (inputs.upload !== undefined) {
-      inputs.upload = 'audio';
-    }
-  }
-}
-
-/** 媒体加载节点接受 input 目录文件名的输入键：核心 LoadVideo 用的是 file */
-const MEDIA_LOADER_INPUT_KEYS: Record<'image' | 'video', string[]> = {
-  image: ['image'],
-  video: ['video', 'file'],
+/** 上传型加载输入；主机路径和连线输入不能写入上传文件名。 */
+const MEDIA_LOADER_INPUT_KEYS: Record<ComfyMediaKind, string[]> = {
+  image: ['image'], video: ['video', 'file'], audio: ['audio'],
 };
 
-function mediaLoaderInputKey(
-  inputs: Record<string, unknown>,
-  kind: 'image' | 'video',
-): string | undefined {
-  return MEDIA_LOADER_INPUT_KEYS[kind].find((key) => typeof inputs[key] === 'string');
+function mediaLoaderInputKey(inputs: Record<string, unknown>, kind: ComfyMediaKind): string | undefined {
+  return MEDIA_LOADER_INPUT_KEYS[kind].find((key) => Object.prototype.hasOwnProperty.call(inputs, key)
+    && (inputs[key] == null || typeof inputs[key] === 'string'));
+}
+
+/** 先验证整份分配，再上传：显式槽优先，普通引用按同类顺序填充剩余上传槽。 */
+async function injectMediaIntoWorkflow(
+  workflowObj: Record<string, Record<string, unknown>>,
+  workflowInputs: Record<string, string> | undefined,
+  ioNodes: WorkflowIONode[],
+  defaults: Partial<Record<WorkflowIONodeType, string>> | undefined,
+  media: Record<ComfyMediaKind, string[]>,
+  baseUrl: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  const assignments: Array<{ nodeId: string; key: string; kind: ComfyMediaKind; url: string }> = [];
+  const unfilled: string[] = [];
+  const hasAutomaticMedia = Object.values(media).some((urls) => urls.some((url) => url.trim()));
+  for (const kind of ['image', 'video', 'audio'] as const) {
+    const label = COMFY_MEDIA_LABEL[kind];
+    const ids = [...new Set(ioNodes.filter((io) => io.type === kind).map((io) => io.nodeId))];
+    const defaultId = defaults?.[kind];
+    const ordered = defaultId && ids.includes(defaultId) ? [defaultId, ...ids.filter((id) => id !== defaultId)] : ids;
+    const targets = ordered.map((nodeId) => {
+      const node = workflowObj[nodeId];
+      const inputs = node?.inputs as Record<string, unknown> | undefined;
+      const key = inputs && !/Load.*Path/i.test(String(node.class_type)) ? mediaLoaderInputKey(inputs, kind) : undefined;
+      return { nodeId, key };
+    });
+    const explicitUrls = new Set<string>();
+    const available: Array<{ nodeId: string; key: string }> = [];
+    for (const { nodeId, key } of targets) {
+      const raw = workflowInputs?.[nodeId];
+      if (raw !== undefined) {
+        const url = resolveNodeReferences(raw).trim();
+        if (!url || /@(?:drama|asset)?\{/.test(url)) throw new Error(`${label}节点 #${nodeId} 的引用未解析，请重新选择素材`);
+        if (!key) throw new Error(`${label}节点 #${nodeId} 不接受上传文件名，请改用上传型加载节点`);
+        assignments.push({ nodeId, key, kind, url });
+        explicitUrls.add(url);
+      } else if (key) available.push({ nodeId, key });
+    }
+    const urls = media[kind].map((url) => url.trim()).filter(Boolean)
+      .filter((url) => !explicitUrls.has(url));
+    if (urls.some((url) => /@(?:drama|asset)?\{/.test(url))) throw new Error(`${label}引用未解析，请重新选择素材`);
+    if (urls.length > available.length) {
+      throw new Error(`工作流的${label}上传槽不足：还有 ${urls.length} 份素材待分配，可用槽位 ${available.length} 个。请减少引用或在工作流中添加对应上传输入`);
+    }
+    for (const [index, target] of available.entries()) {
+      if (index < urls.length) assignments.push({ ...target, kind, url: urls[index] });
+      else if (hasAutomaticMedia) unfilled.push(target.nodeId);
+    }
+  }
+  for (const { nodeId, key, kind, url } of assignments) {
+    const uploaded = await uploadMediaToComfyUI(baseUrl, url, kind, signal);
+    const inputs = workflowObj[nodeId].inputs as Record<string, unknown>;
+    inputs[key] = uploaded.subfolder ? `${uploaded.subfolder}/${uploaded.name}` : uploaded.name;
+    if (inputs.upload !== undefined) inputs.upload = kind;
+  }
+  for (const nodeId of unfilled) await pruneOptionalMediaNode(workflowObj, nodeId, baseUrl);
 }
 
 /**
@@ -610,53 +570,6 @@ async function pruneOptionalMediaNode(
 
   for (const [inputs, key] of optionalRefs) delete inputs[key];
   for (const nodeId of chain) delete workflowObj[nodeId];
-}
-
-/**
- * 用户没 @ 该类型 IO 节点时，把提示词框里的同类媒体依次注入该类型的所有加载节点
- * （默认节点排第一位）。没轮到内容的可选参考位会被摘掉，避免残留的示例文件名让工作流报错。
- */
-async function injectDefaultMediaIntoWorkflow(
-  workflowObj: Record<string, Record<string, unknown>>,
-  ioNodes: WorkflowIONode[],
-  defaultNodeId: string,
-  kind: 'image' | 'video',
-  mediaUrls: string[],
-  /** 用户这次带了参考媒体：以他给的为准，没轮到的可选参考位清掉 */
-  pruneUnfilled: boolean,
-  baseUrl: string,
-  signal?: AbortSignal,
-): Promise<void> {
-  const targets = [
-    defaultNodeId,
-    ...ioNodes
-      .filter((io) => io.type === kind && io.nodeId !== defaultNodeId)
-      .map((io) => io.nodeId),
-  ].filter((nodeId) => workflowObj[nodeId]?.inputs);
-  const urls = mediaUrls
-    .map((url) => url?.trim())
-    .filter((url): url is string => Boolean(url) && !url.startsWith('@{'));
-  // 一份媒体都没带时保持工作流原样，用户在 ComfyUI 里配好的输入照旧生效
-  if (urls.length === 0 && !pruneUnfilled) return;
-
-  for (const [index, nodeId] of targets.entries()) {
-    const inputs = workflowObj[nodeId].inputs as Record<string, unknown>;
-    const inputKey = mediaLoaderInputKey(inputs, kind);
-    // VHS 的路径变体读的是 ComfyUI 主机上的绝对路径，上传到 input 目录得到的文件名对它无效
-    if (!inputKey) {
-      console.warn('[comfyWorkflowService] 该节点不接受 input 目录文件名，已跳过注入', nodeId);
-      continue;
-    }
-    if (index >= urls.length) {
-      await pruneOptionalMediaNode(workflowObj, nodeId, baseUrl);
-      continue;
-    }
-    const uploadResult = await uploadMediaToComfyUI(baseUrl, urls[index], kind, signal);
-    inputs[inputKey] = uploadResult.name;
-    if (inputs.upload !== undefined) {
-      inputs.upload = kind;
-    }
-  }
 }
 
 const EMPTY_MEDIA_INPUT_KEYS: Record<Exclude<WorkflowIONodeType, 'prompt'>, string[]> = {
@@ -1351,7 +1264,7 @@ async function submitComfyUIWorkflow(
   signal?: AbortSignal,
   /** 连入生成节点的音频，用于兜底填充未显式赋值的 audio IO 节点 */
   referenceAudioUrls: string[] = [],
-  /** 提示词框里引用的图片/视频，用于填充工作流指定的默认 IO 节点 */
+  /** 提示词框里引用的图片/视频，按同类顺序填充工作流上传 IO 节点 */
   promptMedia: { imageUrls?: string[]; videoUrls?: string[] } = {},
   speech?: { settings?: AudioSpeechSettings },
 ): Promise<{ baseUrl: string; promptId: string; workflowObj: Record<string, Record<string, unknown>> }> {
@@ -1388,10 +1301,10 @@ async function submitComfyUIWorkflow(
   }
 
   // 收集所有 IO 节点信息
-  const ioNodes = wf.ioNodes || [];
+  const ioNodes = wf.ioNodes?.length ? wf.ioNodes : extractComfyUIIONodes(wf.fileContent);
   const ioNodeIds = ioNodes.filter((io) => io.type === 'prompt').map((io) => io.nodeId);
 
-  // 某类型只要被 @ 过，该类型就完全按用户的赋值走，默认节点不再介入
+  // 提示词保留显式赋值规则；媒体各槽由统一分配器处理
   const mentionedTypes = new Set(
     Object.keys(workflowInputs || {})
       .map((nodeId) => ioNodes.find((io) => io.nodeId === nodeId)?.type)
@@ -1427,30 +1340,9 @@ async function submitComfyUIWorkflow(
   }
   if (speechControls) applyAudioSpeechSettings(workflowObj, speechControls, speech?.settings, workflowInputs);
 
-  // 显式图片/视频 IO 赋值（上传 → 替换对应输入文件名）
-  await injectExplicitMediaIntoWorkflow(workflowObj, workflowInputs, ioNodes, baseUrl, signal);
-
-  // 没 @ 图片/视频节点时，把提示词框里引用的同类媒体送进默认节点
-  const hasPromptMedia = Boolean(promptMedia.imageUrls?.length || promptMedia.videoUrls?.length);
-  for (const kind of ['image', 'video'] as const) {
-    const defaultNodeId = defaultNodeFor(kind);
-    if (!defaultNodeId) continue;
-    const urls = kind === 'image' ? promptMedia.imageUrls : promptMedia.videoUrls;
-    await injectDefaultMediaIntoWorkflow(
-      workflowObj, ioNodes, defaultNodeId, kind, urls || [], hasPromptMedia, baseUrl, signal,
-    );
-  }
-
-  // 注入音频到 audio 类型 IO 节点（上传 → 替换文件名）
-  await injectAudioIntoWorkflow(
-    workflowObj,
-    workflowInputs,
-    ioNodes,
-    baseUrl,
-    referenceAudioUrls,
-    signal,
-    defaultNodeFor('audio'),
-  );
+  await injectMediaIntoWorkflow(workflowObj, workflowInputs, ioNodes, wf.defaultNodes, {
+    image: promptMedia.imageUrls ?? [], video: promptMedia.videoUrls ?? [], audio: referenceAudioUrls,
+  }, baseUrl, signal);
 
   // 空上传节点即使只服务于可选参考位，也会在 ComfyUI prompt 校验阶段先报错。
   await pruneUnfilledOptionalMediaBranches(workflowObj, ioNodes, baseUrl);
@@ -1557,8 +1449,9 @@ async function pollComfyUIHistory(
 export async function executeComfyUIGenerate(
   params: AIImageGenParams,
   externalSignal?: AbortSignal,
-  /** 提示词框里引用的图片，用于填充工作流指定的默认 image 节点 */
+  /** 提示词框里引用的图片，按顺序填充工作流图片上传节点 */
   referenceImageUrls: string[] = [],
+  referenceMedia: { videoUrls?: string[]; audioUrls?: string[] } = {},
 ): Promise<{ url: string; width: number; height: number }> {
   const { workflowId, workflowInputs, prompt, imageSize = '2K', aspectRatio = '1:1' } = params;
   const comfyUrl = comfyBaseUrlFor(workflowId);
@@ -1594,8 +1487,8 @@ export async function executeComfyUIGenerate(
       workflowInputs,
       prompt,
       signal,
-      [],
-      { imageUrls: referenceImageUrls },
+      referenceMedia.audioUrls ?? [],
+      { imageUrls: referenceImageUrls, videoUrls: referenceMedia.videoUrls },
     );
 
     // 注入画布选择的尺寸
@@ -1653,7 +1546,7 @@ export async function executeComfyUIVideoGenerate(
   externalSignal?: AbortSignal,
   /** 连入音频节点的产物，兜底填充工作流的 audio IO 节点 */
   referenceAudioUrls: string[] = [],
-  /** 提示词框里引用的图片/视频，用于填充工作流指定的默认 IO 节点 */
+  /** 提示词框里引用的图片/视频，按同类顺序填充工作流上传 IO 节点 */
   promptMedia: { imageUrls?: string[]; videoUrls?: string[] } = {},
 ): Promise<{ url: string }> {
   const {
@@ -1758,6 +1651,7 @@ export async function executeComfyUIAudioGenerate(
   externalSignal?: AbortSignal,
   /** 连入音频节点的产物，兜底填充工作流的 audio IO 节点 */
   referenceAudioUrls: string[] = [],
+  promptMedia: { imageUrls?: string[]; videoUrls?: string[] } = {},
 ): Promise<{ url: string }> {
   const { workflowId, workflowInputs, prompt } = params;
   const comfyUrl = comfyBaseUrlFor(workflowId);
@@ -1788,7 +1682,7 @@ export async function executeComfyUIAudioGenerate(
       }
     }
 
-    const { baseUrl, workflowObj } = await submitComfyUIWorkflow(workflowId!, workflowInputs, prompt, signal, referenceAudioUrls, {}, { settings: params.audioSpeechSettings });
+    const { baseUrl, workflowObj } = await submitComfyUIWorkflow(workflowId!, workflowInputs, prompt, signal, referenceAudioUrls, promptMedia, { settings: params.audioSpeechSettings });
 
     if (params.nodeId && projectId) {
       progressSession = createComfyProgressSession({ baseUrl, projectId, nodeId: params.nodeId, signal });

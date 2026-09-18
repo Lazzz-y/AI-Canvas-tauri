@@ -127,7 +127,7 @@ const BUILT_IN_SPECS: BuiltInWorkflowSpec[] = [
     id: 'builtin-minimax-h3-pdd-r2v',
     name: 'MiniMax H3 PDD 自由参考（图片·视频·音频可选）',
     fileName: 'minimax-h3-pdd-r2v.json',
-    // 音频不指定单一默认：现有执行器才能依次填充三个 audio IO。
+    // 音频沿 IO 列表顺序填充，无需单独指定默认节点。
     defaultNodes: { prompt: '19', image: '101', video: '201' },
   },
   {
