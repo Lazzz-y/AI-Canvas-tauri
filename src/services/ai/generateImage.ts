@@ -25,7 +25,7 @@ import { collectConnectedReferenceMedia, getMediaReferenceUrls, mergeMediaRefere
 import type { AIImageGenParams, BatchImageResult, ImageGenerationResult } from '../../types/aiTypes';
 import { MAX_IMAGE_BATCH_COUNT } from '../../types/aiTypes';
 import { extractModelName, resolveGeneralModel, resolveGeneralModelConnection } from './helpers';
-import { collectPromptNodeMediaUrls, resolvePromptWithImageRefs } from './promptResolver';
+import { collectPromptNodeMediaUrls, resolvePromptWithImageRefs, resolvePromptWithMediaRefs } from './promptResolver';
 import { warnIfTooManyReferences } from './connectedReferenceMedia';
 import { resolveImageDataUrlArray, resolveImageUrlArray } from './imageUtils';
 import { generateImageStandardBatch } from './providers/standardImage';
@@ -160,20 +160,24 @@ export async function generateImagesBatch(
     && hasReferenceImageFile(customProtocol.submit.body);
 
 
-  // 解析 @{nodeId:label} 引用：图片 URL 提取到 image_urls，文本内联替换到 prompt
-  const { prompt: resolvedPrompt, imageUrls } = await resolvePromptWithImageRefs(rawPrompt, {
-    preferLocalImages: usesImageMultipart || usesCustomImageFiles || usesImageDataUrls,
-  });
+  const selectedWorkflow = params.workflowId ? useAppStore.getState().workflows.find((item) => item.id === params.workflowId) : undefined;
+  const isComfyWorkflow = Boolean(params.workflowId && (!selectedWorkflow?.adapterType || selectedWorkflow.adapterType === 'comfyui'));
+  const comfyMedia = isComfyWorkflow ? await resolvePromptWithMediaRefs(rawPrompt) : undefined;
+  const { prompt: resolvedPrompt, imageUrls } = comfyMedia
+    ? { prompt: comfyMedia.prompt, imageUrls: getMediaReferenceUrls(comfyMedia.references, 'image', 'local') }
+    : await resolvePromptWithImageRefs(rawPrompt, { preferLocalImages: usesImageMultipart || usesCustomImageFiles || usesImageDataUrls });
   if (signal?.aborted) throw new DOMException('请求已取消', 'AbortError');
 
   // 合并调用方传入的 image_urls 与从 prompt 中解析出的 imageUrls
-  let contentImageUrls = mergeImageUrls([...(params.image_urls || [])], imageUrls);
+  let contentImageUrls = isComfyWorkflow
+    ? mergeImageUrls(imageUrls, params.image_urls ?? [])
+    : mergeImageUrls(params.image_urls ?? [], imageUrls);
 
   // 项目风格母图：自动插到最前，无需用户每次 @
   const styleMasterUrl = getProjectStyleMasterUrl();
   let allImageUrls = contentImageUrls;
   let styleAsFirst = false;
-  if (styleMasterUrl) {
+  if (styleMasterUrl && !isComfyWorkflow) {
     contentImageUrls = contentImageUrls.filter((u) => u !== styleMasterUrl);
     allImageUrls = mergeImageUrls([styleMasterUrl], contentImageUrls);
     styleAsFirst = true;
@@ -217,7 +221,15 @@ export async function generateImagesBatch(
       } }, signal);
       return singleResult({ url: outputs[0].url, runninghubOutputs: outputs, ...mapImageDimensions(imageSize, aspectRatio) });
     }
-    return singleResult(await executeComfyUIGenerate({ ...params, prompt }, signal, allImageUrls));
+    const connected = collectConnectedReferenceMedia(params.nodeId).references;
+    const refs = mergeMediaReferences(comfyMedia?.references ?? [], connected);
+    let images = mergeImageUrls(allImageUrls, getMediaReferenceUrls(connected, 'image', 'local'));
+    if (styleMasterUrl) images = mergeImageUrls(images, [styleMasterUrl]);
+    const styleHint = styleMasterUrl ? `\n【项目风格母图】图片${images.indexOf(styleMasterUrl) + 1} 只用于风格、色彩和光影参考。` : '';
+    const comfyPrompt = enrichPromptWithReferenceHints(resolvedPrompt, images.length, false, aspectRatio) + styleHint;
+    return singleResult(await executeComfyUIGenerate({ ...params, prompt: comfyPrompt }, signal, images, {
+      videoUrls: getMediaReferenceUrls(refs, 'video', 'local'), audioUrls: getMediaReferenceUrls(refs, 'audio', 'local'),
+    }));
   }
   if (provider === 'runninghubwf') throw new Error('请先在工作流管理中导入并配置该 RunningHub 工作流');
   if (provider === 'workflow-api') throw new Error('请先配置并选择工作流 API');

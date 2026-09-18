@@ -97,7 +97,7 @@ describe('ComfyUI 默认 IO 节点', () => {
     expect(JSON.parse(String(calls[1][1].body)).prompt['6'].inputs[key]).toBe(baseParams.prompt);
   });
 
-  it.each(['video', 'file'])('显式视频上传写入 %s，禁用默认视频且保留其他节点', async (key) => {
+  it.each(['video', 'file'])('显式视频写入 %s，普通视频引用继续填入其他槽', async (key) => {
     registerWorkflow({ video: '20' });
     mocks.storeState.workflows[0].ioNodes = [
       { nodeId: '20', type: 'video', title: '默认视频' },
@@ -113,11 +113,11 @@ describe('ComfyUI 默认 IO 节点', () => {
       if (url.includes('/history/')) return jsonResponse({ 'prompt-1': { status: { completed: true }, outputs: { '9': { videos: [{ filename: 'out.mp4' }] } } } });
       throw new Error(`未预期的请求：${url}`);
     });
-    await executeComfyUIVideoGenerate({ ...baseParams, workflowInputs: { '21': `data:video/mp4;base64,${btoa(`explicit-${key}`)}` } }, undefined, [], { videoUrls: ['unused-default'] });
+    await executeComfyUIVideoGenerate({ ...baseParams, workflowInputs: { '21': `data:video/mp4;base64,${btoa(`explicit-${key}`)}` } }, undefined, [], { videoUrls: [`data:video/mp4;base64,${btoa(`ordinary-${key}`)}`] });
     expect(submittedWorkflow()['21'].inputs).toEqual({ [key]: 'clips/new.mp4', upload: 'video', text: 'keep text' });
-    expect(submittedWorkflow()['20'].inputs.file).toBe('keep.mp4');
+    expect(submittedWorkflow()['20'].inputs.file).toBe('clips/new.mp4');
     const uploads = mocks.corsSafeFetch.mock.calls.filter(([url]) => String(url).endsWith('/upload/image'));
-    expect(uploads).toHaveLength(1);
+    expect(uploads).toHaveLength(2);
     expect((uploads[0][1].body as FormData).get('image')).toMatchObject({ type: 'video/mp4' });
   });
 
@@ -263,7 +263,7 @@ describe('ComfyUI 默认 IO 节点', () => {
     expect(submitted['6'].inputs.text).toBe('正向占位');
   });
 
-  it('没配默认节点时保持原有的占位符兜底行为', async () => {
+  it('没配默认节点时图片自动匹配，提示词沿用占位符兜底', async () => {
     registerWorkflow();
 
     await executeComfyUIGenerate(baseParams, undefined, ['data:image/png;base64,QUJD']);
@@ -272,7 +272,99 @@ describe('ComfyUI 默认 IO 节点', () => {
     // 旧逻辑按“短占位符”猜测，正负两个文本节点都会被写成同一句
     expect(submitted['6'].inputs.text).toBe('一只在屋顶的猫');
     expect(submitted['7'].inputs.text).toBe('一只在屋顶的猫');
-    // 没指定默认图片节点就不注入图片
-    expect(submitted['10'].inputs.image).toBe('example.png');
+    // 未指定默认图片节点也会自动注入
+    expect(submitted['10'].inputs.image).toBe('upload_1.png');
+  });
+});
+
+describe('ComfyUI 三类媒体统一顺序分配', () => {
+  let serial = 0;
+  const kinds = ['image', 'video', 'audio'] as const;
+  function install(defaults = false, explicit = false) {
+    serial++;
+    const graph: Record<string, { class_type: string; inputs: Record<string, unknown> }> = {
+      '6': { class_type: 'PrimitiveString', inputs: { value: 'old' } },
+    };
+    const ios: Array<{ nodeId: string; type: string; title: string }> = [{ nodeId: '6', type: 'prompt', title: '提示词' }];
+    const defaultNodes: Record<string, string> = { prompt: '6' };
+    const refs = { image: [] as string[], video: [] as string[], audio: [] as string[] };
+    const workflowInputs: Record<string, string> = {};
+    for (const kind of kinds) {
+      for (const index of [2, 1, 3]) {
+        const id = `${kind}-${index}`;
+        graph[id] = { class_type: kind === 'image' ? 'LoadImage' : kind === 'video' ? 'LoadVideo' : 'LoadAudio', inputs: { [kind === 'video' ? 'file' : kind]: null } };
+        ios.push({ nodeId: id, type: kind, title: id });
+      }
+      if (defaults) defaultNodes[kind] = `${kind}-1`;
+      const mime = kind === 'image' ? 'image/png' : kind === 'video' ? 'video/mp4' : 'audio/wav';
+      refs[kind] = [1, 2, 3].map((i) => `data:${mime};base64,${btoa(`${serial}-${kind}-${i}`)}`);
+      if (explicit) workflowInputs[`${kind}-1`] = refs[kind][0];
+    }
+    mocks.storeState.workflows = [{ id: 'wf-1', name: 'arbitrary', category: 'ai-video', fileContent: JSON.stringify(graph), ioNodes: ios, defaultNodes }];
+    const uploaded: string[] = [];
+    mocks.corsSafeFetch.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url.endsWith('/upload/image')) {
+        const value = await ((init?.body as FormData).get('image') as Blob).text();
+        uploaded.push(value);
+        return jsonResponse({ name: value, subfolder: 'refs' });
+      }
+      if (url.endsWith('/prompt')) return jsonResponse({ prompt_id: 'prompt-1' });
+      if (url.includes('/history/')) return jsonResponse({ 'prompt-1': { status: { completed: true }, outputs: { '9': { videos: [{ filename: 'out.mp4' }] } } } });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    const run = () => executeComfyUIVideoGenerate({ ...baseParams, workflowInputs }, undefined, refs.audio, { imageUrls: refs.image, videoUrls: refs.video });
+    return { graph, refs, workflowInputs, run, uploaded };
+  }
+
+  it.each([false, true])('三类各3份按IO顺序匹配，默认优先=%s，并保留上传子目录', async (defaults) => {
+    const h = install(defaults);
+    const before = mocks.storeState.workflows[0].fileContent;
+    await h.run();
+    const graph = submittedWorkflow();
+    for (const kind of kinds) {
+      const order = defaults ? [1, 2, 3] : [2, 1, 3];
+      order.forEach((id, index) => expect(graph[`${kind}-${id}`].inputs[kind === 'video' ? 'file' : kind]).toBe(`refs/${serial}-${kind}-${index + 1}`));
+    }
+    expect(graph['6'].inputs.value).toBe(baseParams.prompt);
+    expect(h.uploaded).toHaveLength(9);
+    expect(mocks.storeState.workflows[0].fileContent).toBe(before);
+  });
+
+  it('显式槽不被覆盖，普通引用中的同一素材去重，其余填剩余槽', async () => {
+    const h = install(false, true);
+    await h.run();
+    const graph = submittedWorkflow();
+    for (const kind of kinds) {
+      expect(graph[`${kind}-1`].inputs[kind === 'video' ? 'file' : kind]).toBe(`refs/${serial}-${kind}-1`);
+      expect(graph[`${kind}-2`].inputs[kind === 'video' ? 'file' : kind]).toBe(`refs/${serial}-${kind}-2`);
+    }
+    expect(h.uploaded).toHaveLength(9);
+  });
+
+  it('最后一类素材溢出时也在任何上传或提交之前失败', async () => {
+    const h = install();
+    h.refs.audio.push('data:audio/wav;base64,ZXh0cmE=');
+    await expect(h.run()).rejects.toThrow('音频上传槽不足');
+    expect(mocks.corsSafeFetch).not.toHaveBeenCalled();
+  });
+
+  it('主机路径或连线输入不消耗顺序位置', async () => {
+    const h = install();
+    h.graph['video-2'] = { class_type: 'VHS_LoadVideoPath', inputs: { video: '/host/movie.mp4' } };
+    h.graph['image-2'].inputs.image = ['other', 0];
+    h.refs.video.pop(); h.refs.image.pop();
+    mocks.storeState.workflows[0].fileContent = JSON.stringify(h.graph);
+    await h.run();
+    const graph = submittedWorkflow();
+    expect(graph['video-1'].inputs.file).toBe(`refs/${serial}-video-1`);
+    expect(graph['image-1'].inputs.image).toBe(`refs/${serial}-image-1`);
+    expect(graph['video-2'].inputs.video).toBe('/host/movie.mp4');
+    expect(graph['image-2'].inputs.image).toEqual(['other', 0]);
+  });
+
+  it('显式失效音频引用在上传前报错，不用其他音频替换', async () => {
+    const h = install(); h.workflowInputs['audio-1'] = '@{missing:失效}';
+    await expect(h.run()).rejects.toThrow('引用未解析');
+    expect(mocks.corsSafeFetch).not.toHaveBeenCalled();
   });
 });

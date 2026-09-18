@@ -1170,3 +1170,23 @@ describe('general video runtime safety', () => {
     });
   });
 });
+
+describe('ComfyUI 普通素材自动匹配入口', () => {
+  it('未设置默认节点也转交三类引用，提示词顺序优先于连线和参考面板', async () => {
+    const urls = { first: 'data:image/png;base64,MQ==', second: 'data:image/png;base64,Mg==', video: 'data:video/mp4;base64,dg==', audio: 'data:audio/wav;base64,YQ==' };
+    const nodes = Object.entries(urls).map(([id, url]) => ({ id, position: { x: 0, y: 0 },
+      type: id === 'video' ? 'ai-video' : id === 'audio' ? 'ai-audio' : 'source-image',
+      data: { type: id === 'video' ? 'ai-video' : id === 'audio' ? 'ai-audio' : 'source-image', label: id,
+        ...(id === 'video' ? { videoUrl: url } : id === 'audio' ? { audioUrl: url } : { imageUrl: url }) },
+    })) as Node<BaseNodeData>[];
+    useAppStore.setState({ nodes, edges: [{ id: 'edge', source: 'first', target: 'target' }], workflows: [{
+      id: 'auto', name: 'auto', category: 'ai-video', createdAt: 1, fileName: 'auto.json', fileContent: '{}',
+      ioNodes: [{ nodeId: '10', title: 'video', type: 'video' }],
+    }] });
+    await generateVideo({ prompt: '@{second:第二} @{video:视频} @{first:第一} @{audio:音频}', model: 'wf', provider: 'comfyui', workflowId: 'auto', nodeId: 'target',
+      referenceMedia: [{ kind: 'image', url: urls.first, role: 'reference', origin: 'connection' },
+        { kind: 'image', url: 'data:image/png;base64,ZXh0cmE=', role: 'first_frame', origin: 'connection' }],
+    });
+    expect(comfyMocks.executeVideo).toHaveBeenCalledWith(expect.anything(), undefined, [urls.audio], { imageUrls: [urls.second, urls.first, 'data:image/png;base64,ZXh0cmE='], videoUrls: [urls.video] });
+  });
+});

@@ -75,10 +75,10 @@ beforeEach(() => {
 });
 
 describe('内置 MiniMax H3 工作流', () => {
-  it('首次启动播种八个视频与七个音频工作流，之后不再重复添加', () => {
+  it('首次启动播种九个视频与七个音频工作流，之后不再重复添加', () => {
     const first = pendingBuiltInWorkflows([]);
-    expect(first).toHaveLength(15);
-    expect(first.filter((workflow) => workflow.category === 'ai-video')).toHaveLength(8);
+    expect(first).toHaveLength(16);
+    expect(first.filter((workflow) => workflow.category === 'ai-video')).toHaveLength(9);
     expect(first.filter((workflow) => workflow.category === 'ai-audio')).toHaveLength(7);
     expect(pendingBuiltInWorkflows([])).toHaveLength(0);
   });
@@ -90,7 +90,7 @@ describe('内置 MiniMax H3 工作流', () => {
     );
     const pending = pendingBuiltInWorkflows([]);
     expect(pending.map((workflow) => workflow.id)).not.toContain('builtin-minimax-h3-t2v');
-    expect(pending).toHaveLength(14);
+    expect(pending).toHaveLength(15);
   });
 
   it('默认 IO 节点都能在工作流 JSON 里找到对应的输入', () => {
@@ -229,7 +229,7 @@ describe('内置 AuK 音频工作流', () => {
     expect(pending.map((workflow) => workflow.id)).toEqual(['builtin-auk-tts', 'builtin-auk-voice-cloning']);
     expect(existing[0].name).toBe('用户修改的名字');
     expect(pendingBuiltInWorkflows(existing)).toEqual([]);
-    expect(resetBuiltInWorkflows()).toHaveLength(15);
+    expect(resetBuiltInWorkflows()).toHaveLength(16);
   });
 
   it.each(['builtin-auk-tts', 'builtin-auk-voice-cloning'])('%s 保留可编辑布局、模型、采样参数和全部执行连线', (id) => {
@@ -307,7 +307,7 @@ describe('内置 AuK 音频工作流', () => {
     await executeComfyUIAudioGenerate({
       prompt: '台词', model: 'wf', provider: 'comfyui', workflowId: workflow.id,
       workflowInputs: { '7': explicit },
-    }, undefined, ['data:audio/wav;base64,QVVLLU9USEVS']);
+    }, undefined, [explicit]);
     const uploads = mocks.corsSafeFetch.mock.calls.filter(([url]) => String(url).endsWith('/upload/image'));
     expect(uploads).toHaveLength(1);
     const body = uploads[0][1].body as FormData;
@@ -392,7 +392,7 @@ describe('内置 Qwen3 音频工作流', () => {
 
   it('已有其他项的用户只补三个 Qwen3 工作流，保留修改且不重复播种', () => {
     const existing = resetBuiltInWorkflows().filter((workflow) => !ids.includes(workflow.id));
-    expect(existing).toHaveLength(12);
+    expect(existing).toHaveLength(13);
     existing[0].name = '自定义 AuK';
     localStorage.setItem('aicanvas.builtinWorkflows.seededIds', JSON.stringify(existing.map((workflow) => workflow.id)));
     const pending = pendingBuiltInWorkflows(existing);
@@ -453,7 +453,7 @@ describe('内置 Qwen3 音频工作流', () => {
     install(id);
     const explicitReference = `data:audio/wav;base64,${btoa(id)}`;
     await executeComfyUIAudioGenerate({ prompt: '默认台词', model: 'wf', provider: 'comfyui', workflowId: id,
-      workflowInputs: { '3': '显式新台词', '1': explicitReference } }, undefined, ['data:audio/wav;base64,T1RIRVI=']);
+      workflowInputs: { '3': '显式新台词', '1': explicitReference } }, undefined, [explicitReference]);
     const graph = submittedWorkflow();
     expect(graph['3'].inputs.target_text).toBe('显式新台词');
     expect(graph['3'].inputs.ref_text).toEqual(['2', 0]);
@@ -564,9 +564,9 @@ describe('内置 H3 PDD 与 Breeze TTS 2', () => {
     return workflows.find((workflow) => workflow.id === id)!;
   }
 
-  it('从旧版十一项增量补齐四项，保留用户修改和删除记录', () => {
+  it('已有其他项时补齐四项单图PDD与Breeze，保留用户修改和删除记录', () => {
     const existing = resetBuiltInWorkflows().filter((workflow) => !ids.includes(workflow.id));
-    expect(existing).toHaveLength(11);
+    expect(existing).toHaveLength(12);
     const seeded = existing.map((workflow) => workflow.id);
     const removedId = existing.pop()!.id;
     existing[0].name = '用户自定义';
@@ -670,5 +670,121 @@ describe('内置 H3 PDD 与 Breeze TTS 2', () => {
     expect(graph['2'].inputs).toMatchObject({ text: ['4', 0], instruction: ['5', 0] });
     expect(workflow.fileContent).toBe(original);
     expect(mocks.corsSafeFetch.mock.calls.some(([url]) => String(url).endsWith('/upload/image'))).toBe(false);
+  });
+});
+
+describe('内置 H3 PDD 自由参考', () => {
+  const id = 'builtin-minimax-h3-pdd-r2v';
+  let requestNumber = 0;
+
+  function install() {
+    const workflows = pendingBuiltInWorkflows([]);
+    mocks.storeState.workflows = workflows as unknown as Array<Record<string, unknown>>;
+    return workflows.find((workflow) => workflow.id === id)!;
+  }
+
+  it('旧版十五项只补自由参考，不覆盖用户修改、删除记录及同名 MCP 导入项', () => {
+    const all = resetBuiltInWorkflows();
+    const existing = all.filter((workflow) => workflow.id !== id);
+    expect(existing).toHaveLength(15);
+    localStorage.setItem('aicanvas.builtinWorkflows.seededIds', JSON.stringify(existing.map((workflow) => workflow.id)));
+    const removed = existing.pop()!.id;
+    existing[0].name = '保留用户修改';
+    const imported = { ...all.find((workflow) => workflow.id === id)!, id: 'workflow-mcp-imported', fileContent: '{"user":"edited"}' };
+    existing.push(imported);
+    const before = JSON.stringify(existing);
+    const pending = pendingBuiltInWorkflows(existing);
+    expect(pending.map((workflow) => workflow.id)).toEqual([id]);
+    expect(pending.some((workflow) => workflow.id === removed)).toBe(false);
+    expect(JSON.stringify(existing)).toBe(before);
+    expect(pendingBuiltInWorkflows(existing)).toEqual([]);
+  });
+
+  it('保留9图3视频3音频空槽、默认提示词19和五份配套模型', () => {
+    const workflow = install();
+    const graph = JSON.parse(workflow.fileContent);
+    expect(workflow.category).toBe('ai-video');
+    expect(workflow.defaultNodes).toEqual({ prompt: '19', image: '101', video: '201' });
+    expect(workflow.editableContent).toBeUndefined();
+    expect(Object.keys(graph)).toHaveLength(34);
+    expect(workflow.ioNodes).toHaveLength(16);
+    for (const [type, count] of [['prompt', 1], ['image', 9], ['video', 3], ['audio', 3]] as const) {
+      const ios = workflow.ioNodes!.filter((io) => io.type === type);
+      expect(ios).toHaveLength(count);
+      if (type !== 'prompt') for (const io of ios) expect(graph[io.nodeId].inputs[type]).toBe('');
+    }
+    expect(graph['34'].inputs.unet_name).toBe('minimax_h3_ref2va_pruned_int8_convrot.safetensors');
+    expect(graph['25'].inputs.pdd_file).toBe('MiniMax-H3-Ref2VA-Acc-8Step.safetensors');
+    expect(graph['24'].inputs.clip_name).toBe('qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors');
+    expect(graph['22'].inputs.vae_name).toBe('minimax_h3_video_vae_fp16.safetensors');
+    expect(graph['27'].inputs.vae_name).toBe('minimax_h3_audio_vae_fp32.safetensors');
+  });
+
+  async function submit(counts: number[], mode: 'explicit' | 'automatic' | 'sparse' = 'explicit') {
+    const workflow = install();
+    const original = workflow.fileContent;
+    const workflowInputs: Record<string, string> = {};
+    const media: string[][] = [[], [], []];
+    requestNumber++;
+    const uploads: string[] = [];
+    for (const [group, start, mime] of [[0, 101, 'image/png'], [1, 201, 'video/mp4'], [2, 301, 'audio/wav']] as const) {
+      for (let i = 0; i < counts[group]; i++) {
+        const url = `data:${mime};base64,${btoa(`builtin-optional-${requestNumber}-${group}-${i}`)}`;
+        media[group].push(url);
+        if (mode !== 'automatic') workflowInputs[String(start + i + (mode === 'sparse' ? 1 : 0))] = url;
+      }
+    }
+    mocks.corsSafeFetch.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url.endsWith('/upload/image')) {
+        const file = (init?.body as FormData).get('image') as File;
+        const name = `ref-${uploads.length + 1}.${file.type.split('/')[1]}`;
+        uploads.push(name);
+        return jsonResponse({ name, subfolder: '', type: 'input' });
+      }
+      if (url.endsWith('/prompt')) return jsonResponse({ prompt_id: 'optional-prompt' });
+      if (url.includes('/history/')) return jsonResponse({ 'optional-prompt': {
+        status: { completed: true }, outputs: { '31': { videos: [{ filename: 'optional.mp4', type: 'output' }] } },
+      } });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    await executeComfyUIVideoGenerate({
+      workflowId: id, model: 'wf', provider: 'comfyui', prompt: '小满推开酒馆门。', workflowInputs,
+      seedanceRatio: '9:16', videoResolution: 480, seedanceDuration: 8,
+    }, undefined, mode === 'automatic' ? media[2] : [], mode === 'automatic' ? { imageUrls: media[0], videoUrls: media[1] } : {});
+    expect(workflow.fileContent).toBe(original);
+    expect(uploads).toHaveLength(counts.reduce((total, count) => total + count, 0));
+    return { graph: submittedWorkflow(), uploads };
+  }
+
+  it.each([[0, 0, 0], [1, 0, 0], [9, 0, 0], [0, 1, 0], [0, 3, 0], [0, 0, 1], [0, 0, 3], [1, 1, 1], [6, 3, 3], [9, 2, 1]])(
+    '图%s 视频%s 音频%s：默认提示词生效，空槽不进入提交且无悬空连接', async (images, videos, audios) => {
+      const counts = [images, videos, audios];
+      const { graph } = await submit(counts);
+      for (const [group, prefix, cls] of [[0, 'ref_images.', 'LoadImage'], [1, 'ref_videos.', 'VHS_LoadVideo'], [2, 'ref_audios.', 'LoadAudio']] as const) {
+        expect(Object.keys(graph['19'].inputs).filter((key) => key.startsWith(prefix))).toHaveLength(counts[group]);
+        expect(Object.values(graph).filter((node) => node.class_type === cls)).toHaveLength(counts[group]);
+      }
+      for (const node of Object.values(graph)) {
+        for (const value of Object.values(node.inputs)) if (Array.isArray(value)) expect(graph[value[0]]).toBeDefined();
+      }
+      expect(graph['19'].inputs.prompt).toBe('小满推开酒馆门。');
+      expect(graph['26'].inputs.audio).toEqual(['23', 0]);
+      expect(graph['25'].inputs.nfe).toBe('8');
+    },
+  );
+
+  it('该内置默认配置接收6图3视频3音频，三段音频按顺序入槽', async () => {
+    const { graph, uploads } = await submit([6, 3, 3], 'automatic');
+    expect([101, 102, 103, 104, 105, 106].map((node) => graph[String(node)].inputs.image)).toEqual(uploads.slice(0, 6));
+    expect([201, 202, 203].map((node) => graph[String(node)].inputs.video)).toEqual(uploads.slice(6, 9));
+    expect([301, 302, 303].map((node) => graph[String(node)].inputs.audio)).toEqual(uploads.slice(9));
+    expect(graph['107']).toBeUndefined();
+    expect(graph['19'].inputs.prompt).toBe('小满推开酒馆门。');
+  });
+
+  it('显式只填第二槽时保留已填素材，并清理第一空槽', async () => {
+    const { graph } = await submit([1, 1, 1], 'sparse');
+    for (const node of ['101', '201', '301']) expect(graph[node]).toBeUndefined();
+    for (const node of ['102', '202', '302']) expect(graph[node]).toBeDefined();
   });
 });

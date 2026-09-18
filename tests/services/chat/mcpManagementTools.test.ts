@@ -68,3 +68,52 @@ describe('MCP management tool coverage', () => {
     expect(deleted.status).toBe('success');
   });
 });
+
+describe('MCP ComfyUI 默认输入', () => {
+  const content = JSON.stringify({ '19': { class_type: 'PrimitiveString', inputs: { value: '提示词' } }, '101': { class_type: 'LoadImage', inputs: { image: '' } } });
+  function storeActions() {
+    const addWorkflow = vi.fn(async (workflow) => useAppStore.setState((state) => ({ workflows: [...state.workflows, workflow] })));
+    const updateWorkflow = vi.fn(async (id, changes) => useAppStore.setState((state) => ({ workflows: state.workflows.map((workflow) => workflow.id === id ? { ...workflow, ...changes } : workflow) })));
+    useAppStore.setState({ addWorkflow, updateWorkflow });
+    return { addWorkflow, updateWorkflow };
+  }
+  it('创建时识别IO，默认提示词19可持久化；省略保留，空对象清空', async () => {
+    storeActions();
+    const created = await getAgentTool('workflow_create')!.execute(context(), { name: 'flow', category: 'ai-video', fileContent: content, defaultNodes: { prompt: '19' } });
+    expect(created.status).toBe('success');
+    const workflowId = JSON.parse(created.modelContent).workflow.id;
+    const renamed = await getAgentTool('workflow_update')!.execute(context(), { workflowId, name: 'new' });
+    expect(JSON.parse(renamed.modelContent).workflow.defaultNodes).toEqual({ prompt: '19' });
+    const replaced = await getAgentTool('workflow_update')!.execute(context(), { workflowId, defaultNodes: { image: '101' } });
+    expect(JSON.parse(replaced.modelContent).workflow.defaultNodes).toEqual({ image: '101' });
+    const cleared = await getAgentTool('workflow_update')!.execute(context(), { workflowId, defaultNodes: {} });
+    expect(JSON.parse(cleared.modelContent).workflow.defaultNodes).toEqual({});
+  });
+  it.each([{ prompt: '101' }, { image: 'missing' }])('类型不匹配或节点不存在时拒绝写入：%j', async (defaultNodes) => {
+    const actions = storeActions();
+    const result = await getAgentTool('workflow_create')!.execute(context(), { name: 'flow', category: 'ai-video', fileContent: content, defaultNodes });
+    expect(result.status).toBe('error');
+    expect(actions.addWorkflow).not.toHaveBeenCalled();
+  });
+  it('更新默认值和改图时都校验目标，失败不写Store', async () => {
+    const actions = storeActions();
+    const created = await getAgentTool('workflow_create')!.execute(context(), { name: 'flow', category: 'ai-video', fileContent: content, defaultNodes: { prompt: '19' } });
+    const workflowId = JSON.parse(created.modelContent).workflow.id;
+    for (const changes of [{ defaultNodes: { prompt: '101' } }, { fileContent: '{"101":{"class_type":"LoadImage","inputs":{"image":""}}}' }]) {
+      const result = await getAgentTool('workflow_update')!.execute(context(), { workflowId, ...changes });
+      expect(result.status).toBe('error');
+    }
+    expect(actions.updateWorkflow).not.toHaveBeenCalled();
+  });
+});
+
+it('MCP 默认输入不能靠错误 IO 标签把图片字段当成提示词', async () => {
+  const addWorkflow = vi.fn();
+  useAppStore.setState({ addWorkflow });
+  const result = await getAgentTool('workflow_create')!.execute(context(), {
+    name: 'bad', category: 'ai-image', fileContent: '{"1":{"class_type":"LoadImage","inputs":{"image":""}}}',
+    ioNodes: [{ nodeId: '1', type: 'prompt', title: 'incorrect' }], defaultNodes: { prompt: '1' },
+  });
+  expect(result.status).toBe('error');
+  expect(addWorkflow).not.toHaveBeenCalled();
+});

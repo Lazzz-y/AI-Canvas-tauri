@@ -26,7 +26,7 @@ import {
   mergeMediaReferences,
   warnIfTooManyReferences,
 } from './connectedReferenceMedia';
-import { collectPromptNodeMediaUrls } from './promptResolver';
+import { collectPromptNodeMediaUrls, resolvePromptWithMediaRefs } from './promptResolver';
 import { executeGeneralAsyncTask } from './apimartGen';
 import { runConfiguredModelProtocol } from './modelProtocolRuntime';
 import { mediaProviderRegistry } from './mediaProviderRegistry';
@@ -171,10 +171,12 @@ export async function generateAudio(
       } }, signal);
       return { ...normalizeProtocolAudioResult(outputs[0].url), runninghubOutputs: outputs };
     }
+    const comfyReferences = mergeMediaReferences((await resolvePromptWithMediaRefs(rawPrompt)).references, connectedMedia.references);
     return executeComfyUIAudioGenerate(
       { ...params, prompt },
       signal,
-      getMediaReferenceUrls(references, 'audio', 'local'),
+      getMediaReferenceUrls(comfyReferences, 'audio', 'local'),
+      { imageUrls: getMediaReferenceUrls(comfyReferences, 'image', 'local'), videoUrls: getMediaReferenceUrls(comfyReferences, 'video', 'local') },
     );
   }
 

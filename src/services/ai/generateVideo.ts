@@ -267,20 +267,22 @@ async function resolveVideoReferenceInput(
   nodeId: string | undefined,
   /** 调用方直接给定的参考媒体；排在最前，保证首/尾帧角色按调用方的顺序分配 */
   explicitReferences: readonly MediaReference[] = [],
-  options: { preserveDeclaredRoles?: boolean; target?: 'remote' | 'local'; apimartModel?: string; legacyPrompt?: string } = {},
+  options: { promptFirst?: boolean; preserveDeclaredRoles?: boolean; target?: 'remote' | 'local'; apimartModel?: string; legacyPrompt?: string } = {},
 ): Promise<VideoGenerationReferenceInput> {
   const promptInput = await resolvePromptWithMediaRefs(rawPrompt, { preserveBindings: true });
   const connected = collectConnectedReferenceMedia(nodeId);
   const nodeItems = resolveVideoNodeReferences(nodeId);
-  const collectedReferences = mergeMediaReferences(
+  const regularReferences = mergeMediaReferences(
     // 节点上手动挑的参考帧/参考角色排在连线与提示词引用之前，重复的图按它们的角色去重
     mergeMediaReferences(explicitReferences, toMediaReferences(nodeItems)),
     mergeMediaReferences(promptInput.references, connected.references),
   );
+  const collectedReferences = options.promptFirst
+    ? mergeMediaReferences(promptInput.references, regularReferences) : regularReferences;
   // 通用声明式协议必须保留用户/连线给出的角色：普通 reference 图片不能
   // 被全局规则偷偷改成 first_frame，否则 MetaSo 一类接口会把互斥模式混在一起。
   // 内置 Provider 暂时保留原有“按图片顺序推断首尾帧”的兼容行为。
-  const references = options.preserveDeclaredRoles
+  const references = options.preserveDeclaredRoles || options.promptFirst
     ? collectedReferences.map((reference) => reference.kind === 'audio'
       ? { ...reference, role: 'reference_audio' as const }
       : reference)
@@ -528,6 +530,7 @@ export async function generateVideo(
   if (params.workflowId) {
     const workflow = useAppStore.getState().workflows.find((item) => item.id === params.workflowId);
     const referenceInput = await resolveVideoReferenceInput(rawPrompt, params.nodeId, params.referenceMedia ?? [], {
+      promptFirst: !workflow?.adapterType || workflow.adapterType === 'comfyui',
       preserveDeclaredRoles: provider === 'workflow-api', target: 'local',
       legacyPrompt: workflow?.adapterType === 'workflow-api' ? undefined : prompt,
     });
@@ -555,12 +558,6 @@ export async function generateVideo(
         image: getMediaReferenceUrls(references, 'image', 'local'), video: videoUrls, audio: getMediaReferenceUrls(references, 'audio', 'local'),
       } }, signal);
       return { url: outputs[0].url, runninghubOutputs: outputs };
-    }
-    // 视频引用只有落到某个 video IO 节点才有意义：要么被 @ 了，要么工作流指定了默认视频节点
-    const hasVideoTarget = Boolean(workflow?.defaultNodes?.video)
-      || (workflow?.ioNodes ?? []).some((io) => io.type === 'video' && params.workflowInputs?.[io.nodeId]);
-    if (videoUrls.length > 0 && !hasVideoTarget) {
-      throw new Error('该 ComfyUI 工作流没有可接收视频的 IO 节点，请在工作流管理里指定默认视频节点或移除视频引用');
     }
     return executeComfyUIVideoGenerate(
       { ...params, prompt: referenceInput.prompt },
