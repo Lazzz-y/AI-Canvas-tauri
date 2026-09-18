@@ -41,6 +41,7 @@ function createBridge(pageUrl = 'http://127.0.0.1:8188', configuredUrl = pageUrl
   };
   let nextId = 0;
   const window = {
+    comfyAPI: { api: { api: { queuePrompt: vi.fn(async (..._args: unknown[]) => ({ prompt_id: 'mock-prompt' })) } } },
     app,
     location: { hostname: new URL(pageUrl).hostname, origin: new URL(pageUrl).origin, assign: vi.fn() },
     top: undefined as unknown,
@@ -289,5 +290,141 @@ describe('ComfyUI 工作流真实载入和回执', () => {
     await h.load('wf-a');
     await expect(h.bridge.loadWorkflow({ ...payload('b'), apiJson: '{}' })).rejects.toThrow('数据无效');
     expect(h.graph._nodes[0].content).toBe('wf-a');
+  });
+});
+
+
+describe('API 空视频参考预览', () => {
+  function fixture(value = '') {
+    const callback = vi.fn();
+    const file = { name: 'video', value: 'old.mp4', callback };
+    const element = () => ({ hidden: false, removeAttribute: vi.fn(), pause: vi.fn() });
+    const preview = { name: 'videopreview', value: { hidden: false, paused: false, params: { filename: 'old.mp4' } },
+      parentEl: { hidden: false }, videoEl: element(), imgEl: element(), aspectRatio: 1.5 };
+    const node = { id: 201, widgets: [file, preview], video_query: { stale: true }, setDirtyCanvas: vi.fn() };
+    const match = source.replace(/\r\n/g, '\n').match(/const clearEmptyVideoPreviews = ([\s\S]*?);\n\n {2}const fitLoadedGraph/);
+    if (!match) throw new Error('Missing empty preview cleanup');
+    const clear = runInNewContext(`(${match[1]})`, { graphNodes: () => [node] });
+    clear({}, { '201': { class_type: 'VHS_LoadVideo', inputs: { video: value } } });
+    return { file, preview, node, callback };
+  }
+
+  it('空文件同步清除独立预览及媒体 src', () => {
+    const { file, preview, node } = fixture();
+    expect(file.value).toBe('');
+    expect(preview.value).toMatchObject({ hidden: true, paused: true, params: {} });
+    expect(preview.parentEl.hidden).toBe(true);
+    expect(preview.videoEl.pause).toHaveBeenCalled();
+    expect(preview.videoEl.removeAttribute).toHaveBeenCalledWith('src');
+    expect(preview.imgEl.removeAttribute).toHaveBeenCalledWith('src');
+    expect(node.video_query).toBeUndefined();
+  });
+
+  it('选择新视频恢复正常回调，再清空仍可清理', () => {
+    const { file, preview, callback } = fixture();
+    file.callback('new.mp4');
+    expect(callback).toHaveBeenCalledWith('new.mp4');
+    expect(preview.value.hidden).toBe(false);
+    expect(preview.parentEl.hidden).toBe(false);
+    file.callback('');
+    expect(preview.value.hidden).toBe(true);
+    expect(callback).toHaveBeenCalledTimes(1);
+  });
+
+  it('已填写文件的输入和预览原样保留', () => {
+    const { file, preview, callback } = fixture('chosen.mp4');
+    expect(file.callback).toBe(callback);
+    expect(file.value).toBe('old.mp4');
+    expect(preview.value.params.filename).toBe('old.mp4');
+    expect(preview.videoEl.pause).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('ComfyUI 自带运行按钮的 H3 可选素材', () => {
+  function workflow(counts: number[]) {
+    const output: Record<string, { class_type: string; inputs: Record<string, unknown> }> = {
+      '19': { class_type: 'MiniMaxH3ReferenceToVideo', inputs: { prompt: '小满推开门', width: 640 } },
+    };
+    for (const [g, cls, key, prefix, first, max] of [
+      [0, 'LoadImage', 'image', 'ref_images.ref_image_', 101, 9],
+      [1, 'VHS_LoadVideo', 'video', 'ref_videos.ref_video_', 201, 3],
+      [2, 'LoadAudio', 'audio', 'ref_audios.ref_audio_', 301, 3],
+    ] as const) {
+      for (let i = 0; i < max; i++) {
+        const id = String(first + i);
+        output[id] = { class_type: cls, inputs: { [key]: i < counts[g] ? `ref-${i}.file` : '' } };
+        output['19'].inputs[prefix + i] = [id, 0];
+      }
+    }
+    return output;
+  }
+
+  it.each([[0, 0, 0], [9, 0, 0], [0, 3, 0], [0, 0, 3], [6, 3, 3]])(
+    '直接运行 图%s 视频%s 音频%s 时，仅提交已填写的素材', async (images, videos, audios) => {
+      const h = createBridge();
+      const client = h.window.comfyAPI.api.api;
+      const original = client.queuePrompt;
+      await h.load('wf-optional');
+      const output = workflow([images, videos, audios]);
+      const before = JSON.stringify(output);
+      const editable = { nodes: Object.keys(output) };
+      await client.queuePrompt(0, { output, workflow: editable }, { previewMethod: 'auto' });
+      const sent = original.mock.calls[0][1] as { output: typeof output; workflow: unknown };
+      expect(Object.keys(sent.output)).toHaveLength(1 + images + videos + audios);
+      expect(sent.output['19'].inputs.prompt).toBe('小满推开门');
+      expect(sent.workflow).toBe(editable);
+      expect(JSON.stringify(output)).toBe(before);
+      for (const value of Object.values(sent.output['19'].inputs)) {
+        if (Array.isArray(value)) expect(sent.output[value[0]]).toBeDefined();
+      }
+      expect(original.mock.calls[0][2]).toEqual({ previewMethod: 'auto' });
+    },
+  );
+
+  it('复现错误连接：空音频 303 不再进入提交图，保留音频 VAE', async () => {
+    const h = createBridge();
+    const client = h.window.comfyAPI.api.api;
+    const original = client.queuePrompt;
+    await h.load('wf-optional');
+    const output = workflow([0, 0, 0]);
+    output['27'] = { class_type: 'VAELoader', inputs: { vae_name: 'audio.safetensors' } };
+    output['19'].inputs.audio_vae = ['27', 0];
+    await client.queuePrompt(0, { output });
+    const sent = original.mock.calls[0][1] as { output: typeof output };
+    expect(sent.output['303']).toBeUndefined();
+    expect(sent.output['19'].inputs['ref_audios.ref_audio_2']).toBeUndefined();
+    expect(sent.output['27']).toEqual(output['27']);
+    expect(sent.output['19'].inputs.audio_vae).toEqual(['27', 0]);
+  });
+
+  it('同一空音频仍被必填用途引用时保留，不擅自删除其他功能', async () => {
+    const h = createBridge();
+    const client = h.window.comfyAPI.api.api;
+    const original = client.queuePrompt;
+    await h.load('wf-optional');
+    const output = workflow([0, 0, 0]);
+    output['400'] = { class_type: 'SaveAudio', inputs: { audio: ['303', 0] } };
+    await client.queuePrompt(0, { output });
+    const sent = original.mock.calls[0][1] as { output: typeof output };
+    expect(sent.output['303']).toEqual(output['303']);
+    expect(sent.output['400']).toEqual(output['400']);
+    expect(sent.output['19'].inputs['ref_audios.ref_audio_2']).toEqual(['303', 0]);
+  });
+
+  it('重复打开不重复包装；非 H3 请求和保存模板保持原样', async () => {
+    const h = createBridge();
+    const client = h.window.comfyAPI.api.api;
+    const original = client.queuePrompt;
+    await h.load('wf-one');
+    const wrapped = client.queuePrompt;
+    await h.load('wf-two');
+    expect(client.queuePrompt).toBe(wrapped);
+    const prompt = { output: { '303': { class_type: 'LoadAudio', inputs: { audio: '' } } } };
+    await client.queuePrompt(0, prompt);
+    expect(original).toHaveBeenCalledWith(0, prompt);
+    await h.bridge.saveToAICanvas();
+    expect(original).toHaveBeenCalledTimes(1);
+    expect(h.window.__AI_CANVAS_PENDING_SAVE_PAYLOAD__?.fileContent).toContain('PrimitiveString');
   });
 });

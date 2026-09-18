@@ -75,11 +75,11 @@ beforeEach(() => {
 });
 
 describe('内置 MiniMax H3 工作流', () => {
-  it('首次启动播种六个视频与五个音频工作流，之后不再重复添加', () => {
+  it('首次启动播种八个视频与七个音频工作流，之后不再重复添加', () => {
     const first = pendingBuiltInWorkflows([]);
-    expect(first).toHaveLength(11);
-    expect(first.filter((workflow) => workflow.category === 'ai-video')).toHaveLength(6);
-    expect(first.filter((workflow) => workflow.category === 'ai-audio')).toHaveLength(5);
+    expect(first).toHaveLength(15);
+    expect(first.filter((workflow) => workflow.category === 'ai-video')).toHaveLength(8);
+    expect(first.filter((workflow) => workflow.category === 'ai-audio')).toHaveLength(7);
     expect(pendingBuiltInWorkflows([])).toHaveLength(0);
   });
 
@@ -90,7 +90,7 @@ describe('内置 MiniMax H3 工作流', () => {
     );
     const pending = pendingBuiltInWorkflows([]);
     expect(pending.map((workflow) => workflow.id)).not.toContain('builtin-minimax-h3-t2v');
-    expect(pending).toHaveLength(10);
+    expect(pending).toHaveLength(14);
   });
 
   it('默认 IO 节点都能在工作流 JSON 里找到对应的输入', () => {
@@ -229,7 +229,7 @@ describe('内置 AuK 音频工作流', () => {
     expect(pending.map((workflow) => workflow.id)).toEqual(['builtin-auk-tts', 'builtin-auk-voice-cloning']);
     expect(existing[0].name).toBe('用户修改的名字');
     expect(pendingBuiltInWorkflows(existing)).toEqual([]);
-    expect(resetBuiltInWorkflows()).toHaveLength(11);
+    expect(resetBuiltInWorkflows()).toHaveLength(15);
   });
 
   it.each(['builtin-auk-tts', 'builtin-auk-voice-cloning'])('%s 保留可编辑布局、模型、采样参数和全部执行连线', (id) => {
@@ -390,9 +390,9 @@ describe('内置 Qwen3 音频工作流', () => {
     return workflows.find((workflow) => workflow.id === id)!;
   }
 
-  it('已有八项的用户只补新三项，保留修改且不重复播种', () => {
+  it('已有其他项的用户只补三个 Qwen3 工作流，保留修改且不重复播种', () => {
     const existing = resetBuiltInWorkflows().filter((workflow) => !ids.includes(workflow.id));
-    expect(existing).toHaveLength(8);
+    expect(existing).toHaveLength(12);
     existing[0].name = '自定义 AuK';
     localStorage.setItem('aicanvas.builtinWorkflows.seededIds', JSON.stringify(existing.map((workflow) => workflow.id)));
     const pending = pendingBuiltInWorkflows(existing);
@@ -550,5 +550,125 @@ describe('内置 Qwen3 音频工作流', () => {
     install(id);
     await expect(executeComfyUIAudioGenerate({ prompt: '台词', model: 'wf', provider: 'comfyui', workflowId: id })).rejects.toThrow('请添加参考语音');
     expect(mocks.corsSafeFetch).not.toHaveBeenCalled();
+  });
+});
+
+describe('内置 H3 PDD 与 Breeze TTS 2', () => {
+  const ids = [
+    'builtin-minimax-h3-pdd-i2v', 'builtin-minimax-h3-pdd-i2v-audio',
+    'builtin-breeze-tts2-voice-clone', 'builtin-breeze-tts2-voice-design',
+  ];
+  function install(id: string) {
+    const workflows = pendingBuiltInWorkflows([]);
+    mocks.storeState.workflows = workflows as unknown as Array<Record<string, unknown>>;
+    return workflows.find((workflow) => workflow.id === id)!;
+  }
+
+  it('从旧版十一项增量补齐四项，保留用户修改和删除记录', () => {
+    const existing = resetBuiltInWorkflows().filter((workflow) => !ids.includes(workflow.id));
+    expect(existing).toHaveLength(11);
+    const seeded = existing.map((workflow) => workflow.id);
+    const removedId = existing.pop()!.id;
+    existing[0].name = '用户自定义';
+    localStorage.setItem('aicanvas.builtinWorkflows.seededIds', JSON.stringify(seeded));
+    const pending = pendingBuiltInWorkflows(existing);
+    expect(pending.map((workflow) => workflow.id)).toEqual(ids);
+    expect(pending.map((workflow) => workflow.category)).toEqual(['ai-video', 'ai-video', 'ai-audio', 'ai-audio']);
+    expect(pending.some((workflow) => workflow.id === removedId)).toBe(false);
+    expect(existing[0].name).toBe('用户自定义');
+    expect(pendingBuiltInWorkflows([...existing, ...pending])).toEqual([]);
+  });
+
+  it.each([
+    { id: ids[0], input: '7', image: '27', resolution: '22', duration: '24', math: '23', pdd: '6', video: '14' },
+    { id: ids[1], input: '19', image: '35', resolution: '29', duration: '38', math: '37', pdd: '25', video: '26' },
+  ])('$id 注入图片、参考音频及秒数，保持 PDD 与生成音轨', async (spec) => {
+    const workflow = install(spec.id);
+    const original = workflow.fileContent;
+    const uploads: string[] = [];
+    mocks.corsSafeFetch.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url.endsWith('/upload/image')) {
+        const file = (init?.body as FormData).get('image') as File;
+        const name = file.type.startsWith('audio/') ? 'reference.wav' : 'reference.png';
+        uploads.push(name);
+        return jsonResponse({ name, subfolder: '', type: 'input' });
+      }
+      if (url.endsWith('/prompt')) return jsonResponse({ prompt_id: 'prompt-1' });
+      if (url.includes('/history/')) return jsonResponse({ 'prompt-1': {
+        status: { completed: true }, outputs: { out: { images: [{ filename: 'pdd.mp4', subfolder: '', type: 'output' }] } },
+      } });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    const withAudio = spec.id === ids[1];
+    const result = await executeComfyUIVideoGenerate({
+      workflowId: spec.id, prompt: '小满端起杯子', model: 'wf', provider: 'comfyui',
+      seedanceRatio: '9:16', videoResolution: 480, seedanceDuration: 6, videoFps: 30,
+    }, undefined, withAudio ? ['data:audio/wav;base64,SDNfUERE'] : [], {
+      imageUrls: ['data:image/png;base64,' + btoa(spec.id)],
+    });
+    const graph = submittedWorkflow();
+    expect(graph[spec.input].inputs).toMatchObject({
+      prompt: '小满端起杯子', width: [spec.resolution, 0], height: [spec.resolution, 1], length: [spec.math, 1],
+    });
+    expect(graph[spec.image].inputs.image).toBe('reference.png');
+    expect(graph[spec.resolution].inputs.aspect_ratio).toBe('9:16 (Portrait Widescreen)');
+    expect(graph[spec.duration].inputs.value).toBe(6);
+    expect(graph[spec.math].inputs['values.a']).toEqual([spec.duration, 0]);
+    expect(graph[spec.pdd].inputs).toMatchObject({ pdd_file: 'MiniMax-H3-Ref2VA-Acc-8Step.safetensors', nfe: '8' });
+    expect(graph[spec.video].inputs.fps).toBe(24);
+    if (withAudio) {
+      expect(graph['28'].inputs.audio).toBe('reference.wav');
+      expect(graph['19'].inputs['ref_audios.ref_audio_0']).toEqual(['28', 0]);
+      expect(graph['26'].inputs.audio).toEqual(['23', 0]);
+    }
+    expect(uploads).toHaveLength(withAudio ? 2 : 1);
+    expect(result.url).toContain('pdd.mp4');
+    expect(workflow.fileContent).toBe(original);
+  });
+
+  function audioResponses() {
+    mocks.corsSafeFetch.mockImplementation(async (url: string) => {
+      if (url.endsWith('/upload/image')) return jsonResponse({ name: 'breeze-reference.wav', subfolder: '', type: 'input' });
+      if (url.endsWith('/prompt')) return jsonResponse({ prompt_id: 'prompt-breeze' });
+      if (url.includes('/history/')) return jsonResponse({ 'prompt-breeze': {
+        status: { completed: true }, outputs: { out: { audio: [{ filename: 'breeze.flac', subfolder: 'audio', type: 'output' }] } },
+      } });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+  }
+
+  it('Breeze 克隆注入台词与参考音频，参考原文来自 Whisper', async () => {
+    const workflow = install(ids[2]);
+    const original = workflow.fileContent;
+    audioResponses();
+    const result = await executeComfyUIAudioGenerate({
+      workflowId: workflow.id, prompt: '今天开业啦！', model: 'wf', provider: 'comfyui',
+    }, undefined, ['data:audio/wav;base64,QlJFRVpFX0NMT05F']);
+    const graph = submittedWorkflow();
+    expect(workflow.defaultNodes).toEqual({ prompt: '12', audio: '8' });
+    expect(graph['12'].inputs.value).toBe('今天开业啦！');
+    expect(graph['8'].inputs.audio).toBe('breeze-reference.wav');
+    expect(graph['13'].inputs).toMatchObject({ text: ['12', 0], reference_audio: ['11', 0], reference_text: ['11', 1] });
+    expect(graph['10']).toBeUndefined();
+    expect(result.url).toContain('breeze.flac');
+    expect(workflow.fileContent).toBe(original);
+  });
+
+  it.each([false, true])('Breeze 声音设计区分朗读正文和音色描述：显式输入=%s', async (explicit) => {
+    const workflow = install(ids[3]);
+    const original = workflow.fileContent;
+    const originalGraph = JSON.parse(original);
+    audioResponses();
+    await executeComfyUIAudioGenerate({
+      workflowId: workflow.id, prompt: '欢迎光临。', model: 'wf', provider: 'comfyui',
+      ...(explicit ? { workflowInputs: { '4': '显式朗读台词', '5': '温暖沉稳的成年女声' } } : {}),
+    });
+    const graph = submittedWorkflow();
+    expect(workflow.defaultNodes).toEqual({ prompt: '4' });
+    expect(graph['4'].inputs.value).toBe(explicit ? '显式朗读台词' : '欢迎光临。');
+    expect(graph['5'].inputs.value).toBe(explicit ? '温暖沉稳的成年女声' : originalGraph['5'].inputs.value);
+    expect(graph['2'].inputs).toMatchObject({ text: ['4', 0], instruction: ['5', 0] });
+    expect(workflow.fileContent).toBe(original);
+    expect(mocks.corsSafeFetch.mock.calls.some(([url]) => String(url).endsWith('/upload/image'))).toBe(false);
   });
 });

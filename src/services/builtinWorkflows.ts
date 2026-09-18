@@ -111,6 +111,32 @@ const BUILT_IN_SPECS: BuiltInWorkflowSpec[] = [
     fileName: 'minimax-h3-r2v-turbo.json',
     defaultNodes: { prompt: '138', image: '169', video: '167' },
   },
+  {
+    id: 'builtin-minimax-h3-pdd-i2v',
+    name: 'MiniMax H3 PDD 图生视频',
+    fileName: 'minimax-h3-pdd-i2v.json',
+    defaultNodes: { prompt: '7', image: '27' },
+  },
+  {
+    id: 'builtin-minimax-h3-pdd-i2v-audio',
+    name: 'MiniMax H3 PDD 图生视频＋参考音频',
+    fileName: 'minimax-h3-pdd-i2v-audio.json',
+    defaultNodes: { prompt: '19', image: '35', audio: '28' },
+  },
+  {
+    id: 'builtin-breeze-tts2-voice-clone',
+    name: 'Breeze TTS 2 声音克隆',
+    fileName: 'breeze-tts2-voice-clone.json',
+    category: 'ai-audio',
+    defaultNodes: { prompt: '12', audio: '8' },
+  },
+  {
+    id: 'builtin-breeze-tts2-voice-design',
+    name: 'Breeze TTS 2 声音设计',
+    fileName: 'breeze-tts2-voice-design.json',
+    category: 'ai-audio',
+    defaultNodes: { prompt: '4' },
+  },
 ];
 
 function toWorkflowDefinition(spec: BuiltInWorkflowSpec, createdAt: number): WorkflowDefinition {
