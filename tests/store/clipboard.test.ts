@@ -11,6 +11,12 @@ vi.mock('../../src/services/fileService', () => ({
   ...fileMocks,
   setBaseDataDir: vi.fn(),
   syncAuthorizedDirectories: vi.fn(async () => undefined),
+  waitForPendingNodeFileDeletions: vi.fn(async () => undefined),
+  resolveGroupUndoTrashPaths: vi.fn(async () => []),
+  resolveNodeUndoTrashPaths: vi.fn(async () => []),
+  collectNodeFileReferences: vi.fn(() => new Set<string>()),
+  deleteNodeFiles: vi.fn(async () => undefined),
+  deletedGroupFolderNames: vi.fn(() => []),
 }));
 
 vi.mock('../../src/services/pollManager', () => ({
@@ -20,6 +26,7 @@ vi.mock('../../src/services/pollManager', () => ({
 }));
 
 import { useAppStore } from '../../src/store/useAppStore';
+import { createNodeDuplicateDrag } from '../../src/store/store.nodes';
 
 function node(id: string): Node<BaseNodeData> {
   return {
@@ -186,7 +193,85 @@ describe('canvas clipboard', () => {
   });
 });
 
-describe('control-drag duplication', () => {
+describe('modifier-drag duplication', () => {
+  it('moves only the new identity and restores the entire duplication with one undo', async () => {
+    const source = { ...node('original'), selected: true, position: { x: 40, y: 60 },
+      data: { ...node('original').data, displayId: 87 } };
+    useAppStore.setState({ nodes: [source], selectedNodeIds: ['original'] });
+    useAppStore.getState().commitToHistory();
+    const drag = createNodeDuplicateDrag(useAppStore.getState, source.id);
+    const move = (x: number, dragging: boolean) => useAppStore.getState().onNodesChange(drag.mapChanges([
+      { type: 'position', id: source.id, position: { x, y: 200 }, dragging },
+    ]));
+    move(100, true);
+    await Promise.resolve();
+    move(300, true);
+    expect(useAppStore.getState().nodes.find((item) => item.id === source.id)).toMatchObject(source);
+    expect(useAppStore.getState().nodes.find((item) => item.id === source.id)?.data).toBe(source.data);
+    expect(drag.getNode()?.position).toEqual({ x: 300, y: 200 });
+    move(320, false);
+    const clone = await drag.finish();
+    expect(clone).toMatchObject({ position: { x: 320, y: 200 }, dragging: false, selected: true,
+      data: { displayId: 88 } });
+    expect(useAppStore.getState().nodes.find((item) => item.id === source.id)).toMatchObject({
+      position: { x: 40, y: 60 }, data: { displayId: 87 }, selected: false,
+    });
+    expect(useAppStore.getState().selectedNodeIds).toEqual([clone!.id]);
+    expect(await useAppStore.getState().undo()).toBe(true);
+    expect(useAppStore.getState().nodes).toHaveLength(1);
+    expect(useAppStore.getState().nodes[0]).toMatchObject({ id: source.id, position: source.position,
+      data: { displayId: 87 } });
+    expect(await useAppStore.getState().redo()).toBe(true);
+    expect(useAppStore.getState().nodes.find((item) => item.id === clone!.id)?.position)
+      .toEqual({ x: 320, y: 200 });
+  });
+
+  it('keeps the latest drop position when independent media copying finishes after pointer release', async () => {
+    let finish!: (value: unknown) => void;
+    fileMocks.copyFileToProjectData.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    const source = mediaNode('source', 'a');
+    useAppStore.setState({ currentProjectId: 'a', nodes: [source], showToast: vi.fn() });
+    const drag = createNodeDuplicateDrag(useAppStore.getState, source.id);
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+    useAppStore.getState().onNodesChange(drag.mapChanges([
+      { type: 'position', id: source.id, position: { x: 400, y: 500 }, dragging: false },
+    ]));
+    const stopped = drag.finish();
+    expect(useAppStore.getState().nodes).toMatchObject([source]);
+    finish({ filePath: '/data/a/copy.png', assetUrl: 'asset:///data/a/copy.png' });
+    const clone = await stopped;
+    expect(clone).toMatchObject({ position: { x: 400, y: 500 }, dragging: false,
+      data: { filePath: '/data/a/copy.png' } });
+    expect(useAppStore.getState().nodes.find((item) => item.id === source.id)).toMatchObject(source);
+  });
+
+  it('leaves the original untouched when media copying fails', async () => {
+    fileMocks.copyFileToProjectData.mockRejectedValueOnce(new Error('copy failed'));
+    const source = mediaNode('source', 'a');
+    useAppStore.setState({ currentProjectId: 'a', nodes: [source], showToast: vi.fn() });
+    const drag = createNodeDuplicateDrag(useAppStore.getState, source.id);
+    useAppStore.getState().onNodesChange(drag.mapChanges([
+      { type: 'position', id: source.id, position: { x: 400, y: 500 }, dragging: true },
+    ]));
+    expect(await drag.finish()).toBeUndefined();
+    expect(useAppStore.getState().nodes).toMatchObject([source]);
+  });
+
+  it('does not apply a completed drag to a different project', async () => {
+    useAppStore.setState({ currentProjectId: 'a', nodes: [node('source')] });
+    const drag = createNodeDuplicateDrag(useAppStore.getState, 'source');
+    await Promise.resolve();
+    useAppStore.setState({ currentProjectId: 'b', nodes: [node('other')] });
+    expect(await drag.finish()).toBeUndefined();
+    expect(useAppStore.getState().nodes.map((item) => item.id)).toEqual(['other']);
+  });
+
+  it('preserves original group membership and adds the clone independently', async () => {
+    useAppStore.setState({ nodes: [node('source')], groups: [{ id: 'group', name: 'group',
+      nodeIds: ['source'], color: '#6366f1', createdAt: 1 }] });
+    const cloneId = await useAppStore.getState().duplicateNode('source');
+    expect(useAppStore.getState().groups[0].nodeIds).toEqual(['source', cloneId]);
+  });
   it('does not publish a late copy into a different project', async () => {
     let finish!: (value: unknown) => void;
     fileMocks.copyFileToProjectData.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
@@ -234,14 +319,14 @@ describe('control-drag duplication', () => {
 
     useAppStore.getState().duplicateNode('dragged');
 
-    const stationaryClone = useAppStore.getState().nodes.find((item) => (
+    const draggedClone = useAppStore.getState().nodes.find((item) => (
       !['source', 'dragged', 'downstream'].includes(item.id)
     ));
-    expect(stationaryClone).toBeDefined();
+    expect(draggedClone).toBeDefined();
 
     const incomingEdges = useAppStore.getState().edges.filter((edge) => edge.source === 'source');
     expect(incomingEdges).toEqual(expect.arrayContaining([
-      expect.objectContaining({ target: stationaryClone?.id }),
+      expect.objectContaining({ target: draggedClone?.id }),
       expect.objectContaining({
         target: 'dragged',
         sourceHandle: 'output',
@@ -252,13 +337,14 @@ describe('control-drag duplication', () => {
       }),
     ]));
     expect(useAppStore.getState().edges).not.toContainEqual(expect.objectContaining({
-      source: 'dragged',
+      source: draggedClone?.id,
       target: 'downstream',
     }));
     expect(useAppStore.getState().edges).toContainEqual(expect.objectContaining({
-      source: stationaryClone?.id,
+      source: 'dragged',
       target: 'downstream',
     }));
+    expect(useAppStore.getState().edges.find((edge) => edge.id === incomingEdge.id)).toBe(incomingEdge);
   });
 
   it('keeps director media while resetting the cloned runtime session', () => {

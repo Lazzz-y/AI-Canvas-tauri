@@ -15,7 +15,6 @@ import { ReactFlow,
   useViewport,
   ReactFlowProvider,
   Panel,
-  applyNodeChanges,
   type OnSelectionChangeParams,
   type NodeChange,
   type EdgeTypes,
@@ -58,7 +57,7 @@ import { useNodeContextMenu } from '../hooks/useNodeContextMenu';
 import { useCanvasSecondaryClickMenu } from '../hooks/useCanvasSecondaryClickMenu';
 import { useCanvasLongPressRadialMenu } from '../hooks/useCanvasLongPressRadialMenu';
 import { useAppStore } from '../store/useAppStore';
-import { filterHiddenCanvasElements, isCanvasConnectionValid } from '../store/store.nodes';
+import { createNodeDuplicateDrag, filterHiddenCanvasElements, isCanvasConnectionValid } from '../store/store.nodes';
 import {
   createCanvasEdgeProjection,
   createCanvasNodeProjectionCache,
@@ -379,7 +378,6 @@ function CanvasInner() {
   const handleEdgesChange = useAppStore((s) => s.onEdgesChange);
   const clearGroupedSelection = useAppStore((s) => s.clearGroupedSelection);
   const settleNodeGroupingOnDragStop = useAppStore((s) => s.settleNodeGroupingOnDragStop);
-  const duplicateNode = useAppStore((s) => s.duplicateNode);
   const commitToHistory = useAppStore((s) => s.commitToHistory);
   const minimapVisible = useAppStore((s) => s.minimapVisible);
   const closeNodeDialog = useAppStore((s) => s.closeNodeDialog);
@@ -1103,18 +1101,20 @@ function CanvasInner() {
     [onResizeStart, applyResizeSnap, onResizeStop],
   );
 
-  // 按住 Ctrl/⌘ 开始拖拽 → 在原位复制一个节点（拖动的仍是原节点，等于"拖出一个副本"）
+  const duplicateDrag = useRef<ReturnType<typeof createNodeDuplicateDrag> | null>(null);
+
+  // Alt 拖出副本，兼容已有 Ctrl/⌘ 手势；原节点及其引用留在原位。
   const handleNodeDragStart = useCallback(
     (evt: React.MouseEvent, node: RFNode<BaseNodeData>) => {
       const liveNode = hydrateCanvasNodeData(node, useAppStore.getState().nodes);
       beginCanvasInteraction('node');
       if (liveNode.type === 'canvas-note') commitToHistory();
-      if ((evt.ctrlKey || evt.metaKey) && liveNode.type !== 'group') {
-        duplicateNode(liveNode.id);
-      }
       onNodeDragStart(evt, liveNode);
+      duplicateDrag.current = (evt.altKey || evt.ctrlKey || evt.metaKey) && liveNode.type !== 'group'
+        ? createNodeDuplicateDrag(useAppStore.getState, liveNode.id)
+        : null;
     },
-    [beginCanvasInteraction, commitToHistory, duplicateNode, onNodeDragStart],
+    [beginCanvasInteraction, commitToHistory, onNodeDragStart],
   );
 
   // 仅在线型切换时重建，避免每帧新对象触发 React Flow 内部更新
@@ -1180,7 +1180,7 @@ function CanvasInner() {
           const draggedIds = new Set(
             draggingPosChanges.flatMap((change) => change.type === 'position' ? [change.id] : []),
           );
-          snapped = hydratedChanges.map((change) => {
+          snapped = unlockedChanges.map((change) => {
             if (change.type !== 'position' || !change.position || !draggedIds.has(change.id)) return change;
             return {
               ...change,
@@ -1193,20 +1193,9 @@ function CanvasInner() {
         }
       }
 
-      // Detect group node removals — convert to ungroup
-      const removedIds = snapped
-        .filter((c) => c.type === 'remove')
-        .map((c) => c.id);
+      if (duplicateDrag.current) snapped = duplicateDrag.current.mapChanges(snapped);
 
-      // 快速路径：纯拖拽/选择变更（无删除）—— 用函数式更新，始终基于最新
-      // store.nodes，避免快速拖动时闭包 nodes 过期导致的抖动卡顿。
-      if (removedIds.length === 0) {
-        useAppStore.setState((s) => ({
-          nodes: applyNodeChanges(snapped, s.nodes) as RFNode<BaseNodeData>[],
-        }));
-        return;
-      }
-
+      // Store Action 基于最新节点应用位移，并统一处理分组删除。
       applyStableNodeChanges(snapped);
     },
     [applySnap, applyStableNodeChanges],
@@ -1295,6 +1284,11 @@ function CanvasInner() {
 
   const handleNodeDrag = useCallback(
     (e: React.MouseEvent, node: RFNode) => {
+      if (duplicateDrag.current?.sourceId === node.id) {
+        const clone = duplicateDrag.current.getNode();
+        if (!clone) return;
+        node = clone;
+      }
       const liveNode = hydrateCanvasNodeData(
         node as RFNode<BaseNodeData>,
         useAppStore.getState().nodes,
@@ -1363,6 +1357,28 @@ function CanvasInner() {
       clearFolderDropTarget();
       setDropGhost(null);
       clearGhostNodeHidden();
+      const duplication = duplicateDrag.current;
+      if (duplication?.sourceId === node.id) {
+        duplicateDrag.current = null;
+        onNodeDragStop();
+        void duplication.finish().then((clone) => {
+          if (!clone) return;
+          const shotlistId = frameCell?.closest('.react-flow__node')?.getAttribute('data-id');
+          const rowId = frameCell?.dataset.shotFrameRow;
+          if (shotlistId && rowId) {
+            useAppStore.getState().bindShotlistFrame(shotlistId, rowId, clone.id);
+            return;
+          }
+          const sbId = cell?.closest('.react-flow__node')?.getAttribute('data-id');
+          const idx = Number(cell?.dataset.sbCellIdx);
+          if (sbId && !Number.isNaN(idx)) {
+            useAppStore.getState().fillStoryboardCell(sbId, idx, clone.id);
+            return;
+          }
+          settleNodeGroupingOnDragStop(clone);
+        });
+        return;
+      }
       if (frameCell) {
         const shotlistId = frameCell.closest('.react-flow__node')?.getAttribute('data-id');
         const rowId = frameCell.dataset.shotFrameRow;

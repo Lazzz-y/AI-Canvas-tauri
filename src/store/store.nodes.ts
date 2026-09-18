@@ -375,6 +375,62 @@ export interface NodeSlice {
   bindShotlistFrame: (shotlistId: string, rowId: string, sourceNodeId: string) => void;
 }
 
+/** 拖拽会话只驻留内存；React Flow 仍发送源 ID，将其位移转给副本。 */
+export function createNodeDuplicateDrag(getState: () => AppState, sourceId: string) {
+  const initial = getState();
+  const source = initial.nodes.find((node) => node.id === sourceId);
+  const projectId = initial.currentProjectId;
+  let position = { ...(source?.position ?? { x: 0, y: 0 }) };
+  let dragging = true;
+  let cloneId: string | undefined;
+  const getClone = () => getState().currentProjectId === projectId
+    ? getState().nodes.find((node) => node.id === cloneId)
+    : undefined;
+  const ready = initial.duplicateNode(sourceId).then((id) => {
+    cloneId = id;
+    if (getClone()) {
+      getState().onNodesChange([{ type: 'position', id: id!, position, dragging }]);
+    }
+  });
+
+  return {
+    sourceId,
+    getNode: getClone,
+    mapChanges(changes: NodeChange<Node<BaseNodeData>>[]) {
+      return changes.flatMap((change): NodeChange<Node<BaseNodeData>>[] => {
+        if (change.type !== 'position' || change.id !== sourceId) return [change];
+        if (change.position) position = { ...change.position };
+        if (change.dragging !== undefined) dragging = change.dragging;
+        // 媒体文件还在复制时只缓存最新落点，失败时原节点也不会被拖走。
+        const original = getState().currentProjectId === projectId
+          ? getState().nodes.find((node) => node.id === sourceId)
+          : undefined;
+        if (!original || !source) return [];
+        // 同时刷新源节点的受控位置，覆盖 React Flow 本帧内部的临时拖拽坐标。
+        const reset: NodeChange<Node<BaseNodeData>> = {
+          type: 'position', id: sourceId, position: { ...source.position }, dragging: false,
+        };
+        return getClone() ? [reset, { ...change, id: cloneId! }] : [reset];
+      });
+    },
+    async finish() {
+      dragging = false;
+      await ready;
+      const clone = getClone();
+      if (!clone) return;
+      getState().onNodesChange([
+        { type: 'position', id: clone.id, position, dragging: false },
+        ...getState().nodes.filter((node) => node.selected).map((node) => ({
+          type: 'select' as const, id: node.id, selected: false,
+        })),
+        { type: 'select', id: clone.id, selected: true },
+      ]);
+      getState().setSelectedNodeIds([clone.id]);
+      return getClone();
+    },
+  };
+}
+
 export const createNodeSlice: StateCreator<AppState, [], [], NodeSlice> = (set, get) => ({
   nodes: [],
   edges: [],
@@ -748,8 +804,7 @@ export const createNodeSlice: StateCreator<AppState, [], [], NodeSlice> = (set, 
     }
     get().commitToHistory();
 
-    // 身份对调：克隆留在原位并承接原节点的边与编号；被拖动的节点
-    // 改成新编号，同时额外继承一份入口边。
+    // 原节点的真实 ID、编号和引用保持不变；新身份与独立素材都属于副本。
     const cloneId = `node-${generateId()}`;
     const newDisplayId = getNextDisplayId(get().nodes);
 
@@ -758,26 +813,22 @@ export const createNodeSlice: StateCreator<AppState, [], [], NodeSlice> = (set, 
         ...src,
         id: cloneId,
         position: { ...src.position },
-        data: prepareDuplicateNodeData(duplicateData, src.type, cloneId),
+        data: { ...prepareDuplicateNodeData(duplicateData, src.type, cloneId), displayId: newDisplayId },
         selected: false,
         dragging: false,
       } as Node<BaseNodeData>;
-      const nodes = s.nodes.map((n) =>
-        n.id === nodeId
-          ? ({ ...n, data: { ...n.data, displayId: newDisplayId } } as Node<BaseNodeData>)
-          : n,
-      );
-      nodes.push(clone);
-      // 原边改连到原位克隆，拖出的节点仅继承入口边，避免复制输出影响下游。
-      const remappedEdges = s.edges.map((e) =>
-        e.source === nodeId || e.target === nodeId
-          ? { ...e, source: e.source === nodeId ? cloneId : e.source, target: e.target === nodeId ? cloneId : e.target }
-          : e,
-      );
+      const nodes = [...s.nodes, clone];
+      // 副本仅继承入口边，不改写原边或下游引用。
       const inheritedIncomingEdges = s.edges
         .filter((edge) => edge.target === nodeId)
-        .map((edge) => ({ ...edge, id: `edge-${generateId()}` }));
-      return { nodes, edges: [...remappedEdges, ...inheritedIncomingEdges] };
+        .map((edge) => ({ ...edge, id: `edge-${generateId()}`, target: cloneId }));
+      return {
+        nodes,
+        edges: [...s.edges, ...inheritedIncomingEdges],
+        groups: s.groups.map((group) => group.nodeIds.includes(nodeId)
+          ? { ...group, nodeIds: [...group.nodeIds, cloneId] }
+          : group),
+      };
     });
     return cloneId;
   },
