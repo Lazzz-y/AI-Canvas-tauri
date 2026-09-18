@@ -124,6 +124,13 @@ const BUILT_IN_SPECS: BuiltInWorkflowSpec[] = [
     defaultNodes: { prompt: '19', image: '35', audio: '28' },
   },
   {
+    id: 'builtin-minimax-h3-pdd-r2v',
+    name: 'MiniMax H3 PDD 自由参考（图片·视频·音频可选）',
+    fileName: 'minimax-h3-pdd-r2v.json',
+    // 音频不指定单一默认：现有执行器才能依次填充三个 audio IO。
+    defaultNodes: { prompt: '19', image: '101', video: '201' },
+  },
+  {
     id: 'builtin-breeze-tts2-voice-clone',
     name: 'Breeze TTS 2 声音克隆',
     fileName: 'breeze-tts2-voice-clone.json',
