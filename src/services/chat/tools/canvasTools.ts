@@ -391,6 +391,7 @@ function describeNode(node: Node<BaseNodeData>): Record<string, unknown> {
     displayId: data.displayId,
     type: node.type,
     label: data.label,
+    displayLabel: data.fileName || data.label,
     role: data.role,
     status: data.status ?? 'idle',
     position: { x: Math.round(node.position.x), y: Math.round(node.position.y) },
@@ -982,6 +983,7 @@ export function registerCanvasAgentTools(): Array<() => void> {
       title: '更新画布节点',
       description: [
         '批量更新匹配节点：名称、提示词、正文内容、位置、尺寸、生成模型和生成参数。',
+        'label 同步已有文件名显示别名，但不重命名磁盘文件或改变媒体路径。',
         '视频节点使用统一字段 videoResolution / videoDuration；内部会映射到对应厂商协议字段。',
         'content 改写节点正文，只能用于文本类节点（ai-text / ai-markdown / source-text / comment）。',
         'prompt 里可写 @{nodeId:label} 引用其他节点输出、@drama{assetId:name} 引用资产库设定，生成时自动展开；ID 必须真实存在。',
@@ -1078,6 +1080,15 @@ export function registerCanvasAgentTools(): Array<() => void> {
         // updateNodesDataBatch 自带一次 commitToHistory；只移动时才需要单独提交历史
         if (Object.keys(patch).length > 0) store.updateNodesDataBatch(targetIds, patch);
         else store.commitToHistory();
+        // Media titles prefer fileName. Reuse the batch history entry and
+        // change only the displayed alias, preserving media paths and bytes.
+        if (input.label !== undefined) {
+          for (const node of targets) {
+            if (node.data.fileName) {
+              store.updateNodeDataTransient(node.id, { fileName: input.label.trim() });
+            }
+          }
+        }
         if (moveAbsolute || moveRelative) {
           const current = useAppStore.getState();
           for (const nodeId of targetIds) {
