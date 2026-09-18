@@ -222,6 +222,46 @@ export async function corsSafeFetch(url: string, init: RequestInit = {}): Promis
     let controller: ReadableStreamDefaultController<Uint8Array>;
     let responseResolved = false;
     let finished = false;
+    let errorStatus = 0;
+    let errorContentType = '';
+    let errorBytes = 0;
+    const errorChunks: Uint8Array[] = [];
+    const maxErrorBytes = 8192;
+
+    const logErrorResponse = () => {
+      if (!errorStatus) return;
+      // Only retain a small error response; never consume or clone the caller's stream.
+      let body = '[OMITTED: response exceeds 8192 bytes]';
+      if (errorBytes <= maxErrorBytes) {
+        const decoder = new TextDecoder();
+        body = errorChunks.map((chunk) => decoder.decode(chunk, { stream: true })).join('') + decoder.decode();
+        const secrets: string[] = [];
+        requestHeaders.forEach((value, name) => {
+          if (SENSITIVE_KEY_RE.test(name)) {
+            secrets.push(value, value.replace(/^Bearer\s+/i, ''));
+          }
+        });
+        new URL(url).searchParams.forEach((value, name) => {
+          if (SENSITIVE_KEY_RE.test(name)) secrets.push(value);
+        });
+        for (const secret of secrets.filter(Boolean).sort((a, b) => b.length - a.length)) {
+          body = body.split(secret).join('[REDACTED]');
+        }
+        body = body.replace(/\bBearer\s+[^\s"'<>]+/gi, 'Bearer [REDACTED]')
+          .replace(/((?:api[-_]?key|token|secret|password|authorization)\s*[=:]\s*)[^\s"'<>]+/gi, '$1[REDACTED]');
+      }
+      console.warn('[AI Response Error]', {
+        source: 'Tauri HTTP',
+        requestId,
+        method: (init.method || 'GET').toUpperCase(),
+        url: sanitizeUrl(url),
+        status: errorStatus,
+        contentType: sanitizeString(errorContentType),
+        body: sanitizeString(JSON.stringify(sanitizeBody(body))),
+        bodyBytes: errorBytes,
+        truncated: errorBytes > maxErrorBytes,
+      });
+    };
 
     const cleanup = () => {
       signal?.removeEventListener('abort', handleAbort);
@@ -251,6 +291,7 @@ export async function corsSafeFetch(url: string, init: RequestInit = {}): Promis
       finished = true;
       cleanup();
       controller.close();
+      logErrorResponse();
     };
     const handleAbort = () => {
       cancelNativeRequest();
@@ -278,6 +319,10 @@ export async function corsSafeFetch(url: string, init: RequestInit = {}): Promis
             return;
           }
           responseResolved = true;
+          if (import.meta.env.DEV && event.status >= 400) {
+            errorStatus = event.status;
+            errorContentType = new Headers(event.headers).get('content-type') || '';
+          }
           resolve(new Response(stream, {
             status: event.status,
             headers: new Headers(event.headers),
@@ -285,7 +330,13 @@ export async function corsSafeFetch(url: string, init: RequestInit = {}): Promis
           return;
         }
         if (event.event === 'chunk') {
-          controller.enqueue(decodeBase64Body(event.body));
+          const bytes = decodeBase64Body(event.body);
+          if (errorStatus) {
+            errorBytes += bytes.byteLength;
+            if (errorBytes <= maxErrorBytes) errorChunks.push(bytes);
+            else errorChunks.length = 0;
+          }
+          controller.enqueue(bytes);
           return;
         }
         finish();

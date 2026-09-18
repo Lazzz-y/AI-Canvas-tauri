@@ -141,11 +141,7 @@ export default function VideoCapabilityEditor({ model, onChange, onClose }: Vide
       defaultDuration: keepDeclaredVideoCapabilityDefault(capability.defaultDuration, next),
     });
   };
-  const optionClass = (active: boolean) => `min-h-7 rounded-md border px-2.5 py-1 text-[11px] transition-colors ${
-    active
-      ? 'border-indigo-400/70 bg-indigo-500/20 text-indigo-100'
-      : 'border-canvas-border bg-black/10 text-canvas-text-secondary hover:border-indigo-400/40 hover:text-canvas-text'
-  }`;
+  const optionClass = (active: boolean) => `ui-chip min-h-7 ${active ? 'is-active' : ''}`;
 
   return (
     <div className="mt-3 rounded-xl border border-canvas-border bg-canvas-surface/80 p-4 shadow-xl shadow-black/10">
@@ -239,12 +235,12 @@ export default function VideoCapabilityEditor({ model, onChange, onClose }: Vide
           </div>
         </section>
 
-        <section className="rounded-lg border border-canvas-border bg-black/10 p-3">
+        <section className="rounded-lg border border-canvas-border bg-canvas-card p-3">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
             <span className="text-xs font-medium text-canvas-text">生成时长</span>
-            <div className="flex rounded-md border border-canvas-border bg-canvas-card p-0.5" role="group" aria-label="时长模式">
-              <button type="button" className={`rounded px-2.5 py-1 text-[10px] ${!discreteDurations ? 'bg-indigo-500/25 text-indigo-100' : 'text-canvas-text-secondary'}`} onClick={() => commit({ ...capability, durations: undefined, minDuration: capability.minDuration ?? VIDEO_DURATION_RANGE_MIN, maxDuration: capability.maxDuration ?? 15 })}>连续范围</button>
-              <button type="button" className={`rounded px-2.5 py-1 text-[10px] ${discreteDurations ? 'bg-indigo-500/25 text-indigo-100' : 'text-canvas-text-secondary'}`} onClick={() => commit({ ...capability, durations: [capability.defaultDuration ?? 5] })}>固定档位</button>
+            <div className="ui-segmented border border-canvas-border" role="group" aria-label="时长模式">
+              <button type="button" aria-pressed={!discreteDurations} className={`ui-segmented__item ${!discreteDurations ? 'is-active' : ''}`} onClick={() => commit({ ...capability, durations: undefined, minDuration: capability.minDuration ?? VIDEO_DURATION_RANGE_MIN, maxDuration: capability.maxDuration ?? 15 })}>连续范围</button>
+              <button type="button" aria-pressed={!!discreteDurations} className={`ui-segmented__item ${discreteDurations ? 'is-active' : ''}`} onClick={() => commit({ ...capability, durations: [capability.defaultDuration ?? 5] })}>固定档位</button>
             </div>
           </div>
           {discreteDurations ? (

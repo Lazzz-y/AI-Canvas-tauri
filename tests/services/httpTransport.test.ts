@@ -49,6 +49,43 @@ beforeEach(() => {
 });
 
 describe('CORS-safe AI HTTP transport', () => {
+  it('logs native error bodies without consuming them or exposing echoed credentials', async () => {
+    vi.stubGlobal('window', { __TAURI_INTERNALS__: {} });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const body = JSON.stringify({ error: { message: '上游 Not Found echoed-key' }, token: 'response-secret' });
+    const bytes = Buffer.from(body);
+    mockNativeStream([bytes.subarray(0, 25), bytes.subarray(25)], {
+      status: 404, headers: [['content-type', 'application/json']],
+    });
+    const response = await corsSafeFetch('https://gateway.example/v1/chat/completions', {
+      method: 'POST', headers: { authorization: 'Bearer echoed-key' },
+    });
+    expect(await response.text()).toBe(body);
+    expect(response.status).toBe(404);
+    expect(warn).toHaveBeenCalledWith('[AI Response Error]', expect.objectContaining({
+      status: 404, contentType: 'application/json', method: 'POST',
+      body: expect.stringContaining('上游 Not Found'),
+    }));
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('echoed-key');
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('response-secret');
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('bounds error logging and stays silent for successful native responses', async () => {
+    vi.stubGlobal('window', { __TAURI_INTERNALS__: {} });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const body = 'x'.repeat(9000);
+    mockNativeStream([Buffer.from(body)], { status: 404 });
+    expect(await (await corsSafeFetch('https://gateway.example/test')).text()).toBe(body);
+    expect(warn).toHaveBeenCalledWith('[AI Response Error]', expect.objectContaining({
+      truncated: true, bodyBytes: 9000, body: expect.stringContaining('OMITTED'),
+    }));
+    warn.mockClear();
+    mockNativeStream([Buffer.from('ok')]);
+    expect(await (await corsSafeFetch('https://gateway.example/test')).text()).toBe('ok');
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it.each(['text/html', 'text/plain'])('explains gateway 504 pages without rendering HTML (%s)', async (contentType) => {
     const response = new Response('<html><head><title>504 Gateway Time-out</title></head><body>nginx</body></html>', {
       status: 504, headers: { 'Content-Type': contentType },
