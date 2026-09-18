@@ -16,6 +16,7 @@ vi.mock('../../../src/services/fileService', () => ({
   copyFileToProjectData: mocks.copy, saveDataUrlToProjectData: mocks.save,
   setBaseDataDir: vi.fn(), syncAuthorizedDirectories: vi.fn(),
   waitForPendingNodeFileDeletions: vi.fn(async () => undefined),
+  resolveGroupUndoTrashPaths: vi.fn(async () => []),
 }));
 vi.mock('../../../src/store/store.utils', async (original) => ({
   ...await original<typeof import('../../../src/store/store.utils')>(),

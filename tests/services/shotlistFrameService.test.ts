@@ -7,6 +7,7 @@ vi.mock('../../src/components/nodes/shared/defaultModels', () => ({
 vi.mock('../../src/services/fileService', () => ({
   persistMediaUrlToProjectData: mocks.persist,
   waitForPendingNodeFileDeletions: vi.fn(async () => undefined),
+  resolveGroupUndoTrashPaths: vi.fn(async () => []),
 }));
 import { useAppStore } from '../../src/store/useAppStore';
 import { generateShotlistFrames } from '../../src/services/shotlistFrameService';
