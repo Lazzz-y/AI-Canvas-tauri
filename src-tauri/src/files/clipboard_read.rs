@@ -1,11 +1,14 @@
 //! 主窗口显式读取 Windows 剪贴板图片/文本；不读取文件路径或更改剪贴板。
 use serde::Serialize;
 
+#[cfg(any(target_os = "windows", test))]
 const MAX_INPUT_BYTES: usize = 32 * 1024 * 1024;
+#[cfg(any(target_os = "windows", test))]
 const MAX_TEXT_UNITS: usize = 100_000;
 
 #[derive(Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
+#[cfg_attr(not(any(target_os = "windows", test)), allow(dead_code))]
 pub enum ClipboardContent {
     Text {
         text: String,

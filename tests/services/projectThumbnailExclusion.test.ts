@@ -7,13 +7,27 @@ const mocks = vi.hoisted(() => ({
   readDir: vi.fn(),
   stat: vi.fn(),
   identifyAsset: vi.fn(),
+  getHistoryEntriesPage: vi.fn(),
+  getProjectConversations: vi.fn(),
+  getConversationMessages: vi.fn(),
+  getAllProjects: vi.fn(),
+  getProjectById: vi.fn(),
+  remove: vi.fn(),
 }));
 
 vi.mock('@tauri-apps/plugin-fs', async (importOriginal) => ({
   ...await importOriginal<typeof import('@tauri-apps/plugin-fs')>(),
+  remove: mocks.remove,
   readDir: mocks.readDir,
   stat: mocks.stat,
   exists: async (path: string) => mocks.directories.has(path) || mocks.sizes.has(path),
+}));
+vi.mock('../../src/services/indexedDbService', () => ({
+  getHistoryEntriesPage: mocks.getHistoryEntriesPage,
+  getProjectConversations: mocks.getProjectConversations,
+  getConversationMessages: mocks.getConversationMessages,
+  getAllProjects: mocks.getAllProjects,
+  getProjectById: mocks.getProjectById,
 }));
 vi.mock('../../src/services/fs/core', async (importOriginal) => ({
   ...await importOriginal<typeof import('../../src/services/fs/core')>(),
@@ -29,7 +43,7 @@ vi.mock('../../src/services/fs/assetIndex', async (importOriginal) => ({
 
 import { listExternalFolderFiles, walkDirectoryFiles } from '../../src/services/fs/assetLibrary';
 import { listProjectFiles } from '../../src/services/fileService';
-import { scanStorageHealth } from '../../src/services/fs/storageHealth';
+import { scanStorageHealth, collectNodeFilePaths, deleteOrphanFile, deleteDuplicateFile } from '../../src/services/fs/storageHealth';
 
 function addDirectory(path: string, names: string[]): void {
   mocks.directories.set(path, names.map((name) => ({
@@ -45,6 +59,12 @@ function project(id: string): CanvasProject {
 
 describe('project thumbnail directories stay outside asset scans', () => {
   beforeEach(() => {
+    mocks.getAllProjects.mockResolvedValue([]);
+    mocks.getProjectById.mockImplementation(async (id: string) => ({ ...project(id), nodes: [] }));
+    mocks.remove.mockResolvedValue(undefined);
+    mocks.getHistoryEntriesPage.mockResolvedValue({ records: [], hasMore: false });
+    mocks.getProjectConversations.mockResolvedValue([]);
+    mocks.getConversationMessages.mockResolvedValue({ messages: [], total: 0 });
     mocks.directories.clear();
     mocks.sizes.clear();
     mocks.readDir.mockImplementation(async (path: string) => mocks.directories.get(path) ?? []);
@@ -113,5 +133,96 @@ describe('project thumbnail directories stay outside asset scans', () => {
     expect(mocks.readDir).not.toHaveBeenCalledWith('/project/.thumbnail');
     expect(mocks.readDir).not.toHaveBeenCalledWith('/second/.thumbnail');
     expect(mocks.readDir).toHaveBeenCalledWith('/project/.trash/.thumbnail');
+  });
+});
+
+
+describe('storage health cross-project deletion protection', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.getHistoryEntriesPage.mockResolvedValue({ records: [], hasMore: false });
+    mocks.getProjectConversations.mockResolvedValue([]);
+    mocks.getConversationMessages.mockResolvedValue({ messages: [], total: 0 });
+    mocks.directories.clear();
+    mocks.sizes.clear();
+    mocks.readDir.mockImplementation(async (path: string) => mocks.directories.get(path) ?? []);
+    mocks.stat.mockResolvedValue({ size: 10 });
+    mocks.remove.mockResolvedValue(undefined);
+    mocks.getAllProjects.mockResolvedValue([project('a'), project('b')]);
+    mocks.getProjectById.mockImplementation(async (id: string) => ({
+      ...project(id), nodes: [{ data: { filePath: `/${id}/used.png` } }],
+    }));
+    addDirectory('/a', ['used.png', 'unsaved.png']);
+    addDirectory('/b', ['used.png', 'unused.png']);
+  });
+
+  it('reads unopened projects and preserves current unsaved references', async () => {
+    const report = await scanStorageHealth([project('a')], () => collectNodeFilePaths([
+      { data: { filePath: '/a/unsaved.png' } },
+    ]));
+    expect(report.orphans.map((file) => file.path)).toEqual(['/b/unused.png']);
+    expect(mocks.getProjectById).toHaveBeenCalledWith('b');
+  });
+
+  it('retains nested relative paths and encoded local media URLs', async () => {
+    mocks.getProjectById.mockImplementation(async (id: string) => ({
+      ...project(id), nodes: [{ data: { storyboardOverrides: [{ relativePath: 'used.png' }] } }],
+    }));
+    const report = await scanStorageHealth([], collectNodeFilePaths([
+      { data: { videoReferences: [{ url: 'http://asset.localhost/%2Fa%2Funsaved.png' }] } },
+    ]));
+    expect(report.orphans.map((file) => file.path)).toEqual(['/b/unused.png']);
+  });
+
+  it.each([undefined, { nodes: null }])('fails closed on missing or malformed project records', async (record) => {
+    mocks.getProjectById.mockResolvedValue(record);
+    await expect(scanStorageHealth([], new Set())).rejects.toThrow();
+    expect(mocks.remove).not.toHaveBeenCalled();
+  });
+
+  it('fails closed on database read errors', async () => {
+    mocks.getProjectById.mockRejectedValue(new Error('unavailable'));
+    await expect(scanStorageHealth([], new Set())).rejects.toThrow('unavailable');
+  });
+
+  it('retains files referenced only by output history or conversation attachments', async () => {
+    mocks.getHistoryEntriesPage.mockResolvedValue({ records: [{ filePath: '/a/unsaved.png' }], hasMore: false });
+    mocks.getProjectConversations.mockResolvedValue([{ id: 'chat' }]);
+    mocks.getConversationMessages.mockResolvedValue({ messages: [{ attachments: [{ filePath: '/b/unused.png' }] }], total: 1 });
+    const report = await scanStorageHealth([], new Set());
+    expect(report.orphans).toEqual([]);
+  });
+
+  it('normalizes Windows paths without folding Unix paths', () => {
+    const paths = collectNodeFilePaths([{ data: {
+      filePath: 'C:\\Media\\Used.png',
+      references: ['/Media/Used.png'],
+    } }]);
+    expect(paths.has('c:/media/used.png')).toBe(true);
+    expect(paths.has('/Media/Used.png')).toBe(true);
+    expect(paths.has('/media/used.png')).toBe(false);
+  });
+
+  it.each([deleteOrphanFile, deleteDuplicateFile])('requires fresh verification before removal', async (removeFile) => {
+    expect(await removeFile('/b/unused.png')).toBe(false);
+    expect(await removeFile('/b/unused.png', async () => false)).toBe(false);
+    expect(await removeFile('/b/unused.png', async () => { throw new Error('read failed'); })).toBe(false);
+    expect(mocks.remove).not.toHaveBeenCalled();
+    expect(await removeFile('/b/unused.png', async () => true)).toBe(true);
+    expect(mocks.remove).toHaveBeenCalledOnce();
+  });
+
+  it('rejects an old orphan report after another project starts referencing the file', async () => {
+    const before = await scanStorageHealth([], new Set());
+    expect(before.orphans.some((file) => file.path === '/b/unused.png')).toBe(true);
+    mocks.getProjectById.mockImplementation(async (id: string) => ({
+      ...project(id), nodes: [{ data: { filePath: '/b/unused.png' } }],
+    }));
+    const deleted = await deleteOrphanFile('/b/unused.png', async (path) => {
+      const fresh = await scanStorageHealth([], new Set());
+      return fresh.orphans.some((file) => file.path === path);
+    });
+    expect(deleted).toBe(false);
+    expect(mocks.remove).not.toHaveBeenCalled();
   });
 });
