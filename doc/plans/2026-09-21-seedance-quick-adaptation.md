@@ -90,3 +90,11 @@
 2. 运行改动文件定向 ESLint、相关 Vitest、`npm run typecheck`、`npm run test:typecheck`、`git diff --check`。
 3. 使用严格 UTF-8 解码检查全部改动文本并扫描常见乱码字符。
 4. 检查 `git status --short`，确保不包含既有 `builtinWorkflows` 改动。
+
+## 实施结果（2026-09-21）
+
+- 状态：已完成。Seedance 2.0/2.5 共用官方能力语义，火山直连与 APIMart 保留各自传输覆盖；自定义接口支持显式选择八组“型号 + 协议”快速模板。
+- 参数行为：火山 Seedance 2.5 默认提交自动时长 `-1`；首尾帧模式只展示 `adaptive`，视频编辑同时强制 `adaptive` 与自动时长。旧值在模型或参考模式切换后会收敛到当前有效默认值。
+- 安全边界：快速适配只由用户手动应用，不按模型名称推断；未知复合 `content` 文档继续走原有人工确认逻辑，未扩大自动导入范围。
+- 验证：`npm run typecheck`、`npm run test:typecheck`、改动文件定向 ESLint、`git diff --check` 均通过；全量 `npm run test` 为 344 个文件、4391 项通过。
+- 未覆盖：未使用真实火山/APIMart Key 发起付费生成，也未做桌面端人工视觉验收；协议字段与能力边界由本地合同测试覆盖。

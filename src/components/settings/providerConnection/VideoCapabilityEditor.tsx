@@ -9,6 +9,11 @@ import { Icon } from '@iconify/react';
 import { useState } from 'react';
 import type { ProviderModelSelection } from '../../../types';
 import type { VideoInputConstraints, VideoModelCapability } from '../../../types/aiTypes';
+import {
+  SEEDANCE_QUICK_ADAPT_OPTIONS,
+  type SeedanceModelVariant,
+  type SeedanceQuickAdaptTransport,
+} from '../../../services/ai/seedanceModelCapabilities';
 import PopupCloseButton from '../../shared/PopupCloseButton';
 import {
   VIDEO_DURATION_PRESETS,
@@ -26,6 +31,10 @@ import {
 interface VideoCapabilityEditorProps {
   model: ProviderModelSelection;
   onChange: (capability: VideoModelCapability | undefined) => void;
+  onApplySeedanceTemplate: (
+    model: SeedanceModelVariant,
+    transport: SeedanceQuickAdaptTransport,
+  ) => void;
   onClose: () => void;
 }
 
@@ -37,11 +46,17 @@ function optionalNumber(value: string, options: { integer?: boolean; scale?: num
   return options.integer ? Math.round(scaled) : scaled;
 }
 
-export default function VideoCapabilityEditor({ model, onChange, onClose }: VideoCapabilityEditorProps) {
+export default function VideoCapabilityEditor({
+  model,
+  onChange,
+  onApplySeedanceTemplate,
+  onClose,
+}: VideoCapabilityEditorProps) {
   const [customRatio, setCustomRatio] = useState('');
   const [customResolution, setCustomResolution] = useState('');
   const [customFrameRate, setCustomFrameRate] = useState('');
   const [customDuration, setCustomDuration] = useState('');
+  const [seedanceTemplateId, setSeedanceTemplateId] = useState('2.5:volcengine');
   const capability = createEditableVideoCapability(model.videoCapability);
   const discreteDurations = capability.durations?.length
     ? [...capability.durations].sort((left, right) => left - right)
@@ -159,6 +174,41 @@ export default function VideoCapabilityEditor({ model, onChange, onClose }: Vide
       </div>
 
       <div className="space-y-4">
+        <section className="rounded-lg border border-indigo-400/25 bg-indigo-400/[0.06] p-3">
+          <div className="flex flex-wrap items-end gap-2">
+            <label className="min-w-56 flex-1 space-y-1 text-[10px] text-canvas-text-secondary">
+              <span className="font-medium text-canvas-text">Seedance 快速适配</span>
+              <Select
+                fixedMenu
+                className="w-full"
+                size="sm"
+                value={seedanceTemplateId}
+                onChange={setSeedanceTemplateId}
+              >
+                {SEEDANCE_QUICK_ADAPT_OPTIONS.map((option) => (
+                  <option key={option.id} value={option.id}>{option.label}</option>
+                ))}
+              </Select>
+            </label>
+            <button
+              type="button"
+              className="provider-secondary-btn min-h-8 px-3 text-[11px]"
+              onClick={() => {
+                const [seedanceModel, transport] = seedanceTemplateId.split(':') as [
+                  SeedanceModelVariant,
+                  SeedanceQuickAdaptTransport,
+                ];
+                onApplySeedanceTemplate(seedanceModel, transport);
+              }}
+            >
+              应用模板
+            </button>
+          </div>
+          <p className="mt-2 text-[10px] leading-4 text-canvas-text-muted">
+            会同时覆盖当前模型的视频能力与提交/轮询协议。不会根据模型名称自动猜测；应用后仍可继续手动调整。
+          </p>
+        </section>
+
         <section>
           <div className="mb-2 flex items-center justify-between gap-3">
             <span className="text-xs font-medium text-canvas-text">画面比例（可多选）</span>

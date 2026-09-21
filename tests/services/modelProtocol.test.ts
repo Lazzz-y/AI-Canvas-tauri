@@ -1749,6 +1749,20 @@ describe('reference media coverage in custom protocols', () => {
     expect(findUnusedReferenceVariables(textOnly, { imageUrls: [] })).toEqual([]);
   });
 
+  it('treats Seedance content text as prompt data and its typed media as delivered references', () => {
+    const protocol = JSON.stringify({ submit: { body: { content: '{{seedanceContent}}' } } });
+    expect(findUnusedReferenceVariables(protocol, {
+      seedanceContent: [{ type: 'text', text: '镜头向前推进' }],
+    })).toEqual([]);
+    expect(findUnusedReferenceVariables(protocol, {
+      seedanceContent: [
+        { type: 'text', text: '镜头向前推进' },
+        { type: 'image_url', image_url: { url: 'https://cdn.example/ref.png' } },
+      ],
+      referenceImageUrls: ['https://cdn.example/ref.png'],
+    })).toEqual([]);
+  });
+
   it('checks submit only and requires each provided media group to be consumed', () => {
     const protocol = JSON.stringify({
       submit: {

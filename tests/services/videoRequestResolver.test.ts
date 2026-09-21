@@ -303,6 +303,72 @@ describe('resolveCanonicalVideoRequest', () => {
     );
   });
 
+  it('uses the declared automatic duration sentinel as the model default', () => {
+    const result = resolveCanonicalVideoRequest(params(), {
+      capability: {
+        minDuration: 4,
+        maxDuration: 30,
+        automaticDurationValue: -1,
+      },
+    });
+
+    expect(result.output.durationSeconds).toBe(-1);
+    expect(result.sources.durationSeconds).toBe('capability-default');
+  });
+
+  it('applies operation overrides for Seedance-style video editing', () => {
+    const capability: VideoModelCapability = {
+      ratios: ['16:9', 'adaptive'],
+      defaultRatio: 'adaptive',
+      minDuration: 4,
+      maxDuration: 30,
+      automaticDurationValue: -1,
+      operationCapabilities: {
+        'video-to-video': {
+          ratios: ['adaptive'],
+          defaultRatio: 'adaptive',
+          automaticDurationOnly: true,
+        },
+      },
+    };
+    const references = [reference('video', 'https://assets.example/edit.mp4')];
+
+    const result = resolveCanonicalVideoRequest(params(), { capability, references });
+    expect(result.output).toMatchObject({ aspectRatio: 'adaptive', durationSeconds: -1 });
+
+    expectResolutionError(
+      () => resolveCanonicalVideoRequest(params({ seedanceRatio: '16:9' }), {
+        capability,
+        references,
+      }),
+      'UNSUPPORTED_ASPECT_RATIO',
+    );
+    expectResolutionError(
+      () => resolveCanonicalVideoRequest(params({ seedanceDuration: 8 }), {
+        capability,
+        references,
+      }),
+      'UNSUPPORTED_DURATION',
+    );
+  });
+
+  it('applies input-mode overrides to Seedance-style keyframe generation', () => {
+    const result = resolveCanonicalVideoRequest(params(), {
+      capability: {
+        ratios: ['16:9', 'adaptive'],
+        defaultRatio: 'adaptive',
+        automaticDurationValue: -1,
+        inputModeCapabilities: {
+          keyframe: { ratios: ['adaptive'], defaultRatio: 'adaptive' },
+        },
+      },
+      references: [reference('image', 'https://assets.example/first.png', 'first_frame')],
+    });
+
+    expect(result.output.aspectRatio).toBe('adaptive');
+    expect(result.output.durationSeconds).toBe(-1);
+  });
+
   it.each([
     {
       label: 'image',
@@ -435,6 +501,17 @@ describe('resolveCanonicalVideoRequest', () => {
           defaultRatio: '16:9',
           inputModeCapabilities: {
             keyframe: { ratios: ['adaptive'] },
+          },
+        },
+      }),
+      'INVALID_CAPABILITY',
+    );
+
+    expectResolutionError(
+      () => resolveCanonicalVideoRequest(params(), {
+        capability: {
+          operationCapabilities: {
+            'video-to-video': { automaticDurationOnly: true },
           },
         },
       }),

@@ -451,6 +451,26 @@ export function buildCanonicalVideoProtocolVariables(
         : 'reference_image',
     }));
   const imageWithRoles = roleImages.length > 0 ? roleImages : undefined;
+  const seedanceContent = [
+    { type: 'text', text: request.prompt },
+    ...request.references.images.map((reference) => ({
+      type: 'image_url',
+      image_url: { url: reference.url },
+      role: reference.role === 'first_frame' || reference.role === 'last_frame'
+        ? reference.role
+        : 'reference_image',
+    })),
+    ...request.references.videos.map((reference) => ({
+      type: 'video_url',
+      video_url: { url: reference.url },
+      role: 'reference_video',
+    })),
+    ...request.references.audios.map((reference) => ({
+      type: 'audio_url',
+      audio_url: { url: reference.url },
+      role: 'reference_audio',
+    })),
+  ];
   const combinedReferences = [
     ...compatibility.imageUrls,
     ...compatibility.videoUrls,
@@ -486,6 +506,7 @@ export function buildCanonicalVideoProtocolVariables(
     firstImage,
     lastImage,
     imageWithRoles,
+    seedanceContent,
     referenceImageUrls,
     videoUrls,
     referenceVideoUrl: videoUrls?.[0],
@@ -509,16 +530,22 @@ export async function generateVideo(
   // canonical resolver，避免在读到模型的 30 秒能力前先被全局 15 秒上限截断。
   if (params.provider !== 'workflow-api' && (!['general', 'runninghub'].includes(params.provider) || params.workflowId)) {
     const videoFps = normalizeVideoFps(params.videoFps);
-    const seedanceDuration = resolveVideoDurationSeconds(
-      params.seedanceDuration,
-      params.videoFrames,
-      videoFps,
-    );
+    const volcengineCapability = params.provider === 'volcengine'
+      ? getVolcengineSeedanceCapability(params.model)
+      : undefined;
+    const preservesAutomaticDuration = volcengineCapability?.automaticDurationValue !== undefined
+      && (params.seedanceDuration === volcengineCapability.automaticDurationValue
+        || (params.seedanceDuration === undefined && params.videoFrames === undefined));
+    const seedanceDuration = preservesAutomaticDuration
+      ? params.seedanceDuration
+      : resolveVideoDurationSeconds(params.seedanceDuration, params.videoFrames, videoFps);
     params = {
       ...params,
       videoFps,
       seedanceDuration,
-      videoFrames: videoFramesFromDuration(seedanceDuration, videoFps),
+      videoFrames: seedanceDuration === undefined || seedanceDuration < 0
+        ? params.videoFrames
+        : videoFramesFromDuration(seedanceDuration, videoFps),
     };
   }
   const { prompt: rawPrompt, model, provider } = params;
@@ -914,6 +941,7 @@ export function buildVolcengineVideoRequestBody(
   params: VolcengineVideoRequestParams,
 ): Record<string, unknown> {
   const isSeedance25 = isVolcengineSeedance25Model(modelName);
+  const capability = getVolcengineSeedanceCapability(modelName);
   const hasFrame = preserveFrameRoles && references.some((reference) => (
     reference.kind === 'image'
     && (reference.role === 'first_frame' || reference.role === 'last_frame')
@@ -927,11 +955,14 @@ export function buildVolcengineVideoRequestBody(
 
   const ratio = isSeedance25 && (hasFrame || hasReferenceVideo)
     ? 'adaptive'
-    : params.seedanceRatio || '16:9';
+    : params.seedanceRatio || capability?.defaultRatio || '16:9';
   const duration = isSeedance25 && hasReferenceVideo
-    ? -1
-    : params.seedanceDuration ?? 5;
-  const resolution = params.seedanceResolution || '720p';
+    ? capability?.automaticDurationValue ?? -1
+    : params.seedanceDuration
+      ?? capability?.defaultDuration
+      ?? capability?.automaticDurationValue
+      ?? 5;
+  const resolution = params.seedanceResolution || capability?.defaultResolution || '720p';
   const requestBody = mapVideoParameters('volcengine', modelName, {
     model: modelName,
     aspectRatio: ratio,

@@ -23,8 +23,10 @@ import { buildDramaVoiceMentionId, emptyDramaAssetLibrary, type DramaCharacter }
 import * as apimartApi from '../../src/services/ai/apimartGen';
 import * as imageUtils from '../../src/services/ai/imageUtils';
 import * as uploadService from '../../src/services/uploadService';
+import { createSeedanceQuickAdaptTemplate } from '../../src/services/ai/seedanceModelCapabilities';
 import type {
   ModelExecutionProfile,
+  VideoModelCapability,
   VideoGenerationReferenceInput,
   VideoReferenceItem,
 } from '../../src/types/aiTypes';
@@ -502,6 +504,20 @@ describe('Volcengine Seedance content', () => {
       ratio: '9:16',
       duration: 12,
       content: [{ type: 'text', text: '纯文本生成' }],
+    });
+  });
+
+  it('uses official adaptive ratio and automatic duration defaults for Seedance 2.5', () => {
+    expect(buildVolcengineVideoRequestBody(
+      'doubao-seedance-2-5-260628',
+      '由模型决定构图和时长',
+      [],
+      false,
+      {},
+    )).toMatchObject({
+      resolution: '720p',
+      ratio: 'adaptive',
+      duration: -1,
     });
   });
 
@@ -1028,11 +1044,7 @@ describe('general video runtime safety', () => {
   function configureGeneralVideoModel(options: {
     id: string;
     executionProfile?: ModelExecutionProfile;
-    videoCapability?: {
-      minDuration?: number;
-      maxDuration?: number;
-      defaultDuration?: number;
-    };
+    videoCapability?: VideoModelCapability;
   }): void {
     useAppStore.setState((state) => ({
       config: {
@@ -1167,6 +1179,55 @@ describe('general video runtime safety', () => {
     expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({
       model: 'vendor-video-model',
       duration: 30,
+    });
+  });
+
+  it('runs the explicit Volcano Seedance quick template with typed content and automatic duration', async () => {
+    const template = createSeedanceQuickAdaptTemplate('2.5', 'volcengine');
+    configureGeneralVideoModel({
+      id: 'seedance-volcano-template',
+      videoCapability: template.capability,
+      executionProfile: template.executionProfile,
+    });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 'seedance-task-1' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        status: 'succeeded',
+        content: { video_url: 'https://cdn.example/seedance.mp4' },
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(generateVideo({
+      provider: 'general',
+      model: 'general/seedance-volcano-template',
+      prompt: '让画面中的人物轻轻转身',
+      referenceMedia: [{
+        kind: 'image',
+        url: 'https://cdn.example/portrait.png',
+        origin: 'connection',
+        role: 'first_frame',
+      }],
+    })).resolves.toEqual({ url: 'https://cdn.example/seedance.mp4' });
+
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    expect(body).toMatchObject({
+      model: 'vendor-video-model',
+      ratio: 'adaptive',
+      duration: -1,
+      content: [
+        { type: 'text', text: '让画面中的人物轻轻转身' },
+        {
+          type: 'image_url',
+          image_url: { url: 'https://cdn.example/portrait.png' },
+          role: 'first_frame',
+        },
+      ],
     });
   });
 });

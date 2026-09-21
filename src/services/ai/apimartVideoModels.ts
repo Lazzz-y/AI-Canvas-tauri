@@ -5,6 +5,10 @@ import { isRemoteMediaUrl } from '../../utils/mediaUrl';
 import type { VideoGenerationOperation, VideoModelCapability } from '../../types/aiTypes';
 import { mapVideoParameters } from './videoParameterMappings';
 import type { ProviderModelSelection } from '../../types';
+import {
+  createSeedanceQuickAdaptTemplate,
+  type SeedanceModelVariant,
+} from './seedanceModelCapabilities';
 
 export type ApimartSeedanceRatioField = 'aspect_ratio' | 'size';
 export type ApimartSeedanceAudioField = 'audio' | 'generate_audio';
@@ -20,7 +24,8 @@ export interface ApimartSeedanceCapability {
   durations?: number[];
   minDuration: number;
   maxDuration: number;
-  defaultDuration: number;
+  defaultDuration?: number;
+  automaticDurationValue?: number;
   audioField?: ApimartSeedanceAudioField;
   defaultAudio?: boolean;
   operations: readonly VideoGenerationOperation[];
@@ -41,6 +46,8 @@ export interface ApimartSeedanceCapability {
   omniVariant?: 'flash' | 'ext' | 'preview';
   durationMode?: 'automatic' | 'without-video';
   inputConstraints?: VideoModelCapability['inputConstraints'];
+  inputModeCapabilities?: VideoModelCapability['inputModeCapabilities'];
+  operationCapabilities?: VideoModelCapability['operationCapabilities'];
 }
 
 export const APIMART_OMNI_MODELS: readonly ProviderModelSelection[] = [
@@ -89,10 +96,42 @@ export interface ApimartSeedanceRequestParams {
 
 const COMMON_RATIOS = ['16:9', '4:3', '1:1', '3:4', '9:16', '21:9', 'adaptive'] as const;
 const SD_1_RESOLUTIONS = ['480p', '720p', '1080p'] as const;
-const SD_2_RESOLUTIONS = ['480p', '720p'] as const;
 // MiniMax-H3 分辨率（2K / 768P），宽高比不支持 adaptive，仅具体比例
 const H3_RESOLUTIONS = ['2K', '768P'] as const;
 const H3_RATIOS = ['16:9', '4:3', '1:1', '3:4', '9:16', '21:9'] as const;
+
+function createApimartSeedance2Capability(
+  variant: SeedanceModelVariant,
+  modelId: string,
+): ApimartSeedanceCapability {
+  const capability = createSeedanceQuickAdaptTemplate(variant, 'apimart').capability;
+  return {
+    modelId,
+    resolutions: capability.resolutions ?? [],
+    defaultResolution: capability.defaultResolution ?? capability.resolutions?.[0] ?? '720p',
+    ratios: capability.ratios ?? [],
+    defaultRatio: capability.defaultRatio ?? capability.ratios?.[0] ?? '16:9',
+    ratioField: 'size',
+    ...(capability.durations?.length ? { durations: capability.durations } : {}),
+    minDuration: capability.minDuration ?? 4,
+    maxDuration: capability.maxDuration ?? 15,
+    ...(capability.defaultDuration === undefined ? {} : { defaultDuration: capability.defaultDuration }),
+    ...(capability.automaticDurationValue === undefined
+      ? {}
+      : { automaticDurationValue: capability.automaticDurationValue }),
+    audioField: capability.supportsAudio ? 'generate_audio' : undefined,
+    defaultAudio: capability.supportsAudio,
+    operations: capability.operations ?? [],
+    maxImageReferences: capability.maxImageReferences ?? 0,
+    maxVideoReferences: capability.maxVideoReferences,
+    maxAudioReferences: capability.maxAudioReferences,
+    imageWithRoles: true,
+    ...(variant === '2.5' ? { watermarkField: 'watermark' as const, defaultWatermark: false } : {}),
+    inputConstraints: capability.inputConstraints,
+    inputModeCapabilities: capability.inputModeCapabilities,
+    operationCapabilities: capability.operationCapabilities,
+  };
+}
 
 const OMNI_CAPABILITY: ApimartSeedanceCapability = {
   modelId: 'gemini-omni-1.1-flash',
@@ -160,80 +199,10 @@ const APIMART_SEEDANCE_CAPABILITIES: Record<string, ApimartSeedanceCapability> =
     operations: ['text-to-video', 'image-to-video'],
     maxImageReferences: 9,
   },
-  'doubao-seedance-2.0': {
-    modelId: 'doubao-seedance-2.0',
-    resolutions: [...SD_2_RESOLUTIONS, '1080p', '4k'],
-    defaultResolution: '720p',
-    ratios: COMMON_RATIOS,
-    defaultRatio: '16:9',
-    ratioField: 'size',
-    minDuration: 4,
-    maxDuration: 15,
-    defaultDuration: 5,
-    audioField: 'generate_audio',
-    defaultAudio: true,
-    operations: ['text-to-video', 'image-to-video', 'video-to-video'],
-    maxImageReferences: 9,
-    maxVideoReferences: 3,
-    maxAudioReferences: 3,
-    imageWithRoles: true,
-  },
-  'doubao-seedance-2.0-fast': {
-    modelId: 'doubao-seedance-2.0-fast',
-    resolutions: SD_2_RESOLUTIONS,
-    defaultResolution: '720p',
-    ratios: COMMON_RATIOS,
-    defaultRatio: '16:9',
-    ratioField: 'size',
-    minDuration: 4,
-    maxDuration: 15,
-    defaultDuration: 5,
-    audioField: 'generate_audio',
-    defaultAudio: true,
-    operations: ['text-to-video', 'image-to-video', 'video-to-video'],
-    maxImageReferences: 9,
-    maxVideoReferences: 3,
-    maxAudioReferences: 3,
-    imageWithRoles: true,
-  },
-  'doubao-seedance-2.0-mini': {
-    modelId: 'doubao-seedance-2.0-mini',
-    resolutions: SD_2_RESOLUTIONS,
-    defaultResolution: '720p',
-    ratios: COMMON_RATIOS,
-    defaultRatio: '16:9',
-    ratioField: 'size',
-    minDuration: 4,
-    maxDuration: 15,
-    defaultDuration: 5,
-    audioField: 'generate_audio',
-    defaultAudio: true,
-    operations: ['text-to-video', 'image-to-video', 'video-to-video'],
-    maxImageReferences: 9,
-    maxVideoReferences: 3,
-    maxAudioReferences: 3,
-    imageWithRoles: true,
-  },
-  'doubao-seedance-2.5': {
-    modelId: 'doubao-seedance-2.5',
-    resolutions: SD_2_RESOLUTIONS,
-    defaultResolution: '720p',
-    ratios: COMMON_RATIOS,
-    defaultRatio: 'adaptive',
-    ratioField: 'size',
-    minDuration: 4,
-    maxDuration: 30,
-    defaultDuration: 5,
-    audioField: 'generate_audio',
-    defaultAudio: true,
-    operations: ['text-to-video', 'image-to-video', 'video-to-video'],
-    maxImageReferences: 30,
-    maxVideoReferences: 10,
-    maxAudioReferences: 10,
-    watermarkField: 'watermark',
-    defaultWatermark: false,
-    imageWithRoles: true,
-  },
+  'doubao-seedance-2.0': createApimartSeedance2Capability('2.0-standard', 'doubao-seedance-2.0'),
+  'doubao-seedance-2.0-fast': createApimartSeedance2Capability('2.0-fast', 'doubao-seedance-2.0-fast'),
+  'doubao-seedance-2.0-mini': createApimartSeedance2Capability('2.0-mini', 'doubao-seedance-2.0-mini'),
+  'doubao-seedance-2.5': createApimartSeedance2Capability('2.5', 'doubao-seedance-2.5'),
   'minimax-h3': {
     modelId: 'MiniMax-H3',
     resolutions: H3_RESOLUTIONS,
@@ -327,12 +296,15 @@ export function toSeedanceCapabilityView(
     minDuration: capability.minDuration ?? Math.min(...(capability.durations ?? [2])),
     maxDuration: capability.maxDuration ?? Math.max(...(capability.durations ?? [15])),
     defaultDuration: capability.defaultDuration ?? capability.durations?.[0] ?? 5,
+    automaticDurationValue: capability.automaticDurationValue,
     audioField: capability.supportsAudio === false ? undefined : 'generate_audio',
     defaultAudio: capability.supportsAudio === false ? false : true,
     operations: ['text-to-video', 'image-to-video', 'video-to-video'],
     maxImageReferences: capability.maxImageReferences ?? 9,
     maxVideoReferences: capability.maxVideoReferences ?? 3,
     maxAudioReferences: capability.maxAudioReferences ?? 3,
+    inputModeCapabilities: capability.inputModeCapabilities,
+    operationCapabilities: capability.operationCapabilities,
   };
 }
 
@@ -408,11 +380,10 @@ export function buildApimartSeedanceRequest(
   const effectiveRatio = hasFrameRoles && ratio !== 'adaptive' ? 'adaptive' : ratio;
   const requestedDuration = Number.isFinite(params.duration)
     ? Math.round(params.duration as number)
-    : capability.defaultDuration;
-  const duration = Math.min(
-    capability.maxDuration,
-    Math.max(capability.minDuration, requestedDuration),
-  );
+    : capability.defaultDuration ?? capability.automaticDurationValue ?? capability.minDuration;
+  const duration = requestedDuration === capability.automaticDurationValue
+    ? requestedDuration
+    : Math.min(capability.maxDuration, Math.max(capability.minDuration, requestedDuration));
 
   const body = mapVideoParameters('apimart', capability.modelId, {
     model: capability.modelId,
@@ -487,7 +458,9 @@ function buildOmniRequest(
     }
     if (!videos.length) {
       const duration = params.duration ?? capability.defaultDuration;
-      if (!capability.durations?.includes(duration)) throw new Error('Omni Ext 时长仅支持 4 / 6 / 8 / 10 秒');
+      if (duration === undefined || !capability.durations?.includes(duration)) {
+        throw new Error('Omni Ext 时长仅支持 4 / 6 / 8 / 10 秒');
+      }
       body.duration = duration;
     }
   } else if (capability.omniVariant === 'flash') {

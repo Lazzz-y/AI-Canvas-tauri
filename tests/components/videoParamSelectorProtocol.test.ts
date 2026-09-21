@@ -8,6 +8,7 @@ import VideoParamSelector, {
   resolveGeneralVideoControlSupport,
   resolveGeneralVideoModel,
   resolveGeneralVideoParameterDisplayState,
+  resolveEffectiveVideoParameterCapability,
 } from '../../src/components/nodes/shared/VideoParamSelector';
 
 describe('ComfyUI 时长显示与提交一致', () => {
@@ -87,6 +88,34 @@ curl https://api.paipu.net/v1/videos \\
       frameRate: true,
       audio: false,
     });
+  });
+
+  it('Seedance 自动时长哨兵也会开启时长控件并作为默认显示', () => {
+    const capability = { automaticDurationValue: -1 };
+    expect(resolveGeneralVideoControlSupport(capability).duration).toBe(true);
+    expect(resolveGeneralVideoParameterDisplayState(capability, {}).duration).toBe(-1);
+  });
+
+  it('火山 Seedance 2.5 未指定时长时显示自动而不是截成 4 秒', () => {
+    const html = renderToStaticMarkup(createElement(VideoParamSelector, {
+      provider: 'volcengine',
+      selectedModel: 'doubao-seedance-2-5',
+    }));
+
+    expect(html).toContain('时长自动');
+  });
+
+  it('首尾帧输入使用输入形态覆盖的自适应比例', () => {
+    const capability = resolveEffectiveVideoParameterCapability({
+      ratios: ['16:9', '9:16', 'adaptive'],
+      defaultRatio: '16:9',
+      inputModeCapabilities: {
+        keyframe: { ratios: ['adaptive'], defaultRatio: 'adaptive' },
+      },
+    }, 'keyframe', 'image-to-video');
+
+    expect(capability?.ratios).toEqual(['adaptive']);
+    expect(capability?.defaultRatio).toBe('adaptive');
   });
 
   it('缺少 capability 时保持未知，不套用 Seedance 参数', () => {

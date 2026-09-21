@@ -208,15 +208,19 @@ export interface ReferenceAudioInputConstraints {
   totalDurationSeconds?: NumericInputConstraint;
 }
 
-/** 按参考素材形态覆盖视频比例能力，避免把一个全局默认套给所有输入模式。 */
-export interface VideoInputModeCapability {
+/** 按视频操作或参考素材形态覆盖参数能力，避免把一个全局默认套给所有任务。 */
+export interface VideoParameterCapabilityOverride {
   /** 当前输入模式允许的比例；缺省时继承模型级 ratios。 */
   ratios?: string[];
   /** 当前输入模式未指定比例时的默认值；缺省时继承模型级 defaultRatio。 */
   defaultRatio?: string;
   /** 当前输入模式是否必须最终得到一个比例。 */
   requiresRatio?: boolean;
+  /** 当前任务是否只允许模型自动决定时长。 */
+  automaticDurationOnly?: boolean;
 }
+
+export type VideoInputModeCapability = VideoParameterCapabilityOverride;
 
 /**
  * 视频模型输入约束。仅声明的字段生效，适用于内置厂商和用户配置的通用接口。
@@ -251,6 +255,8 @@ export interface VideoModelCapability {
   defaultRatio?: string;
   /** 按 text/keyframe/reference/mixed 输入形态覆盖比例约束与默认值。 */
   inputModeCapabilities?: Partial<Record<VideoGenerationInputMode, VideoInputModeCapability>>;
+  /** 按 text-to-video/image-to-video/video-to-video 操作覆盖参数约束。 */
+  operationCapabilities?: Partial<Record<VideoGenerationOperation, VideoParameterCapabilityOverride>>;
   /** 可选帧率档位，如 [16, 24, 30]。 */
   frameRates?: number[];
   /** 未指定帧率时的默认值。 */
@@ -266,6 +272,8 @@ export interface VideoModelCapability {
   maxDuration?: number;
   /** 未指定时长时的默认值（秒）。 */
   defaultDuration?: number;
+  /** 模型自动决定时长时提交给接口的哨兵值，例如 Seedance 2.5 的 -1。 */
+  automaticDurationValue?: number;
   /** 是否支持生成音频（有声视频）。 */
   supportsAudio?: boolean;
   /** 是否支持纯音频参考（无图/视频）。 */

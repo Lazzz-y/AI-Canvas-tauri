@@ -50,6 +50,15 @@ export function createEditableVideoCapability(
     ...(capability?.resolutions ? { resolutions: [...capability.resolutions] } : {}),
     ...(capability?.frameRates ? { frameRates: [...capability.frameRates] } : {}),
     ...(capability?.durations ? { durations: [...capability.durations] } : {}),
+    ...(capability?.inputModeCapabilities
+      ? { inputModeCapabilities: structuredClone(capability.inputModeCapabilities) }
+      : {}),
+    ...(capability?.operationCapabilities
+      ? { operationCapabilities: structuredClone(capability.operationCapabilities) }
+      : {}),
+    ...(capability?.inputConstraints
+      ? { inputConstraints: structuredClone(capability.inputConstraints) }
+      : {}),
   };
 }
 

@@ -38,17 +38,17 @@ const REFERENCE_MEDIA_GROUPS = [
   {
     kind: '参考图',
     example: '"images": "{{imageUrls}}"',
-    variables: ['imageWithRoles', 'firstImage', 'lastImage', 'referenceImageUrls', 'imageUrls'],
+    variables: ['seedanceContent', 'imageWithRoles', 'firstImage', 'lastImage', 'referenceImageUrls', 'imageUrls'],
   },
   {
     kind: '参考视频',
     example: '"video_urls": "{{videoUrls}}"',
-    variables: ['videoUrls', 'referenceVideoUrl', 'referenceVideoUrls'],
+    variables: ['seedanceContent', 'videoUrls', 'referenceVideoUrl', 'referenceVideoUrls'],
   },
   {
     kind: '参考音频',
     example: '"audio_urls": "{{audioUrls}}"',
-    variables: ['audioUrls', 'audioUrl', 'referenceAudioUrls'],
+    variables: ['seedanceContent', 'audioUrls', 'audioUrl', 'referenceAudioUrls'],
   },
 ] as const;
 
@@ -61,7 +61,9 @@ const REFERENCE_DELIVERY_HINTS: Record<string, { kind: string; example: string }
 };
 
 const CONTROL_TEMPLATE_KEYS = new Set(['$whenPresent', '$forEach']);
-const GENERIC_REFERENCE_ALIAS_ROOTS = new Set(['imageWithRoles', 'referenceUrls', 'inlineReferences']);
+const GENERIC_REFERENCE_ALIAS_ROOTS = new Set([
+  'seedanceContent', 'imageWithRoles', 'referenceUrls', 'inlineReferences',
+]);
 
 interface ReferenceDeliveryRule {
   name: string;
@@ -72,28 +74,28 @@ interface ReferenceDeliveryRule {
 const CANONICAL_REFERENCE_DELIVERY_RULES: readonly ReferenceDeliveryRule[] = [
   {
     name: 'firstImage',
-    roots: ['firstImage', 'imageWithRoles', 'imageUrls', 'referenceUrls', 'inlineReferences'],
-    collectionRoots: ['imageWithRoles', 'imageUrls', 'referenceUrls', 'inlineReferences'],
+    roots: ['firstImage', 'seedanceContent', 'imageWithRoles', 'imageUrls', 'referenceUrls', 'inlineReferences'],
+    collectionRoots: ['seedanceContent', 'imageWithRoles', 'imageUrls', 'referenceUrls', 'inlineReferences'],
   },
   {
     name: 'lastImage',
-    roots: ['lastImage', 'imageWithRoles', 'imageUrls', 'referenceUrls', 'inlineReferences'],
-    collectionRoots: ['imageWithRoles', 'imageUrls', 'referenceUrls', 'inlineReferences'],
+    roots: ['lastImage', 'seedanceContent', 'imageWithRoles', 'imageUrls', 'referenceUrls', 'inlineReferences'],
+    collectionRoots: ['seedanceContent', 'imageWithRoles', 'imageUrls', 'referenceUrls', 'inlineReferences'],
   },
   {
     name: 'referenceImageUrls',
-    roots: ['referenceImageUrls', 'imageWithRoles', 'imageUrls', 'referenceUrls', 'inlineReferences'],
-    collectionRoots: ['referenceImageUrls', 'imageWithRoles', 'imageUrls', 'referenceUrls', 'inlineReferences'],
+    roots: ['referenceImageUrls', 'seedanceContent', 'imageWithRoles', 'imageUrls', 'referenceUrls', 'inlineReferences'],
+    collectionRoots: ['referenceImageUrls', 'seedanceContent', 'imageWithRoles', 'imageUrls', 'referenceUrls', 'inlineReferences'],
   },
   {
     name: 'referenceVideoUrls',
-    roots: ['referenceVideoUrls', 'referenceVideoUrl', 'videoUrls', 'referenceUrls', 'inlineReferences'],
-    collectionRoots: ['referenceVideoUrls', 'videoUrls', 'referenceUrls', 'inlineReferences'],
+    roots: ['referenceVideoUrls', 'referenceVideoUrl', 'seedanceContent', 'videoUrls', 'referenceUrls', 'inlineReferences'],
+    collectionRoots: ['referenceVideoUrls', 'seedanceContent', 'videoUrls', 'referenceUrls', 'inlineReferences'],
   },
   {
     name: 'referenceAudioUrls',
-    roots: ['referenceAudioUrls', 'audioUrl', 'audioUrls', 'referenceUrls', 'inlineReferences'],
-    collectionRoots: ['referenceAudioUrls', 'audioUrls', 'referenceUrls', 'inlineReferences'],
+    roots: ['referenceAudioUrls', 'audioUrl', 'seedanceContent', 'audioUrls', 'referenceUrls', 'inlineReferences'],
+    collectionRoots: ['referenceAudioUrls', 'seedanceContent', 'audioUrls', 'referenceUrls', 'inlineReferences'],
   },
 ];
 
@@ -119,6 +121,13 @@ function readReferenceStrings(value: unknown): string[] {
   if (!isRecord(value)) return [];
   if (typeof value.url === 'string' && value.url.trim()) return [value.url];
   return Object.values(value).flatMap(readReferenceStrings);
+}
+
+function readProtocolReferenceStrings(name: string, value: unknown): string[] {
+  if (name !== 'seedanceContent' || !Array.isArray(value)) return readReferenceStrings(value);
+  return value.flatMap((item) => (
+    isRecord(item) && item.type === 'text' ? [] : readReferenceStrings(item)
+  ));
 }
 
 function containsAllValues(available: readonly string[], expected: readonly string[]): boolean {
@@ -213,7 +222,7 @@ export function findUnusedReferenceVariables(
   options: { frameAliases?: boolean } = {},
 ): string[] {
   const provided = REFERENCE_PROTOCOL_VARIABLES
-    .map((name) => ({ name, values: readReferenceStrings(variables[name]) }))
+    .map((name) => ({ name, values: readProtocolReferenceStrings(name, variables[name]) }))
     .filter((item) => item.values.length > 0);
   if (provided.length === 0) return [];
 

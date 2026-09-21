@@ -17,6 +17,7 @@ import type { VideoModelCapability } from '../../../types/aiTypes';
 import type { ModelProtocolImportResult } from '../../../services/ai/modelProtocolImport';
 import type { ProviderDefinition } from '../../../services/ai/providerCatalogService';
 import { normalizeBaseUrl } from '../../../services/ai/providerBaseUrl';
+import { createSeedanceQuickAdaptTemplate } from '../../../services/ai/seedanceModelCapabilities';
 import { useT } from '../../../i18n';
 import AnimatedButton from '../../shared/AnimatedButton';
 import ModelProtocolEditor from '../ModelProtocolEditor';
@@ -408,6 +409,11 @@ export default function ProviderModelSection({
                   videoCapabilityModel.id,
                   capability,
                 )}
+                onApplySeedanceTemplate={(seedanceModel, transport) => {
+                  const template = createSeedanceQuickAdaptTemplate(seedanceModel, transport);
+                  onUpdateVideoCapability(videoCapabilityModel.id, template.capability);
+                  onUpdateModelProtocol(videoCapabilityModel.id, template.executionProfile);
+                }}
                 onClose={() => setVideoCapabilityModelId(null)}
               />
             ) : null}

@@ -166,6 +166,11 @@ export const PROTOCOL_VARIABLES: readonly ProtocolVariableSpec[] = [
     fields: ['imagewithroles', 'imageswithroles', 'imageroles'],
   },
   {
+    name: 'seedanceContent', supplied: VIDEO,
+    reference: true,
+    categories: VIDEO,
+  },
+  {
     name: 'firstImage', supplied: VIDEO,
     reference: true,
     categories: VIDEO,
@@ -276,6 +281,7 @@ const PROTOCOL_VARIABLE_DESCRIPTIONS: Readonly<Record<string, string>> = {
   musicTitle: '音乐生成使用的歌曲标题',
   musicBpm: '音乐速度（每分钟节拍数）',
   imageWithRoles: '带角色的参考图数组，元素包含 url 和 role',
+  seedanceContent: '火山 Seedance 原生 content 数组，包含提示词及带类型和角色的参考素材',
   firstImage: '视频首帧图片 URL',
   lastImage: '视频尾帧图片 URL',
   referenceImageUrls: '普通参考图 URL 数组（不含首尾帧）',

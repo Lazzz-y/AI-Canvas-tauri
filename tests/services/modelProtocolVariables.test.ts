@@ -54,6 +54,14 @@ describe('protocol variable table', () => {
     // 运行时产出的变量必须都在总表里，否则协议模板引用时会被白名单拒绝
     const missing = Object.keys(variables).filter((name) => !PROTOCOL_VARIABLE_NAMES.has(name));
     expect(missing).toEqual([]);
+    expect(variables.seedanceContent).toEqual([
+      { type: 'text', text: 'prompt' },
+      {
+        type: 'image_url',
+        image_url: { url: 'https://cdn.example/ref.png' },
+        role: 'reference_image',
+      },
+    ]);
     // 反过来，模型设置里列给用户的可用变量必须都是运行时真的会给值的。
     // parameters 是工作流 API 声明的自定义参数，只由 RunningHub / 通用工作流等
     // 工作流路径注入，普通视频运行时不产出，因此不参与这条覆盖断言。
