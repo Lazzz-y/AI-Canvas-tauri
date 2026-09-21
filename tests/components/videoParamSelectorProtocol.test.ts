@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { shallow } from 'zustand/shallow';
 import { modelProtocolUsesVariable } from '../../src/services/ai/modelProtocol';
 import { analyzeModelProtocolExamples } from '../../src/services/ai/modelProtocolImport';
 import { resolveVideoSubmissionControls } from '../../src/services/ai/videoRequestResolver';
@@ -9,7 +10,9 @@ import VideoParamSelector, {
   resolveGeneralVideoModel,
   resolveGeneralVideoParameterDisplayState,
   resolveEffectiveVideoParameterCapability,
+  selectConnectedVideoSourceNodes,
 } from '../../src/components/nodes/shared/VideoParamSelector';
+import type { AppState } from '../../src/store/useAppStore';
 
 describe('ComfyUI 时长显示与提交一致', () => {
   it.each([
@@ -28,6 +31,29 @@ describe('ComfyUI 时长显示与提交一致', () => {
 });
 
 describe('VideoParamSelector 自定义协议参数识别', () => {
+  it('连接素材 selector 始终返回扁平节点数组，避免 React 外部快照循环', () => {
+    const imageNode = {
+      id: 'image',
+      type: 'ai-image',
+      position: { x: 0, y: 0 },
+      data: { type: 'ai-image', label: '参考图', imageUrl: 'image.png' },
+    } as AppState['nodes'][number];
+    const state = {
+      nodes: [imageNode],
+      edges: [{ id: 'edge', source: 'image', target: 'video' }],
+    } as Pick<AppState, 'nodes' | 'edges'>;
+
+    const selected = selectConnectedVideoSourceNodes(state, 'video');
+    expect(Array.isArray(selected)).toBe(true);
+    expect(selected).toEqual([imageNode]);
+    expect(selectConnectedVideoSourceNodes(state, undefined)).toEqual([]);
+    expect(shallow([], [])).toBe(true);
+    expect(shallow(
+      { imageNodes: [], videoCount: 0, audioCount: 0 },
+      { imageNodes: [], videoCount: 0, audioCount: 0 },
+    )).toBe(false);
+  });
+
   it('保留导入协议的比例、分辨率和秒数变量', () => {
     const imported = analyzeModelProtocolExamples({
       submitRequest: `

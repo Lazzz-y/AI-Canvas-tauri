@@ -27,7 +27,7 @@ import {
   VIDEO_DURATION_MAX_SECONDS,
   VIDEO_DURATION_MIN_SECONDS,
 } from '../../../services/aiDimensions';
-import { useAppStore } from '../../../store/useAppStore';
+import { useAppStore, type AppState } from '../../../store/useAppStore';
 
 interface VideoParamSelectorProps {
   provider?: string;
@@ -194,6 +194,19 @@ export function resolveEffectiveVideoParameterCapability(
   };
 }
 
+/** 返回扁平数组，供 useShallow 对节点引用逐项比较并复用上一次快照。 */
+// eslint-disable-next-line react-refresh/only-export-components
+export function selectConnectedVideoSourceNodes(
+  state: Pick<AppState, 'nodes' | 'edges'>,
+  nodeId: string | undefined,
+): AppState['nodes'] {
+  if (!nodeId) return [];
+  const sourceIds = new Set(
+    state.edges.filter((edge) => edge.target === nodeId).map((edge) => edge.source),
+  );
+  return state.nodes.filter((node) => sourceIds.has(node.id));
+}
+
 export default function VideoParamSelector({
   provider, selectedModel,
   nodeId, videoReferences, onChangeVideoReferences,
@@ -213,18 +226,20 @@ export default function VideoParamSelector({
   const projectCharacters = useAppStore((state) => state.dramaAssets.characters);
   const globalCharacters = useAppStore((state) => state.globalCharacters);
   const loadGlobalCharacters = useAppStore((state) => state.loadGlobalCharacters);
-  // 连线进来的图片节点：参考帧与参考角色都能从这里挑
-  const connectedMedia = useAppStore(useShallow((state) => {
-    if (!nodeId) return { imageNodes: [], videoCount: 0, audioCount: 0 };
-    const sourceIds = new Set(state.edges.filter((edge) => edge.target === nodeId).map((edge) => edge.source));
-    const sourceNodes = state.nodes.filter((node) => sourceIds.has(node.id));
-    return {
-      imageNodes: sourceNodes.filter((node) => Boolean((node.data as BaseNodeData).imageUrl)),
-      videoCount: sourceNodes.filter((node) => Boolean((node.data as BaseNodeData).videoUrl)).length,
-      audioCount: sourceNodes.filter((node) => Boolean((node.data as BaseNodeData).audioUrl)).length,
-    };
-  }));
-  const connectedImageNodes = connectedMedia.imageNodes;
+  // selector 必须只返回扁平节点数组：若返回含有新建数组的对象，Zustand 会认为
+  // 每次快照都变化，React 19 会进入重复渲染并让节点编辑器错误边界兜底。
+  const connectedSourceNodes = useAppStore(useShallow((state) => (
+    selectConnectedVideoSourceNodes(state, nodeId)
+  )));
+  const connectedImageNodes = connectedSourceNodes.filter((node) => (
+    Boolean((node.data as BaseNodeData).imageUrl)
+  ));
+  const connectedVideoCount = connectedSourceNodes.filter((node) => (
+    Boolean((node.data as BaseNodeData).videoUrl)
+  )).length;
+  const connectedAudioCount = connectedSourceNodes.filter((node) => (
+    Boolean((node.data as BaseNodeData).audioUrl)
+  )).length;
   const canvasNodes = useAppStore((state) => state.nodes);
   const workflowApiManifest = useAppStore((state) => state.workflows.find((workflow) =>
     workflow.id === selectedModel?.replace(/^workflow-api\//, ''))?.workflowApi);
@@ -347,12 +362,12 @@ export default function VideoParamSelector({
   const hasSelectedReference = characterReferences.length > 0
     || frameReferences.some((item) => item.role === 'reference')
     || (usesAutomaticConnectedFrameRoles && connectedImageNodes.length > 2)
-    || connectedMedia.videoCount > 0
-    || connectedMedia.audioCount > 0;
+    || connectedVideoCount > 0
+    || connectedAudioCount > 0;
   const selectedInputMode: VideoGenerationInputMode = hasSelectedKeyframe
     ? hasSelectedReference ? 'mixed' : 'keyframe'
     : hasSelectedReference ? 'reference' : 'text';
-  const selectedOperation: VideoGenerationOperation = connectedMedia.videoCount > 0
+  const selectedOperation: VideoGenerationOperation = connectedVideoCount > 0
     ? 'video-to-video'
     : references.length > 0 || connectedImageNodes.length > 0
       ? 'image-to-video'
