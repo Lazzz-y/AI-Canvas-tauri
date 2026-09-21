@@ -66,6 +66,8 @@ import {
   toResolvedVideoCompatibilityValues,
   type CanonicalVideoRequest,
 } from './videoRequestResolver';
+import { getAsset } from './providers/volcengineAssetLibrary';
+import { readAppSecret } from '../providerSecretService';
 
 async function mapSequentially<T, R>(
   items: readonly T[],
@@ -108,14 +110,27 @@ export function resolveVideoNodeReferences(nodeId: string | undefined): VideoRef
   return (node?.data as BaseNodeData | undefined)?.videoReferences ?? [];
 }
 
-function toMediaReferences(items: readonly VideoReferenceItem[]): MediaReference[] {
-  return items.map((item) => ({
-    kind: 'image' as const,
-    url: item.url,
-    origin: 'connection' as const,
-    role: item.role,
-    sourceNodeId: item.sourceNodeId,
-  }));
+function toMediaReferences(items: readonly VideoReferenceItem[], provider?: string): MediaReference[] {
+  return items.map((item) => {
+    // 方舟绑定同时保留普通角色预览图；切换到其他厂商时自动回退到普通图片，
+    // 避免把只对方舟有效的 asset:// 地址发送给其他 Provider。
+    const useVolcengineAsset = provider === 'volcengine' || !item.provider || !item.assetId;
+    const url = !useVolcengineAsset && item.previewUrl ? item.previewUrl : item.url;
+    return {
+      kind: item.mediaKind ?? 'image',
+      url,
+      origin: 'connection' as const,
+    // 方舟虚拟人像始终是角色参考，不能被旧节点数据中的帧角色字段带入首/尾帧语义。
+      role: item.provider === 'volcengine' && item.kind === 'volcengine-asset'
+      ? item.mediaKind === 'audio' ? 'reference_audio' as const : item.mediaKind === 'video' ? 'reference' as const : 'reference' as const
+      : item.role,
+      sourceNodeId: item.sourceNodeId,
+      provider: useVolcengineAsset ? item.provider : undefined,
+      assetId: useVolcengineAsset ? item.assetId : undefined,
+      assetGroupId: useVolcengineAsset ? item.assetGroupId : undefined,
+      projectName: useVolcengineAsset ? item.projectName : undefined,
+    };
+  });
 }
 
 function hasManualFrameRoles(items: readonly { role: string }[]): boolean {
@@ -144,6 +159,26 @@ function mentionedCharacterName(prompt: string, label: string): string | undefin
     .split(/[·・：:|/\\\s-]+/)
     .filter((part) => part.length >= 2)
     .find((part) => prompt.includes(part));
+}
+
+function annotateVolcengineCharacterBindings(
+  prompt: string,
+  nodeItems: readonly VideoReferenceItem[],
+  references: readonly MediaReference[],
+): string {
+  const notes = nodeItems
+    .filter((item) => item.provider === 'volcengine' && item.kind === 'character' && item.mediaKind !== 'audio' && item.assetId)
+    .flatMap((character) => {
+      const voice = nodeItems.find((item) => item.id === `${character.id}:voice` && item.mediaKind === 'audio');
+      if (!voice) return [];
+      const imageReference = references.find((reference) => reference.assetId === character.assetId);
+      const audioReference = references.find((reference) => reference.assetId === voice.assetId);
+      if (!imageReference || !audioReference) return [];
+      const imageIndex = references.filter((reference) => reference.kind === 'image').indexOf(imageReference) + 1;
+      const audioIndex = references.filter((reference) => reference.kind === 'audio').indexOf(audioReference) + 1;
+      return imageIndex > 0 && audioIndex > 0 ? [`图片${imageIndex}中的角色使用音频${audioIndex}的声音，并保持口型与音频同步`] : [];
+    });
+  return notes.length > 0 ? `${prompt}\n\n（角色绑定：${[...new Set(notes)].join('；')}。）` : prompt;
 }
 
 const CHARACTER_REFERENCE_USAGE: Record<PromptCharacterBinding['usage'], string> = {
@@ -267,14 +302,14 @@ async function resolveVideoReferenceInput(
   nodeId: string | undefined,
   /** 调用方直接给定的参考媒体；排在最前，保证首/尾帧角色按调用方的顺序分配 */
   explicitReferences: readonly MediaReference[] = [],
-  options: { promptFirst?: boolean; preserveDeclaredRoles?: boolean; target?: 'remote' | 'local'; apimartModel?: string; legacyPrompt?: string } = {},
+  options: { promptFirst?: boolean; preserveDeclaredRoles?: boolean; target?: 'remote' | 'local'; apimartModel?: string; legacyPrompt?: string; provider?: string } = {},
 ): Promise<VideoGenerationReferenceInput> {
   const promptInput = await resolvePromptWithMediaRefs(rawPrompt, { preserveBindings: true });
   const connected = collectConnectedReferenceMedia(nodeId);
   const nodeItems = resolveVideoNodeReferences(nodeId);
   const regularReferences = mergeMediaReferences(
     // 节点上手动挑的参考帧/参考角色排在连线与提示词引用之前，重复的图按它们的角色去重
-    mergeMediaReferences(explicitReferences, toMediaReferences(nodeItems)),
+    mergeMediaReferences(explicitReferences, toMediaReferences(nodeItems, options.provider)),
     mergeMediaReferences(promptInput.references, connected.references),
   );
   const collectedReferences = options.promptFirst
@@ -308,7 +343,11 @@ async function resolveVideoReferenceInput(
     audio: audioUrls.length,
   });
   return {
-    prompt: annotateCharacterReferences(compiledPrompt, nodeItems, getMediaReferenceUrls(noteReferences, 'image', options.target)),
+    prompt: annotateVolcengineCharacterBindings(
+      annotateCharacterReferences(compiledPrompt, nodeItems, getMediaReferenceUrls(noteReferences, 'image', options.target)),
+      nodeItems,
+      references,
+    ),
     imageUrls,
     videoUrls,
     audioUrls,
@@ -549,7 +588,6 @@ export async function generateVideo(
     };
   }
   const { prompt: rawPrompt, model, provider } = params;
-
   // 解析 @{nodeId:label} 引用为对应节点的实际输出内容
   const prompt = resolveNodeReferences(rawPrompt);
 
@@ -559,6 +597,7 @@ export async function generateVideo(
     const referenceInput = await resolveVideoReferenceInput(rawPrompt, params.nodeId, params.referenceMedia ?? [], {
       promptFirst: !workflow?.adapterType || workflow.adapterType === 'comfyui',
       preserveDeclaredRoles: provider === 'workflow-api', target: 'local',
+      provider,
       legacyPrompt: workflow?.adapterType === 'workflow-api' ? undefined : prompt,
     });
     const references = referenceInput.references ?? [];
@@ -606,6 +645,7 @@ export async function generateVideo(
       resolveReferenceInput: async () => {
         return resolveVideoReferenceInput(rawPrompt, params.nodeId, params.referenceMedia ?? [], {
           target: provider === 'runninghub' ? 'local' : 'remote',
+          provider,
           apimartModel: provider === 'apimart' ? extractModelName(model, provider) : undefined,
         });
       },
@@ -615,7 +655,7 @@ export async function generateVideo(
 
   // 即梦视频：按参考素材自动路由文生、图生、首尾帧或全模态 CLI 子命令
   if (provider === 'dreamina') {
-    const referenceInput = await resolveVideoReferenceInput(rawPrompt, params.nodeId, params.referenceMedia ?? []);
+    const referenceInput = await resolveVideoReferenceInput(rawPrompt, params.nodeId, params.referenceMedia ?? [], { provider });
     const dreaminaPrompt = referenceInput.prompt;
     if (!dreaminaPrompt.trim()) throw new Error('提示词不能为空');
     const capability = getDreaminaVideoCapability(model);
@@ -644,9 +684,34 @@ export async function generateVideo(
       throw new Error('未配置 火山方舟 的服务地址\n请在「设置 → API Key」中添加');
     }
     const modelName = extractModelName(model, provider);
-    const referenceInput = await resolveVideoReferenceInput(rawPrompt, params.nodeId, params.referenceMedia ?? []);
+    const referenceInput = await resolveVideoReferenceInput(rawPrompt, params.nodeId, params.referenceMedia ?? [], { provider });
+    const assetReferences = (referenceInput.references ?? []).filter((reference) => reference.provider === 'volcengine');
     const isSeedance25 = isVolcengineSeedance25Model(modelName);
     const capability = getVolcengineSeedanceCapability(modelName);
+    if (assetReferences.length > 0 && !capability) {
+      throw new Error('火山方舟虚拟人像库素材仅支持 Seedance 2.0 和 Seedance 2.5 模型');
+    }
+    const projectName = providerConfig?.assetLibrary?.projectName?.trim() || 'default';
+    const invalidProjectReference = assetReferences.find((reference) => reference.projectName !== projectName);
+    if (invalidProjectReference) {
+      throw new Error(`方舟素材“${invalidProjectReference.assetId || '未知素材'}”属于项目 ${invalidProjectReference.projectName || '未知'}，当前连接项目为 ${projectName}`);
+    }
+    if (assetReferences.length > 0) {
+      const library = providerConfig?.assetLibrary;
+      if (!library?.enabled) throw new Error('请先在火山方舟编辑连接中启用虚拟人像库');
+      const secretName = (value: string | undefined, fallback: string) => value?.startsWith('secret:') ? value.slice(7) : value || fallback;
+      const [accessKeyId, secretAccessKey] = await Promise.all([
+        readAppSecret(secretName(library.accessKeyIdRef, 'provider/volcengine/asset-library/access-key')),
+        readAppSecret(secretName(library.secretAccessKeyRef, 'provider/volcengine/asset-library/secret-key')),
+      ]);
+      if (!accessKeyId || !secretAccessKey) throw new Error('请先保存虚拟人像库 AK/SK');
+      const assetOptions = { accessKeyId, secretAccessKey, projectName, region: library.region || 'cn-beijing', baseUrl: library.apiBaseUrl, signal };
+      for (const reference of assetReferences) {
+        if (!reference.assetId) throw new Error('方舟虚拟人像素材缺少 Asset ID，请重新选择');
+        const detail = await getAsset(assetOptions, reference.assetId);
+        if (detail.status !== 'Active') throw new Error(`方舟素材“${detail.name || reference.assetId}”当前状态为 ${detail.status}，仅 Active 素材可用于生成`);
+      }
+    }
     if (capability) {
       assertVideoReferenceLimits(referenceInput, capability, '火山方舟当前视频模型');
     }
@@ -655,7 +720,7 @@ export async function generateVideo(
     }
     const resolvedPrompt = referenceInput.prompt;
     const requestReferences = (referenceInput.references ?? [])
-      .filter((reference) => isSeedance25 || reference.kind === 'image');
+      .filter((reference) => isSeedance25 || reference.kind !== 'video');
     if (!resolvedPrompt.trim() && requestReferences.length === 0) {
       throw new Error('提示词不能为空');
     }
@@ -664,6 +729,12 @@ export async function generateVideo(
       ...resolveVideoNodeReferences(params.nodeId),
     ]);
     const remoteReferences = await mapSequentially(requestReferences, async (reference) => {
+      if (reference.provider === 'volcengine') {
+        if (!reference.assetId || reference.url !== `asset://${reference.assetId}`) {
+          throw new Error('方舟虚拟人像素材引用无效，请从素材库重新选择');
+        }
+        return reference;
+      }
       const sourceUrl = getMediaReferenceUrl(reference);
       const url = reference.kind === 'image'
         ? (await resolveImageUrlArray([sourceUrl], 'volcengine', signal))[0]
@@ -700,7 +771,7 @@ export async function generateVideo(
       rawPrompt,
       params.nodeId,
       params.referenceMedia ?? [],
-      { preserveDeclaredRoles: true },
+      { preserveDeclaredRoles: true, provider },
     );
     const canonicalParams = {
       ...params,

@@ -409,14 +409,24 @@ export type MediaReferenceRole =
 
 /** 视频节点上手动挑选的参考图：参考帧（首/中/尾）或参考角色，来源可以是连线节点或角色库。 */
 export interface VideoReferenceItem {
-  /** 连线节点用节点 ID，角色库用 `character:<角色 ID>` */
+  /** 连线节点用节点 ID，角色库用 `character:<角色 ID>`，方舟素材用 `volcengine-asset:<Asset ID>`。 */
   id: string;
+  /** 请求实际使用的媒体地址；方舟素材固定为 `asset://<Asset ID>`。 */
   url: string;
+  /** 仅用于界面缩略图，不能代替 url 参与生成请求。 */
+  previewUrl?: string;
   label?: string;
-  /** frame = 参考帧；character = 参考角色（按普通参考图提交） */
-  kind: 'frame' | 'character';
-  role: 'first_frame' | 'last_frame' | 'reference';
+  /** frame = 参考帧；character = 参考角色；volcengine-asset = 方舟虚拟人像库素材。 */
+  kind: 'frame' | 'character' | 'volcengine-asset';
+  role: MediaReferenceRole;
+  mediaKind?: MediaReferenceKind;
   sourceNodeId?: string;
+  provider?: 'volcengine';
+  assetId?: string;
+  assetGroupId?: string;
+  assetGroupName?: string;
+  projectName?: string;
+  status?: string;
 }
 
 /**
@@ -431,6 +441,10 @@ export interface MediaReference {
   sourceNodeId?: string;
   filePath?: string;
   sourceUrl?: string;
+  provider?: 'volcengine';
+  assetId?: string;
+  assetGroupId?: string;
+  projectName?: string;
 }
 
 export interface VideoGenerationReferenceInput {

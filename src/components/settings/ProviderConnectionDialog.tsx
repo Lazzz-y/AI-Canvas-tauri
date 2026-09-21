@@ -13,6 +13,7 @@ import type {
   ImageReferenceRequestMode,
   ProviderModelSelection,
 } from '../../types';
+import type { VolcengineAssetLibraryConfig } from '../../types/volcengineAssetLibrary';
 import { resolveChatApiProtocol } from '../../services/ai/chatApiProtocol';
 import type { VideoModelCapability } from '../../types/aiTypes';
 import {
@@ -40,6 +41,7 @@ import type { WorkflowApiDraft } from '../../types/workflowApi';
 import { normalizeWorkflowApiBaseUrl } from '../../services/workflowApi/autodlWorkflowManifest';
 import { editableWorkflowApiManifest, validateDeclarativeWorkflowManifest } from '../../services/workflowApi/workflowApiDefinition';
 import ProviderWebSearchPicker from './providerConnection/ProviderWebSearchPicker';
+import VolcengineAssetLibrarySettings from '../volcengine/VolcengineAssetLibrarySettings';
 import {
   assertProviderModelsVideoCapabilities,
   mergeModels,
@@ -80,6 +82,7 @@ export default function ProviderConnectionDialog({
   );
   const [apiKey, setApiKey] = useState(initialConfig?.apiKey || '');
   const [baseUrl, setBaseUrl] = useState(initialConfig?.baseUrl || initialDefinition?.defaultBaseUrl || '');
+  const [assetLibraryConfig, setAssetLibraryConfig] = useState<VolcengineAssetLibraryConfig | undefined>(initialConfig?.assetLibrary);
   const [workflowApiKey, setWorkflowApiKey] = useState(runninghubWorkflowApiKey);
   const [workflowDrafts, setWorkflowDrafts] = useState<WorkflowApiDraft[]>(() =>
     useAppStore.getState().workflows.filter((workflow) => workflow.adapterType === 'workflow-api' && workflow.workflowApi?.connectionId === connectionId)
@@ -196,6 +199,7 @@ export default function ProviderConnectionDialog({
     setChatApiProtocol(resolveChatApiProtocol(savedConfig?.chatApiProtocol));
     setApiKey(savedConfig?.apiKey || '');
     setBaseUrl(savedConfig?.baseUrl || nextDefinition.defaultBaseUrl || '');
+    setAssetLibraryConfig(savedConfig?.assetLibrary);
     setWorkflowApiKey('');
     const localModels = fallbackModels[nextDefinition.id] || [];
     setModels(localModels);
@@ -580,6 +584,7 @@ export default function ProviderConnectionDialog({
         catalogId: definition.id,
         ...(definition.id === 'custom-openai' ? { chatApiProtocol } : {}),
         ...modelConfig,
+        ...(definition.id === 'volcengine' && assetLibraryConfig ? { assetLibrary: { ...assetLibraryConfig, projectName: assetLibraryConfig.projectName || 'default' } } : {}),
       },
       definition.id === 'runninghub-model'
         ? { runninghubWorkflowApiKey: workflowApiKey.trim() }
@@ -663,6 +668,27 @@ export default function ProviderConnectionDialog({
               onReturnToPicker={returnToDefinitionPicker}
               onTestConnection={handleTestConnection}
             />
+
+            {definition?.id === 'volcengine' && (
+              <VolcengineAssetLibrarySettings
+                config={{
+                  name: connectionName,
+                  apiKey,
+                  baseUrl: baseUrl || undefined,
+                  catalogId: definition.id,
+                  assetLibrary: assetLibraryConfig,
+                }}
+                onChange={(next) => {
+                  setAssetLibraryConfig(next.assetLibrary);
+                }}
+                onPersist={connectionId ? async (nextLibrary) => {
+                  const current = useAppStore.getState().config.providers[connectionId];
+                  if (!current) return;
+                  useAppStore.getState().saveProviderConfig(connectionId, { ...current, assetLibrary: nextLibrary });
+                  await useAppStore.getState().saveConfig({ silent: true, throwOnError: true });
+                } : undefined}
+              />
+            )}
 
             {isWebSearchProvider && (
               <ProviderWebSearchPicker
