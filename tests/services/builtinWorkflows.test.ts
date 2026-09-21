@@ -134,7 +134,7 @@ describe('内置 MiniMax H3 工作流', () => {
     });
   });
 
-  it('12GB 极速工作流把早期失效的 ClipProj v3 MLP 引用迁移到已安装的 v3.1', () => {
+  it('12GB 极速工作流迁移旧投影引用并启用流式编码器', () => {
     const workflow = pendingBuiltInWorkflows([]).find(
       (item) => item.id === 'builtin-minimax-h3-i2v-fast-12gb',
     )!;
@@ -143,13 +143,14 @@ describe('内置 MiniMax H3 工作流', () => {
       fileContent: workflow.fileContent.replace(
         'mmh3-4b-ClipProj-v3.1.safetensors',
         'mmh3-4b-ClipProj-v3-mlp.safetensors',
-      ),
+      ).replace('"mode": "streaming"', '"mode": "resident"'),
     };
 
     const upgraded = withBuiltInEditableContent(stale)!;
 
     expect(JSON.parse(upgraded.fileContent)['127'].inputs.projection)
       .toBe('mmh3-4b-ClipProj-v3.1.safetensors');
+    expect(JSON.parse(upgraded.fileContent)['127'].inputs.mode).toBe('streaming');
     expect(stale.fileContent).toContain('mmh3-4b-ClipProj-v3-mlp.safetensors');
     expect(withBuiltInEditableContent(workflow)).toBeNull();
   });

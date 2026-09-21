@@ -193,8 +193,14 @@ export function withBuiltInEditableContent(
       const projection = graph['127']?.inputs?.projection;
       if (projection === 'mmh3-4b-ClipProj-v3-mlp.safetensors') {
         graph['127'].inputs!.projection = 'mmh3-4b-ClipProj-v3.1.safetensors';
-        upgraded = { ...upgraded, fileContent: JSON.stringify(graph) };
         changed = true;
+      }
+      if (graph['127']?.inputs?.mode === 'resident') {
+        graph['127'].inputs!.mode = 'streaming';
+        changed = true;
+      }
+      if (changed) {
+        upgraded = { ...upgraded, fileContent: JSON.stringify(graph) };
       }
     } catch {
       // 用户内容不是有效 JSON 时保持原样，由既有工作流校验负责报告。
