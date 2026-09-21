@@ -144,7 +144,7 @@ function canvasNode(id: string, type: NodeType, label = id): AppState['nodes'][n
 }
 function nodeRows() { return all(tree, (element) => typeof element.props['data-node-id'] === 'string'); }
 function openNodeList() {
-  click(all(tree, (el) => String(el.props.className).startsWith('assets-tab '))[3]); render();
+  click(all(tree, (el) => String(el.props.className).startsWith('assets-tab '))[4]); render();
 }
 
 beforeEach(() => {
@@ -318,7 +318,7 @@ describe('资产库 Tab 抽屉', () => {
     expect(cards().map((el) => (el.props.file as AssetFileEntry).name)).toEqual(['项目二']);
   });
 
-  it('第四页签列出当前画布全部类型，与文件页的项目范围和搜索独立', async () => {
+  it('节点列表页签列出当前画布全部类型，与文件页的项目范围和搜索独立', async () => {
     const types: NodeType[] = ['ai-text', 'ai-image', 'ai-video', 'ai-audio', 'ai-animation', 'ai-panorama',
       'ai-markdown', 'ai-storyboard', 'ai-shotlist', 'ai-director', 'source-image', 'source-video',
       'source-audio', 'source-text', 'canvas-note', 'plugin-node', 'comment'];
@@ -331,7 +331,7 @@ describe('资产库 Tab 抽屉', () => {
     expect(all(tree, (el) => el.type === 'asset-select')).toHaveLength(0);
     expect(cards()).toHaveLength(0);
     expect(find((el) => el.props.placeholder === '搜索节点名称、类型或编号…').props.value).toBe('');
-    expect(all(tree, (el) => el.props.className === 'assets-tab-count')[3].props.children).toBe(types.length);
+    expect(all(tree, (el) => el.props.className === 'assets-tab-count')[4].props.children).toBe(types.length);
   });
 
   it('节点增删、改名和项目切换后，节点列表与计数实时跟随画布', () => {
@@ -343,7 +343,7 @@ describe('资产库 Tab 抽屉', () => {
     expect(nodeRows()).toHaveLength(2);
     driver.store!.setState({ currentProjectId: 'project-2', nodes: [canvasNode('text', 'ai-text')] }); render();
     expect(nodeRows().map((el) => el.props['data-node-id'])).toEqual(['text']);
-    expect(all(tree, (el) => el.props.className === 'assets-tab-count')[3].props.children).toBe(1);
+    expect(all(tree, (el) => el.props.className === 'assets-tab-count')[4].props.children).toBe(1);
     driver.store!.setState({ nodes: [] }); render();
     expect(nodeRows()).toHaveLength(0);
     expect(find((el) => el.props.children === '当前画布暂无节点')).toBeDefined();

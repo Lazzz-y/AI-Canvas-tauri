@@ -6,6 +6,7 @@ import { readAppSecret } from '../../services/providerSecretService';
 import type { VolcengineAsset, VolcengineAssetGroup } from '../../types/volcengineAssetLibrary';
 import ModalOverlay from '../shared/ModalOverlay';
 import ViewportImage from '../shared/ViewportImage';
+import Select from '../shared/Select';
 
 const PAGE_SIZE = 20;
 const ALL_ASSET_TYPES: Array<'Image' | 'Video' | 'Audio'> = ['Image', 'Video', 'Audio'];
@@ -138,7 +139,7 @@ export default function VolcengineAssetPickerDialog({
     </div>
     <div className="flex min-h-0 flex-1 flex-col p-4">
       <div className="flex gap-2">
-        <select className="ui-input max-w-56" value={selectedGroup} onChange={(event) => { setSelectedGroup(event.target.value); setPage(1); }}><option value="">全部素材组</option>{groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}</select>
+        <Select className="max-w-56" value={selectedGroup} onChange={(value) => { setSelectedGroup(value); setPage(1); }} options={[{ value: '', label: '全部素材组' }, ...groups.map((group) => ({ value: group.id, label: group.name }))]} fixedMenu />
         <input className="ui-input min-w-0 flex-1" placeholder="按素材名称搜索" value={query} onChange={(event) => { setQuery(event.target.value); setPage(1); }} />
         <button type="button" className="ui-btn ui-btn--ghost" disabled={busy} onClick={() => void load()}><Icon icon="mdi:refresh" />刷新</button>
       </div>
