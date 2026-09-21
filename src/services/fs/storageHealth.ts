@@ -5,6 +5,39 @@
 import { exists, readDir, stat, remove } from '@tauri-apps/plugin-fs';
 import { isTauriEnv, joinPath, getProjectDataDir } from './core';
 import type { CanvasProject } from '../../types';
+import {
+  getAllProjects, getProjectById, getHistoryEntriesPage,
+  getProjectConversations, getConversationMessages, type HistoryPageCursor,
+} from '../indexedDbService';
+import { localMediaUrlToPath } from '../../utils/mediaUrl';
+
+function pathKey(value: string): string {
+  const path = (localMediaUrlToPath(value) ?? value).replace(/\\/g, '/').replace(/^\/\/\?\//, '');
+  return /^[a-z]:\//i.test(path) || path.startsWith('//') ? path.toLowerCase() : path;
+}
+
+/** Conservatively retain nested media references, including persisted relative paths. */
+function collectReferences(value: unknown, paths: Set<string>, root?: string): void {
+  if (typeof value === 'string') {
+    if (/^(?:[a-z]:[/\\]|[/\\])/i.test(value) || localMediaUrlToPath(value)) paths.add(pathKey(value));
+  } else if (Array.isArray(value)) {
+    value.forEach((item) => collectReferences(item, paths, root));
+  } else if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    if (root && typeof record.relativePath === 'string') {
+      paths.add(pathKey(joinPath(root, record.relativePath)));
+    }
+    if (root && typeof record.sceneId === 'string') {
+      paths.add(`${pathKey(joinPath(root, 'director', 'scenes', record.sceneId))}/`);
+    }
+    Object.values(record).forEach((item) => collectReferences(item, paths, root));
+  }
+}
+
+function isReferenced(path: string, paths: Set<string>): boolean {
+  const key = pathKey(path);
+  return paths.has(key) || [...paths].some((reference) => reference.endsWith('/') && key.startsWith(reference));
+}
 
 // ============================================
 // 类型定义
@@ -217,7 +250,7 @@ async function scanOrphanFiles(
 
   const files = await scanDirRecursive(dataDir, ['.thumbnail']);
   return files
-    .filter((f) => !nodeFilePaths.has(f.path))
+    .filter((f) => !isReferenced(f.path, nodeFilePaths))
     .map((f) => ({
       path: f.path,
       name: f.name,
@@ -276,12 +309,7 @@ async function scanDuplicateFiles(
  */
 export function collectNodeFilePaths(allNodeData: Array<{ data?: Record<string, unknown> }>): Set<string> {
   const paths = new Set<string>();
-  for (const node of allNodeData) {
-    const fp = node.data?.filePath as string | undefined;
-    if (fp && typeof fp === 'string') {
-      paths.add(fp);
-    }
-  }
+  collectReferences(allNodeData, paths);
   return paths;
 }
 
@@ -290,7 +318,7 @@ export function collectNodeFilePaths(allNodeData: Array<{ data?: Record<string, 
  */
 export async function scanStorageHealth(
   projects: CanvasProject[],
-  nodeFilePaths: Set<string>,
+  nodeFilePaths: Set<string> | (() => Set<string>),
   assetFolders: { path: string; label: string }[] = [],
 ): Promise<StorageHealthReport> {
   const report: StorageHealthReport = {
@@ -305,6 +333,39 @@ export async function scanStorageHealth(
   };
 
   if (!isTauriEnv()) return report;
+
+  // 项目列表只有摘要；必须读取所有完整项目，不能用当前画布推断其他项目无引用。
+  // 任何读取失败或记录缺失都终止扫描，不能将未知引用视为空集合。
+  const allProjects = new Map(projects.map((project) => [project.id, project]));
+  for (const project of await getAllProjects()) allProjects.set(project.id, project);
+  projects = [...allProjects.values()];
+  const references = new Set<string>();
+  for (const project of projects) {
+    const record = await getProjectById(project.id);
+    if (!record || !Array.isArray(record.nodes)) throw new Error('项目引用读取不完整');
+    const root = await getProjectDataDir(project.id);
+    collectReferences(record, references, root ?? undefined);
+    let cursor: HistoryPageCursor | null = null;
+    do {
+      const page = await getHistoryEntriesPage(project.id, 200, cursor);
+      collectReferences(page.records, references, root ?? undefined);
+      if (!page.hasMore) break;
+      if (!page.nextCursor) throw new Error('历史引用读取不完整');
+      cursor = page.nextCursor;
+    } while (cursor);
+    for (const conversation of await getProjectConversations(project.id)) {
+      let offset = 0;
+      while (true) {
+        const page = await getConversationMessages(conversation.id, offset, 200);
+        collectReferences(page.messages, references, root ?? undefined);
+        offset += page.messages.length;
+        if (offset >= page.total) break;
+        if (!page.messages.length) throw new Error('消息引用读取不完整');
+      }
+    }
+  }
+  const livePaths = typeof nodeFilePaths === 'function' ? nodeFilePaths() : nodeFilePaths;
+  for (const path of livePaths) references.add(pathKey(path));
 
   // 1. 扫描各项目存储
   for (const p of projects) {
@@ -326,7 +387,7 @@ export async function scanStorageHealth(
 
   // 3. 扫描孤儿文件
   for (const p of projects) {
-    const orphans = await scanOrphanFiles(p, nodeFilePaths);
+    const orphans = await scanOrphanFiles(p, references);
     report.orphans.push(...orphans);
     report.reclaimableSize += orphans.reduce((s, o) => s + o.size, 0);
   }
@@ -409,9 +470,10 @@ async function removeDirContents(dirPath: string): Promise<void> {
 /**
  * 删除指定的孤儿文件
  */
-export async function deleteOrphanFile(filePath: string): Promise<boolean> {
+export async function deleteOrphanFile(filePath: string, verify?: (path: string) => Promise<boolean>): Promise<boolean> {
   if (!isTauriEnv()) return false;
   try {
+    if (!verify || !await verify(filePath)) return false;
     await remove(filePath);
     return true;
   } catch {
@@ -422,9 +484,10 @@ export async function deleteOrphanFile(filePath: string): Promise<boolean> {
 /**
  * 从重复文件组中删除指定文件（保留第一个）
  */
-export async function deleteDuplicateFile(filePath: string): Promise<boolean> {
+export async function deleteDuplicateFile(filePath: string, verify?: (path: string) => Promise<boolean>): Promise<boolean> {
   if (!isTauriEnv()) return false;
   try {
+    if (!verify || !await verify(filePath)) return false;
     await remove(filePath);
     return true;
   } catch {

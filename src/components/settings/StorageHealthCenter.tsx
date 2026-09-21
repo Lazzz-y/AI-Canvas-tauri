@@ -292,13 +292,15 @@ function StackedBar({ items }: { items: BarItem[] }) {
 // 主组件
 // ============================================
 
+function collectLiveReferences(): Set<string> {
+  const state = useAppStore.getState();
+  return collectNodeFilePaths([{ data: { nodes: state.nodes, history: state.history, messages: state.messages } }]);
+}
+
 export default function StorageHealthCenter() {
   const t = useT();
-  const { projects, nodes, showToast } = useAppStore(
+  const { showToast } = useAppStore(
     useShallow((s) => ({
-      projects: s.projects,
-      currentProjectId: s.currentProjectId,
-      nodes: s.nodes,
       showToast: s.showToast,
     })),
   );
@@ -318,10 +320,10 @@ export default function StorageHealthCenter() {
       void estimateBrowserStorage().then(setBrowserStorage);
 
       // 收集所有节点的 filePath 引用
-      const nodeFilePaths = collectNodeFilePaths(nodes as Array<{ data?: Record<string, unknown> }>);
+      const nodeFilePaths = collectLiveReferences;
       const assetFolders = [] as { path: string; label: string }[];
 
-      const result = await scanStorageHealth(projects, nodeFilePaths, assetFolders);
+      const result = await scanStorageHealth(useAppStore.getState().projects, nodeFilePaths, assetFolders);
       setReport(result);
       scannedRef.current = true;
 
@@ -341,13 +343,14 @@ export default function StorageHealthCenter() {
       } else {
         showToast(t('总占用 {total}，一切正常', { total: totalLabel }));
       }
-    } catch (err) {
-      console.error('Storage scan failed:', err);
+    } catch {
+      setReport(null);
+      console.error('Storage scan failed');
       showToast(t('扫描失败，请重试'), 'error');
     } finally {
       setScanning(false);
     }
-  }, [projects, nodes, showToast, t]);
+  }, [showToast, t]);
 
   // 打开时自动扫描一次
   useEffect(() => {
@@ -378,11 +381,21 @@ export default function StorageHealthCenter() {
     }
   }, [showToast, handleScan, t]);
 
+  // 不信任旧报告：每次清理都重新读取所有项目与当前未保存的画布。
+  const verifyUnreferenced = useCallback(async (path: string) => {
+    const fresh = await scanStorageHealth(
+      useAppStore.getState().projects,
+      collectLiveReferences,
+    );
+    const key = [...collectNodeFilePaths([{ data: { filePath: path } }])][0];
+    return !collectLiveReferences().has(key) && fresh.orphans.some((file) => file.path === path);
+  }, []);
+
   // 删除孤儿文件
   const handleDeleteOrphan = useCallback(async (orphan: OrphanFileInfo) => {
     setDeleting((prev) => new Set(prev).add(orphan.path));
     try {
-      const ok = await deleteOrphanFile(orphan.path);
+      const ok = await deleteOrphanFile(orphan.path, verifyUnreferenced);
       if (ok) {
         showToast(t('已删除：{name}', { name: orphan.name }));
         scannedRef.current = false;
@@ -399,13 +412,13 @@ export default function StorageHealthCenter() {
         return next;
       });
     }
-  }, [showToast, handleScan, t]);
+  }, [showToast, handleScan, t, verifyUnreferenced]);
 
   // 删除重复文件
   const handleDeleteDuplicate = useCallback(async (file: DuplicateFileGroup['files'][0]) => {
     setDeleting((prev) => new Set(prev).add(file.path));
     try {
-      const ok = await deleteDuplicateFile(file.path);
+      const ok = await deleteDuplicateFile(file.path, verifyUnreferenced);
       if (ok) {
         showToast(t('已删除：{name}', { name: file.name }));
         scannedRef.current = false;
@@ -422,7 +435,7 @@ export default function StorageHealthCenter() {
         return next;
       });
     }
-  }, [showToast, handleScan, t]);
+  }, [showToast, handleScan, t, verifyUnreferenced]);
 
   // 清空所有 .trash
   const handleClearAllTrash = useCallback(async () => {
@@ -440,13 +453,13 @@ export default function StorageHealthCenter() {
     if (!report) return;
     let count = 0;
     for (const orphan of report.orphans) {
-      const ok = await deleteOrphanFile(orphan.path);
+      const ok = await deleteOrphanFile(orphan.path, verifyUnreferenced);
       if (ok) count++;
     }
     showToast(t('已删除 {count} 个孤儿文件', { count }));
     scannedRef.current = false;
     await handleScan();
-  }, [report, showToast, handleScan, t]);
+  }, [report, showToast, handleScan, t, verifyUnreferenced]);
 
   // 汇总数据
   const overview = useMemo(() => {
