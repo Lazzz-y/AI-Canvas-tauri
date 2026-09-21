@@ -199,6 +199,10 @@ export function withBuiltInEditableContent(
         graph['127'].inputs!.mode = 'streaming';
         changed = true;
       }
+      if (graph['123']?.inputs?.steps === 6) {
+        graph['123'].inputs!.steps = 4;
+        changed = true;
+      }
       if (changed) {
         upgraded = { ...upgraded, fileContent: JSON.stringify(graph) };
       }

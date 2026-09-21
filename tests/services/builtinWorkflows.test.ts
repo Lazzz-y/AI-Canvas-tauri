@@ -134,7 +134,7 @@ describe('内置 MiniMax H3 工作流', () => {
     });
   });
 
-  it('12GB 极速工作流迁移旧投影引用并启用流式编码器', () => {
+  it('12GB 极速工作流迁移旧投影引用、流式编码器和六步采样', () => {
     const workflow = pendingBuiltInWorkflows([]).find(
       (item) => item.id === 'builtin-minimax-h3-i2v-fast-12gb',
     )!;
@@ -143,7 +143,8 @@ describe('内置 MiniMax H3 工作流', () => {
       fileContent: workflow.fileContent.replace(
         'mmh3-4b-ClipProj-v3.1.safetensors',
         'mmh3-4b-ClipProj-v3-mlp.safetensors',
-      ).replace('"mode": "streaming"', '"mode": "resident"'),
+      ).replace('"mode": "streaming"', '"mode": "resident"')
+        .replace('"steps": 4', '"steps": 6'),
     };
 
     const upgraded = withBuiltInEditableContent(stale)!;
@@ -151,6 +152,7 @@ describe('内置 MiniMax H3 工作流', () => {
     expect(JSON.parse(upgraded.fileContent)['127'].inputs.projection)
       .toBe('mmh3-4b-ClipProj-v3.1.safetensors');
     expect(JSON.parse(upgraded.fileContent)['127'].inputs.mode).toBe('streaming');
+    expect(JSON.parse(upgraded.fileContent)['123'].inputs.steps).toBe(4);
     expect(stale.fileContent).toContain('mmh3-4b-ClipProj-v3-mlp.safetensors');
     expect(withBuiltInEditableContent(workflow)).toBeNull();
   });

@@ -1400,7 +1400,7 @@
 .markdown-mode-btn.active {
   background: color-mix(in srgb, var(--node-markdown) 15%, transparent);
   border-color: color-mix(in srgb, var(--node-markdown) 40%, transparent);
-  color: rgb(192, 132, 252);
+  color: var(--node-markdown-light);
 }
 
 .markdown-mode-btn:disabled {
@@ -1447,8 +1447,8 @@
   color: var(--theme-text);
 }
 
-.markdown-rendered h1 { font-size: 18px; font-weight: 700; margin: 8px 0 4px; color: rgb(192, 132, 252); }
-.markdown-rendered h2 { font-size: 15px; font-weight: 600; margin: 6px 0 3px; color: rgb(192, 132, 252); }
+.markdown-rendered h1 { font-size: 18px; font-weight: 700; margin: 8px 0 4px; color: var(--node-markdown-light); }
+.markdown-rendered h2 { font-size: 15px; font-weight: 600; margin: 6px 0 3px; color: var(--node-markdown-light); }
 .markdown-rendered h3 { font-size: 13px; font-weight: 600; margin: 5px 0 2px; color: var(--theme-text); }
 .markdown-rendered h4,
 .markdown-rendered h5,
@@ -1466,13 +1466,13 @@
   background: color-mix(in srgb, var(--node-markdown) 12%, transparent);
   padding: 1px 5px;
   border-radius: 3px;
-  color: rgb(192, 132, 252);
+  color: var(--node-markdown-light);
 }
 
 .markdown-rendered pre {
   margin: 6px 0;
   padding: 8px 10px;
-  background: rgba(10, 10, 15, 0.6);
+  background: color-mix(in srgb, var(--theme-text) 7%, var(--theme-card));
   border-radius: 6px;
   border: 1px solid var(--theme-border);
   overflow-x: auto;
@@ -1482,7 +1482,7 @@
   background: transparent;
   padding: 0;
   font-size: 11px;
-  color: var(--theme-text-secondary);
+  color: var(--theme-text);
 }
 
 .markdown-rendered blockquote {
@@ -1490,12 +1490,12 @@
   padding: 4px 10px;
   border-left: 3px solid color-mix(in srgb, var(--node-markdown) 50%, transparent);
   color: var(--theme-text-secondary);
-  background: rgba(26, 26, 38, 0.4);
+  background: color-mix(in srgb, var(--node-markdown) 8%, var(--theme-card));
   border-radius: 0 4px 4px 0;
 }
 
 .markdown-rendered a {
-  color: rgb(192, 132, 252);
+  color: var(--node-markdown-light);
   text-decoration: underline;
 }
 
@@ -1507,7 +1507,7 @@
 }
 
 .markdown-rendered th {
-  background: rgba(26, 26, 38, 0.6);
+  background: color-mix(in srgb, var(--theme-text) 7%, var(--theme-card));
   padding: 3px 6px;
   text-align: left;
   font-weight: 600;
