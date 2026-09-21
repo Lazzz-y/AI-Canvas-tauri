@@ -2,7 +2,7 @@
  * PromptPanel 提示词面板 — AI 生成节点的核心输入面板，集成模型选择器、提示词编辑器、质量/比例/视频参数、生成按钮、/ 指令菜单
  */
 import Select from '../../shared/Select';
-import { lazy, Suspense, useState, useRef, useCallback, useEffect } from 'react';
+import { lazy, Suspense, useState, useRef, useCallback, useEffect, useMemo } from 'react';
 // 生成中的思考球：仅在生成时按需加载
 const ThinkingOrb = lazy(() => import('thinking-orbs').then((m) => ({ default: m.ThinkingOrb })));
 import type {
@@ -44,6 +44,7 @@ import type { AudioGenerationPurpose } from '../../../types/media';
 import { useT } from '../../../i18n';
 import WorkflowApiParameterFields from './WorkflowApiParameterFields';
 import { DREAMINA_IMAGE_RATIOS, getDreaminaImageModel } from '../../../services/ai/dreaminaModels';
+import { getImageCapability } from '../../../services/ai/mediaModelCapabilities';
 
 const IMAGE_RATIO_CLASS_NAMES: Record<string, string> = {
   '1:1': 'img-rp-sq',
@@ -53,8 +54,24 @@ const IMAGE_RATIO_CLASS_NAMES: Record<string, string> = {
   '4:3': 'img-rp-l43',
   '3:2': 'img-rp-l32',
   '2:3': 'img-rp-p23',
+  '5:4': 'img-rp-l54',
+  '4:5': 'img-rp-p45',
   '21:9': 'img-rp-ultra',
+  '9:21': 'img-rp-tall',
+  '2:1': 'img-rp-ultra',
+  '1:2': 'img-rp-tall',
+  '3:1': 'img-rp-ultra',
+  '1:3': 'img-rp-tall',
 };
+
+function getImageRatioClassName(ratio: string): string {
+  const knownClass = IMAGE_RATIO_CLASS_NAMES[ratio];
+  if (knownClass) return knownClass;
+  const [width, height] = ratio.split(':').map(Number);
+  if (!width || !height) return 'img-rp-sq';
+  if (width === height) return 'img-rp-sq';
+  return width > height ? 'img-rp-wide' : 'img-rp-tall';
+}
 
 const ANIMATION_ACTIONS: AnimationAction[] = ['idle', 'walk', 'run', 'jump', 'attack', 'hit'];
 const IMAGE_BATCH_COUNTS = Array.from({ length: MAX_IMAGE_BATCH_COUNT - 1 }, (_, index) => index + 2);
@@ -486,22 +503,50 @@ export default function PromptPanel({
   const dreaminaImageModel = nodeType === 'ai-image' && selectedProvider === 'dreamina'
     ? getDreaminaImageModel(selectedModel)
     : undefined;
+  const imageCapability = nodeType === 'ai-image' && !dreaminaImageModel
+    ? getImageCapability(selectedModel)
+    : undefined;
+  const imageResolutions = dreaminaImageModel?.resolutions ?? imageCapability?.resolutions;
+  const imageRatioValues = useMemo<readonly string[] | undefined>(() => (
+    dreaminaImageModel
+      ? DREAMINA_IMAGE_RATIOS
+      : imageCapability?.ratios?.filter((ratio) => ratio !== 'auto')
+  ), [dreaminaImageModel, imageCapability]);
+  const imageSupportsAdaptive = !dreaminaImageModel && (
+    !imageCapability
+    || imageCapability.defaultRatio === 'auto'
+    || imageCapability.ratios?.includes('auto') === true
+  );
 
   useEffect(() => {
-    if (!dreaminaImageModel) return;
+    if (!imageResolutions?.length || !imageRatioValues?.length) return;
     const normalizedSize = imageSize?.toLowerCase();
-    const supportedSize = dreaminaImageModel.resolutions.some(
+    const supportedSize = imageResolutions.some(
       (size) => size.toLowerCase() === normalizedSize,
     );
     if (!supportedSize) {
-      const fallback = dreaminaImageModel.resolutions.find((size) => size.toLowerCase() === '2k')
-        ?? dreaminaImageModel.resolutions[0];
+      const fallback = imageCapability?.defaultResolution
+        ?? imageResolutions.find((size) => size.toLowerCase() === '2k')
+        ?? imageResolutions[0];
       onChangeImageSize?.(fallback);
     }
-    if (aspectRatio && !DREAMINA_IMAGE_RATIOS.includes(aspectRatio as typeof DREAMINA_IMAGE_RATIOS[number])) {
-      onChangeAspectRatio?.('16:9');
+    const normalizedRatio = aspectRatio === '自适应' ? 'auto' : aspectRatio;
+    const supportedRatios: readonly string[] = imageCapability?.ratios ?? imageRatioValues;
+    if (!normalizedRatio || !supportedRatios.includes(normalizedRatio)) {
+      const fallback = imageCapability?.defaultRatio === 'auto'
+        ? '自适应'
+        : (imageCapability?.defaultRatio ?? '16:9');
+      onChangeAspectRatio?.(fallback);
     }
-  }, [aspectRatio, dreaminaImageModel, imageSize, onChangeAspectRatio, onChangeImageSize]);
+  }, [
+    aspectRatio,
+    imageCapability,
+    imageRatioValues,
+    imageResolutions,
+    imageSize,
+    onChangeAspectRatio,
+    onChangeImageSize,
+  ]);
 
   const performanceMode = useAppStore((s) => s.config.performanceMode === true);
   const userPresets = useAppStore((s) => s.userPresets);
@@ -840,14 +885,12 @@ export default function PromptPanel({
             aspectRatio={aspectRatio}
             onChangeImageSize={onChangeImageSize || (() => {})}
             onChangeAspectRatio={onChangeAspectRatio || (() => {})}
-            imageSizes={dreaminaImageModel?.resolutions}
-            showAdaptive={!dreaminaImageModel}
-            ratios={dreaminaImageModel
-              ? DREAMINA_IMAGE_RATIOS.map((value) => ({
-                value,
-                className: IMAGE_RATIO_CLASS_NAMES[value],
-              }))
-              : undefined}
+            imageSizes={imageResolutions}
+            showAdaptive={imageSupportsAdaptive}
+            ratios={imageRatioValues?.map((value) => ({
+              value,
+              className: getImageRatioClassName(value),
+            }))}
           />
         )}
 

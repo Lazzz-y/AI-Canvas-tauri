@@ -9,6 +9,7 @@
 import { parseResponseError, buildAuthHeaders } from '../httpUtils';
 import { extractModelName, normalizeSeedreamSize, parseGeneralImageResponse } from '../helpers';
 import { mapImageDimensions } from '../../aiDimensions';
+import { getImageCapability } from '../mediaModelCapabilities';
 import { runBatchTasks } from '../batchUtils';
 import type { BatchImageResult } from '../../../types/aiTypes';
 import { corsSafeFetch } from '../httpTransport';
@@ -35,16 +36,25 @@ export async function generateVolcengineImage(
 
   const modelName = extractModelName(model, provider);
   const seedreamSize = normalizeSeedreamSize(modelName, imageSize);
-  const dimensions = mapImageDimensions(seedreamSize, aspectRatio);
   const apiUrl = baseUrl.replace(/\/+$/, '') + '/images/generations';
 
-  // doubao-seedream-5-0-pro-260628 使用 WxH 格式，且不支持 sequential_image_generation
-  const isPro = modelName === 'doubao-seedream-5-0-pro-260628';
+  // Seedream 5.0 Pro 固定比例使用官方像素表；自适应只传分辨率档位。
+  // 不能把 2K 当短边直接换算，否则 16:9 会超过方舟的总像素上限。
+  const isPro = modelName.startsWith('doubao-seedream-5-0-pro');
+  const adaptiveRatio = aspectRatio === '自适应' || aspectRatio === 'auto';
+  const capability = isPro ? getImageCapability(modelName) : undefined;
+  const preset = adaptiveRatio ? undefined : capability?.dimensionPresets?.[seedreamSize]?.[aspectRatio];
+  const dimensions = preset
+    ? { width: preset[0], height: preset[1] }
+    : mapImageDimensions(seedreamSize, adaptiveRatio ? '1:1' : aspectRatio);
+  const requestSize = isPro && !adaptiveRatio
+    ? `${dimensions.width}x${dimensions.height}`
+    : seedreamSize;
 
   const requestBody = mapImageParameters('volcengine', modelName, {
     model: modelName,
     prompt,
-    imageSize: isPro ? `${dimensions.width}x${dimensions.height}` : seedreamSize,
+    imageSize: requestSize,
     referenceImageUrls: imageUrls,
   });
   if (!isPro) {

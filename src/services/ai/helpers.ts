@@ -39,7 +39,7 @@ export function formatImageSizeForModel(
  * 各模型支持的画质范围不同，未支持的分辨率自动降级到最接近的有效值
  */
 const SEEDREAM_SIZE_SUPPORT: Record<string, string[]> = {
-  'doubao-seedream-5-0-pro': ['1K', '2K'],
+  'doubao-seedream-5-0-pro': ['1K', '1.5K', '2K'],
   'doubao-seedream-5-0-lite': ['2K', '3K', '4K'],
   'doubao-seedream-4-5': ['2K', '4K'],
   'doubao-seedream-4-0': ['1K', '2K', '4K'],
@@ -53,7 +53,7 @@ export function normalizeSeedreamSize(modelName: string, requestedSize: string):
 
   // 将 UI 画质字符串转换为像素短边用于比较
   const numeric = (s: string) => {
-    const map: Record<string, number> = { '720p': 720, '1K': 1024, '2K': 2048, '3K': 3072, '4K': 4096 };
+    const map: Record<string, number> = { '720p': 720, '1K': 1024, '1.5K': 1536, '2K': 2048, '3K': 3072, '4K': 4096 };
     return map[s] ?? 2048;
   };
   const target = numeric(requestedSize);

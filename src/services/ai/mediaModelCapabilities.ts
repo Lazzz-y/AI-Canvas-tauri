@@ -397,14 +397,31 @@ const IMAGE_CAPABILITIES: Record<string, ImageCapability> = {
   'doubao-seedream-5.0-pro': {
     modelId: 'doubao-seedream-5-0-pro',
     resolutions: ['1K', '1.5K', '2K'],
-    defaultResolution: '1K',
-    ratios: [...COMMON_RATIOS, '21:9'],
+    defaultResolution: '2K',
+    ratios: ['auto', ...COMMON_RATIOS, '21:9'],
     defaultRatio: 'auto',
     resolutionStyle: 'K',
     supportsBatch: false,
     supportsImageReference: true,
     maxImageReferences: 10,
     supportsDataUrlReference: true,
+    dimensionPresets: {
+      '1K': {
+        '1:1': [1024, 1024], '4:3': [1152, 864], '3:4': [864, 1152],
+        '16:9': [1424, 800], '9:16': [800, 1424], '3:2': [1248, 832],
+        '2:3': [832, 1248], '21:9': [1568, 672],
+      },
+      '1.5K': {
+        '1:1': [1536, 1536], '4:3': [1792, 1344], '3:4': [1344, 1792],
+        '16:9': [2048, 1152], '9:16': [1152, 2048], '3:2': [1872, 1248],
+        '2:3': [1248, 1872], '21:9': [2352, 1008],
+      },
+      '2K': {
+        '1:1': [2048, 2048], '4:3': [2368, 1776], '3:4': [1776, 2368],
+        '16:9': [2816, 1584], '9:16': [1584, 2816], '3:2': [2496, 1664],
+        '2:3': [1664, 2496], '21:9': [3136, 1344],
+      },
+    },
   },
 };
 
@@ -426,7 +443,10 @@ const IMAGE_MODEL_ID_ALIASES: Record<string, string> = {
 /** 去掉 `provider/` 前缀并归一化别名，得到能力表查询 key。 */
 function normalizeImageModelId(model: string): string {
   const stripped = model.includes('/') ? model.slice(model.indexOf('/') + 1) : model;
-  const key = stripped.toLowerCase();
+  const key = stripped.toLowerCase().replace(
+    /^(doubao-seedream-[45])-(\d)(?=-|$)/,
+    '$1.$2',
+  );
   return IMAGE_MODEL_ID_ALIASES[key] ?? key;
 }
 
@@ -443,7 +463,14 @@ export function getImageCapability(model?: string): ImageCapability | undefined 
       maxImageReferences: references.length ? Math.max(...references.map((field) => field.schema.type === 'array' ? (field.schema.maxItems ?? 64) : (field.referenceIndex ?? 0) + 1)) : 0,
       supportsDataUrlReference: true };
   }
-  return model ? IMAGE_CAPABILITIES[normalizeImageModelId(model)] : undefined;
+  if (!model) return undefined;
+  const normalizedModelId = normalizeImageModelId(model);
+  const exact = IMAGE_CAPABILITIES[normalizedModelId];
+  if (exact) return exact;
+  const versionedKey = Object.keys(IMAGE_CAPABILITIES)
+    .sort((left, right) => right.length - left.length)
+    .find((key) => normalizedModelId.startsWith(`${key}-`));
+  return versionedKey ? IMAGE_CAPABILITIES[versionedKey] : undefined;
 }
 
 /** 将分辨率档位换算为像素短边，用于结果回填的尺寸。 */
