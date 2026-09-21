@@ -49,6 +49,7 @@ import CanvasNodeCardContent from './assets/CanvasNodeCardContent';
 import { useResourceVideoPreview } from '../hooks/useResourceVideoPreview';
 
 const DramaAssetsPanel = lazy(() => import('./DramaAssetsPanel'));
+const VolcengineAssetLibraryPanel = lazy(() => import('./volcengine/VolcengineAssetLibraryPanel'));
 
 /** 仅磁盘真实文件可拖拽（排除节点引用的 node:// / virtual:// 虚拟路径）*/
 function isDraggableEntry(file: AssetFileEntry): boolean {
@@ -56,7 +57,7 @@ function isDraggableEntry(file: AssetFileEntry): boolean {
 }
 
 type FileTabKey = 'project' | 'permanent';
-type TabKey = FileTabKey | 'drama' | 'nodes';
+type TabKey = FileTabKey | 'drama' | 'ark' | 'nodes';
 
 /** 单页渲染数量（增量加载步长）— 限制 DOM 规模 */
 const PAGE_SIZE = 48;
@@ -125,8 +126,9 @@ export default function AssetsPanel() {
     );
 
   const [activeTab, setActiveTab] = useState<FileTabKey>('project');
+  const [arkLibraryOpen, setArkLibraryOpen] = useState(false);
   const [nodeListOpen, setNodeListOpen] = useState(false);
-  const visibleTab: TabKey = dramaAssetsPanelOpen ? 'drama' : nodeListOpen ? 'nodes' : activeTab;
+  const visibleTab: TabKey = dramaAssetsPanelOpen ? 'drama' : nodeListOpen ? 'nodes' : arkLibraryOpen ? 'ark' : activeTab;
   const isNodeList = visibleTab === 'nodes';
   // 只在节点页订阅标识和内容；移动节点不改变 data，避免位置更新重绘整个资产面板。
   const canvasNodeIds = useAppStore(useShallow((s) => assetsPanelOpen && isNodeList ? s.nodes.map((node) => node.id) : []));
@@ -146,6 +148,7 @@ export default function AssetsPanel() {
   const [permanentFiles, setPermanentFiles] = useState<AssetFileEntry[]>([]);
   // 标签 Map（path -> tags），作为标签的唯一真相源，编辑时只更新它，避免重新读盘
   const [tagMap, setTagMap] = useState<Record<string, string[]>>({});
+  const [arkAssetCount, setArkAssetCount] = useState(0);
 
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -535,8 +538,13 @@ export default function AssetsPanel() {
     setNodeListOpen(tab === 'nodes');
     if (tab === 'drama') {
       setDramaAssetsPanelOpen(true);
+      setArkLibraryOpen(false);
+    } else if (tab === 'ark') {
+      setArkLibraryOpen(true);
+      setDramaAssetsPanelOpen(false);
     } else {
       if (tab !== 'nodes') setActiveTab(tab);
+      setArkLibraryOpen(false);
       setDramaAssetsPanelOpen(false);
     }
     setActiveCategory(null);
@@ -582,7 +590,7 @@ export default function AssetsPanel() {
                 <h2 className="assets-panel-title">
                   {isDrawer ? '资产库' : '资产管理'}
                   {!isDrawer && <span className="assets-panel-subtitle">
-                    {visibleTab === 'drama' ? '管理人物、场景和道具简介与绑图' : isNodeList ? '查看当前画布中的全部节点' : '拖拽卡片到画布即可添加节点'}
+                    {visibleTab === 'drama' ? '管理人物、场景和道具简介与绑图' : visibleTab === 'ark' ? '管理火山方舟虚拟人像素材' : isNodeList ? '查看当前画布中的全部节点' : '拖拽卡片到画布即可添加节点'}
                   </span>}
                 </h2>
                 {isDrawer ? (
@@ -594,22 +602,22 @@ export default function AssetsPanel() {
 
               {/* Tabs */}
               <div className="assets-tabs">
-                {(['project', 'permanent', 'drama', 'nodes'] as TabKey[]).map((tab) => (
+                {(['project', 'permanent', 'drama', 'ark', 'nodes'] as TabKey[]).map((tab) => (
                   <motion.button
                     key={tab} type="button"
                     className={`assets-tab ${visibleTab === tab ? 'active' : ''}`}
                     onClick={() => switchTab(tab)}
                     whileHover={{ scale: visibleTab === tab ? 1 : 1.03 }} whileTap={{ scale: 0.97 }}
                   >
-                    {tab === 'project' ? '项目文件' : tab === 'permanent' ? '全局资产' : tab === 'drama' ? '创作资产' : '节点列表'}
+                    {tab === 'project' ? '项目文件' : tab === 'permanent' ? '全局资产' : tab === 'drama' ? '创作资产' : tab === 'ark' ? '方舟素材库' : '节点列表'}
                     <span className="assets-tab-count">
-                      {tab === 'project' ? projectFiles.length : tab === 'permanent' ? permanentFiles.length : tab === 'drama' ? dramaAssetCount : canvasNodeCount}
+                      {tab === 'project' ? projectFiles.length : tab === 'permanent' ? permanentFiles.length : tab === 'drama' ? dramaAssetCount : tab === 'ark' ? arkAssetCount : canvasNodeCount}
                     </span>
                   </motion.button>
                 ))}
 
                 {/* Toolbar: 搜索 + 添加 */}
-              {visibleTab !== 'drama' ? <div className="assets-toolbar ml-auto">
+              {visibleTab !== 'drama' && visibleTab !== 'ark' ? <div className="assets-toolbar ml-auto">
                 {visibleTab === 'project' && (
                   <Select
                     className="assets-project-select-wrap"
@@ -740,6 +748,10 @@ export default function AssetsPanel() {
                   )}
                 >
                   <DramaAssetsPanel compact={isDrawer} />
+                </Suspense>
+              ) : visibleTab === 'ark' ? (
+                <Suspense fallback={<div className="flex flex-1 items-center justify-center text-xs text-canvas-text-muted">正在加载方舟素材库...</div>}>
+                  <VolcengineAssetLibraryPanel compact={isDrawer} onCountChange={setArkAssetCount} />
                 </Suspense>
               ) : (
                 <>
