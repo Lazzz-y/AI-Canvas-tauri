@@ -2,7 +2,7 @@
  * ApiKeySettings — provider connections and enabled model catalogs.
  */
 import { Icon } from '@iconify/react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { useAppStore } from '../../store/useAppStore';
 import {
@@ -592,7 +592,8 @@ export default function ApiKeySettings({ onClose }: { onClose: () => void }) {
                     ? t('待填写 API Key')
                     : isWorkflowApi ? t('已配置') : t('已连接');
               return (
-                <div key={item.id} className={`provider-connection-card${isRunningHub ? ' provider-connection-card--runninghub' : ''}`}>
+                <Fragment key={item.id}>
+                <div className={`provider-connection-card${isRunningHub ? ' provider-connection-card--runninghub' : ''}`}>
                   <ProviderBadge providerId={item.id} config={item.config} size="large" />
                   <div className="provider-connection-copy">
                     <div className="provider-connection-title-row">
@@ -702,6 +703,7 @@ export default function ApiKeySettings({ onClose }: { onClose: () => void }) {
                     </div>
                   )}
                 </div>
+                </Fragment>
               );
             })}
           </div>

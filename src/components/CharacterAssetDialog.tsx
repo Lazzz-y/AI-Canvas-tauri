@@ -28,6 +28,7 @@ import type {
   CharacterVoiceKind,
   DramaCharacter,
 } from '../types/dramaAssets';
+import VolcengineAssetPickerDialog, { type VolcengineAssetSelection } from './volcengine/VolcengineAssetPickerDialog';
 import ModalOverlay from './shared/ModalOverlay';
 import PopupCloseButton from './shared/PopupCloseButton';
 import {
@@ -961,6 +962,7 @@ function CharacterAssetEditorDialog({
     initialDraft.primaryVoiceClipId ?? initialDraft.voiceClips?.[0]?.id ?? null,
   );
   const [playingVoiceClipId, setPlayingVoiceClipId] = useState<string | null>(null);
+  const [volcenginePickerMode, setVolcenginePickerMode] = useState<'image' | null>(null);
   const [saving, setSaving] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const voiceInputRef = useRef<HTMLInputElement>(null);
@@ -977,6 +979,21 @@ function CharacterAssetEditorDialog({
 
   const patchDraft = (patch: Partial<DramaCharacter>) => {
     setDraft((current) => ({ ...current, ...patch, updatedAt: Date.now() }));
+  };
+
+  const applyVolcengineAsset = (items: VolcengineAssetSelection[]) => {
+    const selectedItems = items.slice(0, 1).map((item) => item.asset);
+    if (selectedItems.length === 0) return;
+    const current = draft.volcengineBinding;
+    const projectName = current?.projectName || 'default';
+    patchDraft({ volcengineBinding: {
+      ...current,
+      projectName,
+      imageAssetId: selectedItems[0].id,
+      imageAssetName: selectedItems[0].name,
+      imageAssetStatus: selectedItems[0].status,
+    } });
+    setVolcenginePickerMode(null);
   };
 
   const patchReference = (patch: Partial<CharacterReferenceImage>) => {
@@ -1521,6 +1538,29 @@ function CharacterAssetEditorDialog({
             />
           </div>
         </section>
+
+        <section className="character-dialog-fields character-volcengine-binding" aria-label="火山方舟角色绑定">
+          <div className="character-field character-field-wide">
+            <span>火山方舟视觉资产绑定（可选）</span>
+            <small>将角色绑定至火山方舟虚拟人像库，使用火山方舟API调用Seedance2.0系列、Seedance2.5可过人脸审核</small>
+          </div>
+          <label className="character-field">
+            <span>项目名称</span>
+            <input
+              value={draft.volcengineBinding?.projectName ?? 'default'}
+              onChange={(event) => patchDraft({ volcengineBinding: { ...draft.volcengineBinding, projectName: event.target.value || 'default' } })}
+              placeholder="default"
+            />
+          </label>
+          <div className="character-field character-field-wide">
+            <span>角色人物资产</span>
+            <div className="flex items-center gap-2">
+              <span className="min-w-0 flex-1 truncate text-xs text-canvas-text-secondary">{draft.volcengineBinding?.imageAssetId ? `已绑定：${draft.volcengineBinding.imageAssetName || draft.volcengineBinding.imageAssetId}` : '未绑定'}</span>
+              <button type="button" className="character-button-secondary" onClick={() => setVolcenginePickerMode('image')}>选择视觉资产</button>
+              {draft.volcengineBinding?.imageAssetId && <button type="button" className="character-button-secondary" onClick={() => patchDraft({ volcengineBinding: { ...draft.volcengineBinding, imageAssetId: undefined, imageAssetName: undefined, imageAssetStatus: undefined } })}>清除</button>}
+            </div>
+          </div>
+        </section>
       </div>
 
       <footer className="character-dialog-footer">
@@ -1534,6 +1574,14 @@ function CharacterAssetEditorDialog({
           {saving ? '保存中…' : '保存角色'}
         </button>
       </footer>
+      <VolcengineAssetPickerDialog
+        isOpen={volcenginePickerMode !== null}
+        selectedAssetIds={draft.volcengineBinding?.imageAssetId ? [draft.volcengineBinding.imageAssetId] : []}
+        allowedAssetTypes={['Image']}
+        maxSelections={1}
+        onClose={() => setVolcenginePickerMode(null)}
+        onConfirm={applyVolcengineAsset}
+      />
     </ModalOverlay>
   );
 }

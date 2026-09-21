@@ -27,7 +27,17 @@ export async function parseResponseError(response: Response, defaultMsg: string)
     if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
       const record = payload as Record<string, unknown>;
       const error = record.error;
-      if (typeof error === 'string' && error.trim()) {
+      // 火山引擎 OpenAPI 错误结构：{ ResponseMetadata: { Error: { Code, Message } } }
+      const volcError = (record.ResponseMetadata as Record<string, unknown> | undefined)?.Error as Record<string, unknown> | undefined;
+      const volcMessage = typeof volcError?.Message === 'string' && (volcError.Message as string).trim()
+        ? (volcError.Message as string).trim()
+        : '';
+      if (volcMessage) {
+        const volcCode = typeof volcError?.Code === 'string' && (volcError.Code as string).trim()
+          ? `（${(volcError.Code as string).trim()}）`
+          : '';
+        errorMsg = volcMessage + volcCode;
+      } else if (typeof error === 'string' && error.trim()) {
         errorMsg = error.trim();
       } else if (error && typeof error === 'object' && !Array.isArray(error)) {
         const message = (error as Record<string, unknown>).message;

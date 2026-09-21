@@ -88,6 +88,17 @@ export interface CharacterVoiceClip {
   updatedAt: number;
 }
 
+/** 可选的火山方舟虚拟人像绑定；只保存 Asset ID，不保存 AK/SK 或签名信息。 */
+export interface VolcengineCharacterBinding {
+  projectName: string;
+  /** 同一角色只能绑定一个审核通过的视觉资产。 */
+  imageAssetId?: string;
+  /** @deprecated 旧版多资产数据，仅用于读取时取第一项，不再写入。 */
+  imageAssets?: Array<{ assetId: string; name?: string; status?: string }>;
+  imageAssetName?: string;
+  imageAssetStatus?: string;
+}
+
 /** 单个动作可绑定多份静态图片、GIF 或视频素材。 */
 export interface CharacterActionMedia {
   id: string;
@@ -152,6 +163,7 @@ export interface DramaCharacter extends DramaAssetBase {
   voiceClips?: CharacterVoiceClip[];
   /** 主音色片段 id，配音与音色参考默认取它 */
   primaryVoiceClipId?: string;
+  volcengineBinding?: VolcengineCharacterBinding;
   /** 与角色绑定的动作库。 */
   actions?: CharacterAction[];
 }
