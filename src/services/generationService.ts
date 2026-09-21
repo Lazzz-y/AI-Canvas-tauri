@@ -69,7 +69,10 @@ export async function executeGeneration(
   );
   const parsedNodeModel = parseProjectModelRef(data?.model);
   const nodeModel = data?.model || projectModel?.model;
-  const nodeProvider = data?.provider || parsedNodeModel?.provider || projectModel?.provider;
+  const nodeProvider = data.model
+    ? data.provider || parsedNodeModel?.provider
+    : projectModel?.provider || data.provider;
+  const workflowId = data.workflowId || (!data.model ? projectModel?.workflowId : undefined);
   if (!nodeModel || !nodeProvider) {
     store.showToast('请先在底部模型选择器中选择一个模型', 'error');
     return { success: false, message: '未选择模型' };
@@ -105,7 +108,7 @@ export async function executeGeneration(
         const batch = await generateImagesBatch({
           prompt: effectivePrompt, model: nodeModel, provider: nodeProvider,
           imageSize, aspectRatio, nodeId,
-          workflowId: data.workflowId, workflowInputs: data.workflowInputs, runninghubModelParameters: data.runninghubModelParameters,
+          workflowId, workflowInputs: data.workflowInputs, runninghubModelParameters: data.runninghubModelParameters,
         }, batchCount);
         if (!isStillCurrentSubmission()) return { success: false, message: '任务已取消' };
         await applyImageBatchResults({
@@ -123,7 +126,7 @@ export async function executeGeneration(
       const result = await generateImage({
         prompt: effectivePrompt, model: nodeModel, provider: nodeProvider,
         imageSize, aspectRatio, nodeId,
-        workflowId: data.workflowId, workflowInputs: data.workflowInputs, runninghubModelParameters: data.runninghubModelParameters,
+        workflowId, workflowInputs: data.workflowInputs, runninghubModelParameters: data.runninghubModelParameters,
       });
       if (!isStillCurrentSubmission()) return { success: false, message: '任务已取消' };
 
@@ -175,7 +178,7 @@ export async function executeGeneration(
       const result = await generateImage({
         prompt: buildPanoramaPrompt(effectivePrompt), model: nodeModel, provider: nodeProvider,
         imageSize, aspectRatio, nodeId,
-        workflowId: data.workflowId, workflowInputs: data.workflowInputs, runninghubModelParameters: data.runninghubModelParameters,
+        workflowId, workflowInputs: data.workflowInputs, runninghubModelParameters: data.runninghubModelParameters,
       });
       if (!isStillCurrentSubmission()) return { success: false, message: '任务已取消' };
       const persisted = submittingProjectId
@@ -204,7 +207,7 @@ export async function executeGeneration(
         seedanceDuration,
       } = resolveVideoSubmissionControls({
         provider: nodeProvider,
-        workflowId: data.workflowId,
+        workflowId,
         videoResolution: data.videoResolution as number | undefined,
         videoFps: data.videoFps as number | undefined,
         videoFrames: data.videoFrames as number | undefined,
@@ -217,7 +220,7 @@ export async function executeGeneration(
         prompt: effectivePrompt, model: nodeModel, provider: nodeProvider,
         videoResolution, videoFps, videoFrames, seedanceResolution, seedanceRatio,
         seedanceDuration, generateAudio: genAudio, nodeId,
-        workflowId: data.workflowId, workflowInputs: data.workflowInputs, runninghubModelParameters: data.runninghubModelParameters,
+        workflowId, workflowInputs: data.workflowInputs, runninghubModelParameters: data.runninghubModelParameters,
       });
       if (!isStillCurrentSubmission()) return { success: false, message: '任务已取消' };
       const persisted = getCloudWorkflowPersistedOutput(result.workflowApiOutputs ?? result.runninghubOutputs, result.url) ?? (submittingProjectId
@@ -253,7 +256,7 @@ export async function executeGeneration(
         musicDuration: data.musicDuration,
         autoGenerateLyrics: data.autoGenerateLyrics,
         nodeId,
-        workflowId: data.workflowId,
+        workflowId,
         workflowInputs: data.workflowInputs, runninghubModelParameters: data.runninghubModelParameters,
       });
       if (!isStillCurrentSubmission()) {

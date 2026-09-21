@@ -42,6 +42,7 @@ const COMFY_ARGS: &[&str] = &[
     "--enable-cors-header",
 ];
 const COMFYUI_WINDOW_LABEL: &str = "comfyui";
+const FAST_DISK_MARKER: &str = ".ai-canvas-fast-disk";
 const COMFYUI_BRIDGE_SCRIPT: &str = include_str!("bridge.js");
 const MAX_WORKFLOW_JSON_LENGTH: usize = 16 * 1024 * 1024;
 const COMFYUI_ACTION_PATH: &str = "/__ai_canvas_comfy_action__";
@@ -539,6 +540,17 @@ fn find_comfy_desktop_shared_model_paths(root: &Path, working_dir: &Path) -> Opt
 fn build_comfy_args(root: &Path, working_dir: &Path) -> Vec<String> {
     let mut args: Vec<String> = COMFY_ARGS.iter().map(|arg| (*arg).to_string()).collect();
 
+    // fast-disk can avoid Windows page-file thrashing for models larger than system RAM.
+    // Keep it opt-in per ComfyUI installation because it can be slower on mechanical disks,
+    // and only pass the flag when the installed ComfyUI version actually declares it.
+    let fast_disk_enabled =
+        root.join(FAST_DISK_MARKER).is_file() || working_dir.join(FAST_DISK_MARKER).is_file();
+    let fast_disk_supported = std::fs::read_to_string(working_dir.join("comfy/cli_args.py"))
+        .is_ok_and(|contents| contents.contains("--fast-disk"));
+    if fast_disk_enabled && fast_disk_supported {
+        args.push("--fast-disk".to_string());
+    }
+
     if let Some(shared_model_paths) = find_comfy_desktop_shared_model_paths(root, working_dir) {
         args.push("--extra-model-paths-config".to_string());
         args.push(shared_model_paths.to_string_lossy().into_owned());
@@ -872,12 +884,15 @@ pub async fn open_comfyui_window(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_editor_script, comfyui_socket_endpoint, ensure_local_comfyui_reachable,
-        is_local_comfyui_url, is_same_comfyui_origin, parse_comfyui_url,
-        parse_comfyui_window_action, parse_editor_load_result, parse_workflow_save_payload,
-        scope_comfyui_script, ComfyUIWindowAction, COMFY_ARGS,
+        build_comfy_args, build_editor_script, comfyui_socket_endpoint,
+        ensure_local_comfyui_reachable, is_local_comfyui_url, is_same_comfyui_origin,
+        parse_comfyui_url, parse_comfyui_window_action, parse_editor_load_result,
+        parse_workflow_save_payload, scope_comfyui_script, ComfyUIWindowAction, COMFY_ARGS,
+        FAST_DISK_MARKER,
     };
+    use std::fs;
     use std::net::TcpListener;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn reuses_window_when_only_the_frontend_route_changed() {
@@ -1107,5 +1122,29 @@ mod tests {
         assert!(COMFY_ARGS
             .windows(2)
             .any(|args| args == ["--listen", "127.0.0.1"]));
+    }
+
+    #[test]
+    fn enables_fast_disk_only_for_an_opted_in_supported_installation() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("ai-canvas-comfy-fast-disk-{unique}"));
+        let comfy_dir = root.join("comfy");
+        fs::create_dir_all(&comfy_dir).unwrap();
+        fs::write(
+            comfy_dir.join("cli_args.py"),
+            "parser.add_argument('--fast-disk')",
+        )
+        .unwrap();
+
+        assert!(!build_comfy_args(&root, &root).contains(&"--fast-disk".to_string()));
+        fs::write(root.join(FAST_DISK_MARKER), "enabled\n").unwrap();
+        assert!(build_comfy_args(&root, &root).contains(&"--fast-disk".to_string()));
+
+        fs::write(comfy_dir.join("cli_args.py"), "parser.parse_args()").unwrap();
+        assert!(!build_comfy_args(&root, &root).contains(&"--fast-disk".to_string()));
+        fs::remove_dir_all(root).unwrap();
     }
 }

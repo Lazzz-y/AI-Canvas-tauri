@@ -36,6 +36,7 @@ import PopupCloseButton from './shared/PopupCloseButton';
 import Select from './shared/Select';
 import {
   PROJECT_STYLE_OPTIONS,
+  getProjectComfyWorkflowOptions,
 } from '../services/projectSettingsService';
 import { uploadSourceFileToProject } from '../services/fileService';
 import { useT } from '../i18n';
@@ -176,9 +177,10 @@ export default function ProjectSettingsPopover({
   const [saving, setSaving] = useState(false);
   const [position, setPosition] = useState({ top: 44, left: 12 });
   const nestedModalOpenRef = useRef(false);
-  const { config, customStyles, updateProjectSettings } = useAppStore(
+  const { config, workflows, customStyles, updateProjectSettings } = useAppStore(
     useShallow((state) => ({
       config: state.config,
+      workflows: state.workflows,
       customStyles: state.customStyles,
       updateProjectSettings: state.updateProjectSettings,
     })),
@@ -257,7 +259,12 @@ export default function ProjectSettingsPopover({
 
   const modelGroups = useMemo(() => {
     const groups = Object.fromEntries(
-      MODEL_ROWS.map((row) => [row.kind, buildModelGroups(row, config)]),
+      MODEL_ROWS.map((row) => {
+        const groups = buildModelGroups(row, config);
+        const options = getProjectComfyWorkflowOptions(row.kind, workflows);
+        if (options.length > 0) groups.push({ id: 'comfyui', name: t('ComfyUI 工作流'), options });
+        return [row.kind, groups];
+      }),
     ) as Record<ProjectModelKind, ModelOptionGroup[]>;
     // 翻译 buildModelGroups 内模块级无法访问 t 的固定 group name
     (Object.keys(groups) as ProjectModelKind[]).forEach((kind) => {
@@ -266,7 +273,7 @@ export default function ProjectSettingsPopover({
         : group);
     });
     return groups;
-  }, [config, t]);
+  }, [config, workflows, t]);
   const visionModelGroups = useMemo(() => modelGroups.text.map((group) => ({
     ...group,
     options: group.options.filter((option) => {

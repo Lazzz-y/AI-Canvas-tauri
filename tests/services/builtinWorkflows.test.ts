@@ -75,10 +75,10 @@ beforeEach(() => {
 });
 
 describe('内置 MiniMax H3 工作流', () => {
-  it('首次启动播种九个视频与七个音频工作流，之后不再重复添加', () => {
+  it('首次启动播种十个视频与七个音频工作流，之后不再重复添加', () => {
     const first = pendingBuiltInWorkflows([]);
-    expect(first).toHaveLength(16);
-    expect(first.filter((workflow) => workflow.category === 'ai-video')).toHaveLength(9);
+    expect(first).toHaveLength(17);
+    expect(first.filter((workflow) => workflow.category === 'ai-video')).toHaveLength(10);
     expect(first.filter((workflow) => workflow.category === 'ai-audio')).toHaveLength(7);
     expect(pendingBuiltInWorkflows([])).toHaveLength(0);
   });
@@ -90,7 +90,7 @@ describe('内置 MiniMax H3 工作流', () => {
     );
     const pending = pendingBuiltInWorkflows([]);
     expect(pending.map((workflow) => workflow.id)).not.toContain('builtin-minimax-h3-t2v');
-    expect(pending).toHaveLength(15);
+    expect(pending).toHaveLength(16);
   });
 
   it('默认 IO 节点都能在工作流 JSON 里找到对应的输入', () => {
@@ -101,6 +101,57 @@ describe('内置 MiniMax H3 工作流', () => {
         expect(workflow.ioNodes?.some((io) => io.nodeId === nodeId && io.type === type)).toBe(true);
       }
     }
+  });
+
+  it('12GB 极速图生视频使用 4B 投影、INT8 ConvRot、Turbo 4 步和 Comfy Kitchen', () => {
+    const workflow = pendingBuiltInWorkflows([]).find(
+      (item) => item.id === 'builtin-minimax-h3-i2v-fast-12gb',
+    )!;
+    const graph = JSON.parse(workflow.fileContent);
+    expect(workflow.defaultNodes).toEqual({ prompt: '132', image: '114' });
+    expect(graph['126'].inputs.unet_name).toBe('minimax_h3_fl2va_pruned_int8_convrot.safetensors');
+    expect(graph['127']).toMatchObject({
+      class_type: 'ClipProjLoader',
+      inputs: {
+        clip_name: 'qwen3vl_4b_int8_convrot.safetensors',
+        type: 'krea2',
+        projection: 'mmh3-4b-ClipProj-v3.1.safetensors',
+        mode: 'streaming',
+      },
+    });
+    expect(graph['118'].inputs.vae_name).toBe('minimax_h3_video_vae_int8_convrot.safetensors');
+    expect(graph['122'].class_type).toBe('MiniMaxH3TurboSampler');
+    expect(graph['115'].inputs.megapixels).toBe(0.2);
+    expect(graph['123'].inputs).toMatchObject({ scheduler: 'simple', steps: 4, model: ['146', 0] });
+    expect(graph['142'].inputs).toMatchObject({
+      lora_name: 'minimax_h3_turbo_v4_step600_ema.safetensors',
+      strength: 1,
+      low_vram: false,
+    });
+    expect(graph['146']).toMatchObject({
+      class_type: 'ModelAttentionBackend',
+      inputs: { attention: 'comfy kitchen attention', model: ['142', 0] },
+    });
+  });
+
+  it('12GB 极速工作流把早期失效的 ClipProj v3 MLP 引用迁移到已安装的 v3.1', () => {
+    const workflow = pendingBuiltInWorkflows([]).find(
+      (item) => item.id === 'builtin-minimax-h3-i2v-fast-12gb',
+    )!;
+    const stale = {
+      ...workflow,
+      fileContent: workflow.fileContent.replace(
+        'mmh3-4b-ClipProj-v3.1.safetensors',
+        'mmh3-4b-ClipProj-v3-mlp.safetensors',
+      ),
+    };
+
+    const upgraded = withBuiltInEditableContent(stale)!;
+
+    expect(JSON.parse(upgraded.fileContent)['127'].inputs.projection)
+      .toBe('mmh3-4b-ClipProj-v3.1.safetensors');
+    expect(stale.fileContent).toContain('mmh3-4b-ClipProj-v3-mlp.safetensors');
+    expect(withBuiltInEditableContent(workflow)).toBeNull();
   });
 
   it('文生视频：分辨率写进 ResolutionSelector，时长写进秒数节点，帧率保持工作流原值', async () => {
@@ -229,7 +280,7 @@ describe('内置 AuK 音频工作流', () => {
     expect(pending.map((workflow) => workflow.id)).toEqual(['builtin-auk-tts', 'builtin-auk-voice-cloning']);
     expect(existing[0].name).toBe('用户修改的名字');
     expect(pendingBuiltInWorkflows(existing)).toEqual([]);
-    expect(resetBuiltInWorkflows()).toHaveLength(16);
+    expect(resetBuiltInWorkflows()).toHaveLength(17);
   });
 
   it.each(['builtin-auk-tts', 'builtin-auk-voice-cloning'])('%s 保留可编辑布局、模型、采样参数和全部执行连线', (id) => {
@@ -392,7 +443,7 @@ describe('内置 Qwen3 音频工作流', () => {
 
   it('已有其他项的用户只补三个 Qwen3 工作流，保留修改且不重复播种', () => {
     const existing = resetBuiltInWorkflows().filter((workflow) => !ids.includes(workflow.id));
-    expect(existing).toHaveLength(13);
+    expect(existing).toHaveLength(14);
     existing[0].name = '自定义 AuK';
     localStorage.setItem('aicanvas.builtinWorkflows.seededIds', JSON.stringify(existing.map((workflow) => workflow.id)));
     const pending = pendingBuiltInWorkflows(existing);
@@ -566,7 +617,7 @@ describe('内置 H3 PDD 与 Breeze TTS 2', () => {
 
   it('已有其他项时补齐四项单图PDD与Breeze，保留用户修改和删除记录', () => {
     const existing = resetBuiltInWorkflows().filter((workflow) => !ids.includes(workflow.id));
-    expect(existing).toHaveLength(12);
+    expect(existing).toHaveLength(13);
     const seeded = existing.map((workflow) => workflow.id);
     const removedId = existing.pop()!.id;
     existing[0].name = '用户自定义';
@@ -683,10 +734,10 @@ describe('内置 H3 PDD 自由参考', () => {
     return workflows.find((workflow) => workflow.id === id)!;
   }
 
-  it('旧版十五项只补自由参考，不覆盖用户修改、删除记录及同名 MCP 导入项', () => {
+  it('已有项只补缺少的自由参考，不覆盖用户修改、删除记录及同名 MCP 导入项', () => {
     const all = resetBuiltInWorkflows();
     const existing = all.filter((workflow) => workflow.id !== id);
-    expect(existing).toHaveLength(15);
+    expect(existing).toHaveLength(16);
     localStorage.setItem('aicanvas.builtinWorkflows.seededIds', JSON.stringify(existing.map((workflow) => workflow.id)));
     const removed = existing.pop()!.id;
     existing[0].name = '保留用户修改';
@@ -729,7 +780,7 @@ describe('内置 H3 PDD 自由参考', () => {
     const uploads: string[] = [];
     for (const [group, start, mime] of [[0, 101, 'image/png'], [1, 201, 'video/mp4'], [2, 301, 'audio/wav']] as const) {
       for (let i = 0; i < counts[group]; i++) {
-        const url = `data:${mime};base64,${btoa(`builtin-optional-${requestNumber}-${group}-${i}`)}`;
+        const url = `data:${mime};base64,${btoa(`builtin-optional-${id}-${requestNumber}-${group}-${i}`)}`;
         media[group].push(url);
         if (mode !== 'automatic') workflowInputs[String(start + i + (mode === 'sparse' ? 1 : 0))] = url;
       }

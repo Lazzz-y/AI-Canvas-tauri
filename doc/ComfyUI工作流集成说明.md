@@ -67,7 +67,7 @@ ComfyUI 在 AI Canvas 里是一种 **provider**：工作流导入后会出现在
 
 ### 4.2 内置工作流播种
 
-[builtinWorkflows.ts](../src/services/builtinWorkflows.ts) 内置了 9 个 MiniMax H3 视频工作流（原有文生/图生/参考生 × 普通/Turbo，加 3 个 PDD）、2 个 AuK、3 个 Qwen3 和 2 个 Breeze TTS 2 音频工作流。每项可独立声明分类，未声明时保留视频分类。API JSON 打包在 `src/assets/comfyWorkflows/` 下，界面格式放在同级 `ui/` 里。
+[builtinWorkflows.ts](../src/services/builtinWorkflows.ts) 内置了 10 个 MiniMax H3 视频工作流（原有文生/图生/参考生 × 普通/Turbo、3 个 PDD，以及 12GB 极速图生视频）、2 个 AuK、3 个 Qwen3 和 2 个 Breeze TTS 2 音频工作流。每项可独立声明分类，未声明时保留视频分类。API JSON 打包在 `src/assets/comfyWorkflows/` 下，界面格式放在同级 `ui/` 里。
 
 | AuK 工作流 | 默认输入 | 输出 |
 |---|---|---|
@@ -385,6 +385,18 @@ Breeze 依赖 ComfyUI-Breeze-TTS-2，克隆还需 whisper-large-v3-turbo；保�
 
 AI Canvas 提交器和 ComfyUI 自带运行按钮是两个入口。桥接在 ComfyUI 的 queuePrompt 边界只对执行图副本清理空的 H3 参考加载节点：必须所有消费者均为 H3 对应可选参考槽，否则保留。编辑图、另存与重新打开时仍保留全部上传位置。此规则不改文件权限、不使用占位文件、不自动执行或重试。测试覆盖零素材、多素材、空音频错误连接、必填用途保护、保存及重复安装。
 
+
+### H3 12GB 极速图生视频
+
+`builtin-minimax-h3-i2v-fast-12gb` 对应 **MiniMax H3 图生视频（12GB 极速·4B）**，资源为 `minimax-h3-i2v-fast-12gb.json`。它面向 12GB NVIDIA 显卡使用 FL2VA Pruned INT8 ConvRot 主模型，以 Qwen3-VL 4B INT8 和 ClipProj v3.1 代替 32B 编码器，并使用 INT8 视频 VAE、Turbo v4 EMA 及 4 步 simple 调度。ClipProj 使用 `streaming` 模式，编码完成后将约 5 GB 编码器权重退回内存，为扩散采样释放显存；v3.1 线性投影仅约 26 MB，插件报告其画面指标与 v3 重合，并改善非英语语音发音。
+
+模型链在 Turbo 后接原生 `ModelAttentionBackend`，选择 `comfy kitchen attention`；不与 Spectrum、EasyCache 或 Sol-Attn 叠加。极速模板默认 0.2 百万像素、5 秒、24fps、4 步，画布分辨率和时长控件仍会覆盖模板值；快速运动或更高质量可在编辑器中改为 6 步。Turbo `low_vram` 默认关闭以保留量化主模型上的细节，出现显存不足时可在 ComfyUI 编辑器中开启。
+
+AI Canvas 直接启动本地 ComfyUI 时支持按安装目录启用 `--fast-disk`：目录中存在 `.ai-canvas-fast-disk` 标记文件，且该版本的 `comfy/cli_args.py` 声明了对应参数时才注入。它用于主模型与编码器合计接近或超过系统内存时避免 Windows 分页抖动，不对其他 ComfyUI 安装或旧版本强制开启。
+
+实机验证（RTX 4070 Ti 12GB、32GB RAM）：0.2 百万像素、56 帧、24fps、4 步小样生成 2.33 秒视频并带音频，完整执行 198.04 秒，其中采样 148 秒；未启用 `--fast-disk` 时同一任务因系统内存耗尽与分页抖动，数分钟仍未完成第 1 步。
+
+依赖 `ComfyUI-ClipProj`、`ComfyUI-MiniMax-H3-Turbo`、支持 cu130 INT8 ConvRot 的 PyTorch/Comfy Kitchen，以及 `ImageResizeKJv2`、ResolutionSelector、ComfyMathExpression 等既有节点。该工作流是单张首帧图生视频，不提供 Ref2VA 的多图、视频或音频自由参考能力。
 
 ### H3 PDD 自由参考内置工作流
 

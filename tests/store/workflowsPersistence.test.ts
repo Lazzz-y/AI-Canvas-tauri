@@ -11,7 +11,10 @@ const builtInMocks = vi.hoisted(() => ({ withBuiltInEditableContent: vi.fn() }))
 
 vi.mock('../../src/services/fileService', () => fileMocks);
 vi.mock('../../src/services/builtinWorkflows', () => ({
+  isRetiredBuiltInWorkflow: (id: string) => id === 'builtin-minimax-h3-pdd-r2v-lowvram',
   pendingBuiltInWorkflows: () => [],
+  RETIRED_BUILT_IN_WORKFLOW_IDS: ['builtin-minimax-h3-pdd-r2v-lowvram'],
+  resetBuiltInWorkflows: () => [],
   withBuiltInEditableContent: builtInMocks.withBuiltInEditableContent,
 }));
 
@@ -196,6 +199,21 @@ describe('工作流持久化顺序', () => {
     const { slice, getState } = createSlice([workflow]);
     await slice.loadWorkflows();
     expect(getState().workflows).toEqual([]);
+  });
+
+  it('加载时删除已经退役的低显存 H3 工作流', async () => {
+    const retired = {
+      ...workflow,
+      id: 'builtin-minimax-h3-pdd-r2v-lowvram',
+      name: 'MiniMax H3 PDD 自由参考（低显存 Q4·Q2）',
+    };
+    fileMocks.loadWorkflows.mockResolvedValue([workflow, retired]);
+    const { slice, getState } = createSlice();
+
+    await slice.loadWorkflows();
+
+    expect(fileMocks.deleteWorkflow).toHaveBeenCalledWith(retired.id);
+    expect(getState().workflows).toEqual([workflow]);
   });
 
   it('加载失败时保留原列表，不按空列表处理', async () => {

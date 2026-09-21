@@ -9,7 +9,9 @@ import { validateRunningHubManifest } from '../services/runninghubWorkflowServic
 import { validateWorkflowApiManifest } from '../services/workflowApi/autodlWorkflowManifest';
 import { workflowApiOutputKind } from '../services/workflowApi/workflowApiDefinition';
 import {
+  isRetiredBuiltInWorkflow,
   pendingBuiltInWorkflows,
+  RETIRED_BUILT_IN_WORKFLOW_IDS,
   resetBuiltInWorkflows,
   withBuiltInEditableContent,
 } from '../services/builtinWorkflows';
@@ -107,11 +109,17 @@ export const createWorkflowSlice: StateCreator<AppState, [], [], WorkflowSlice> 
   resetBuiltInWorkflows: () => enqueue(async () => {
     const builtIns = resetBuiltInWorkflows();
     for (const workflow of builtIns) await fileService.saveWorkflow(workflow);
+    for (const id of RETIRED_BUILT_IN_WORKFLOW_IDS) {
+      await fileService.deleteWorkflow(id).catch((e) => console.warn('[内置工作流] 清理退役项失败:', e));
+    }
     const builtInIds = new Set(builtIns.map((workflow) => workflow.id));
+    const retiredIds = new Set<string>(RETIRED_BUILT_IN_WORKFLOW_IDS);
     set((state) => ({
       workflows: [
         ...builtIns,
-        ...state.workflows.filter((workflow) => !builtInIds.has(workflow.id)),
+        ...state.workflows.filter((workflow) => (
+          !builtInIds.has(workflow.id) && !retiredIds.has(workflow.id)
+        )),
       ],
     }));
     return builtIns.length;
@@ -135,11 +143,16 @@ export const createWorkflowSlice: StateCreator<AppState, [], [], WorkflowSlice> 
       createdAt: r.createdAt,
       updatedAt: r.updatedAt,
     }));
+    const retired = mapped.filter((workflow) => isRetiredBuiltInWorkflow(workflow.id));
+    for (const workflow of retired) {
+      await fileService.deleteWorkflow(workflow.id).catch((e) => console.warn('[内置工作流] 清理退役项失败:', e));
+    }
+    const active = mapped.filter((workflow) => !isRetiredBuiltInWorkflow(workflow.id));
     // 早先播种的内置工作流缺可编辑图，补上后 ComfyUI 才能正常打开
-    const patched = await Promise.all(mapped.map(async (workflow) => {
+    const patched = await Promise.all(active.map(async (workflow) => {
       const upgraded = withBuiltInEditableContent(workflow);
       if (upgraded) {
-        await fileService.saveWorkflow(upgraded).catch((e) => console.warn('[内置工作流] 补可编辑图失败:', e));
+        await fileService.saveWorkflow(upgraded).catch((e) => console.warn('[内置工作流] 升级失败:', e));
       }
       return upgraded ?? workflow;
     }));

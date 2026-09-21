@@ -8,6 +8,7 @@ import type {
   NodeType,
   ProjectModelKind,
   ProjectSettings,
+  WorkflowDefinition,
 } from '../types';
 
 export interface ProjectStyleOption {
@@ -61,11 +62,24 @@ export function getProjectModelKind(nodeType: string | undefined): ProjectModelK
 export function parseProjectModelRef(modelRef: string | undefined): {
   model: string;
   provider: string;
+  workflowId?: string;
 } | null {
   if (!modelRef) return null;
   const slashIndex = modelRef.indexOf('/');
   if (slashIndex <= 0) return null;
+  if (modelRef.startsWith('comfyui/')) {
+    const workflowId = modelRef.slice('comfyui/'.length);
+    return workflowId ? { model: 'comfyui/workflow', provider: 'comfyui', workflowId } : null;
+  }
   return { model: modelRef, provider: modelRef.slice(0, slashIndex) };
+}
+
+/** 默认工作流配置不依赖服务器即时在线状态；文本生成尚不支持 ComfyUI。 */
+export function getProjectComfyWorkflowOptions(kind: ProjectModelKind, workflows: WorkflowDefinition[]) {
+  if (kind === 'text') return [];
+  return workflows.filter((workflow) => workflow.category === `ai-${kind}`
+    && (!workflow.adapterType || workflow.adapterType === 'comfyui'))
+    .map((workflow) => ({ value: `comfyui/${workflow.id}`, label: workflow.name }));
 }
 
 /** 项目默认优先、应用默认兜底的助手文本模型候选。 */
@@ -218,6 +232,10 @@ export function applyProjectDefaultsToNodeData(
   if (projectModel && !hasPromptedModel) {
     next.model = projectModel.model;
     next.provider = projectModel.provider;
+    next.workflowId = projectModel.workflowId;
+    // 不把旧工作流的输入绑定带到项目默认模型。
+    if (data.workflowId !== projectModel.workflowId) next.workflowInputs = undefined;
+    if (projectModel.workflowId) next.batchCount = 1;
   }
 
   const projectStyle = settings.visualStyle;
@@ -240,7 +258,7 @@ export function applyProjectDefaultsToNodeData(
     }
   }
   if (data.type === 'ai-video') {
-    const directGeneralProtocol = next.provider === 'general' && !data.workflowId;
+    const directGeneralProtocol = next.provider === 'general' && !next.workflowId;
     if (!directGeneralProtocol && settings.generation?.videoAspectRatio && (!hasPrompt || !data.seedanceRatio)) {
       next.seedanceRatio = settings.generation.videoAspectRatio;
     }

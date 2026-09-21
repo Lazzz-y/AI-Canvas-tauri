@@ -29,6 +29,13 @@ function readWorkflowUiFile(fileName: string): string | undefined {
 }
 
 const SEEDED_IDS_KEY = 'aicanvas.builtinWorkflows.seededIds';
+export const RETIRED_BUILT_IN_WORKFLOW_IDS = [
+  'builtin-minimax-h3-pdd-r2v-lowvram',
+] as const;
+
+export function isRetiredBuiltInWorkflow(id: string): boolean {
+  return RETIRED_BUILT_IN_WORKFLOW_IDS.some((retiredId) => retiredId === id);
+}
 
 interface BuiltInWorkflowSpec {
   id: string;
@@ -106,6 +113,12 @@ const BUILT_IN_SPECS: BuiltInWorkflowSpec[] = [
     defaultNodes: { prompt: '132', image: '114' },
   },
   {
+    id: 'builtin-minimax-h3-i2v-fast-12gb',
+    name: 'MiniMax H3 图生视频（12GB 极速·4B）',
+    fileName: 'minimax-h3-i2v-fast-12gb.json',
+    defaultNodes: { prompt: '132', image: '114' },
+  },
+  {
     id: 'builtin-minimax-h3-r2v-turbo',
     name: 'MiniMax H3 参考生视频（Turbo 加速）',
     fileName: 'minimax-h3-r2v-turbo.json',
@@ -163,16 +176,39 @@ function toWorkflowDefinition(spec: BuiltInWorkflowSpec, createdAt: number): Wor
 }
 
 /**
- * 给早先播种、还没有可编辑图的内置工作流补上界面格式的图。
- * 只补空缺，不覆盖任何已有内容；没什么可补时返回 null。
+ * 升级早先播种的内置工作流：补可编辑图，并修正已经失效的内置模型引用。
+ * 只处理可明确识别的旧值，不覆盖用户改成其他有效模型的选择；没变化时返回 null。
  */
 export function withBuiltInEditableContent(
   workflow: WorkflowDefinition,
 ): WorkflowDefinition | null {
-  if (workflow.editableContent) return null;
+  let upgraded = workflow;
+  let changed = false;
+
+  if (workflow.id === 'builtin-minimax-h3-i2v-fast-12gb') {
+    try {
+      const graph = JSON.parse(workflow.fileContent) as Record<string, {
+        inputs?: Record<string, unknown>;
+      }>;
+      const projection = graph['127']?.inputs?.projection;
+      if (projection === 'mmh3-4b-ClipProj-v3-mlp.safetensors') {
+        graph['127'].inputs!.projection = 'mmh3-4b-ClipProj-v3.1.safetensors';
+        upgraded = { ...upgraded, fileContent: JSON.stringify(graph) };
+        changed = true;
+      }
+    } catch {
+      // 用户内容不是有效 JSON 时保持原样，由既有工作流校验负责报告。
+    }
+  }
+
+  if (upgraded.editableContent) return changed ? upgraded : null;
   const spec = BUILT_IN_SPECS.find((item) => item.id === workflow.id);
   const editableContent = spec ? readWorkflowUiFile(spec.fileName) : undefined;
-  return editableContent ? { ...workflow, editableContent } : null;
+  if (editableContent) {
+    upgraded = { ...upgraded, editableContent };
+    changed = true;
+  }
+  return changed ? upgraded : null;
 }
 
 /**
