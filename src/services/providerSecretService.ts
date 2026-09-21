@@ -145,6 +145,20 @@ export async function writeAppSecret(key: string, value: string, expected?: { va
   return writeSecret(`${SECRET_REF_PREFIX}${key}`, value, expected);
 }
 
+/** 永久删除通用凭据条目；删除后只能由用户再次输入并保存来重建。 */
+export async function deleteAppSecret(key: string): Promise<boolean> {
+  const ref = `${SECRET_REF_PREFIX}${key}`;
+  const secretKey = refToKey(ref);
+  if (!secretKey || !isTauriEnv()) return false;
+  try {
+    await invokeSecret<void>('secret_delete', { key: secretKey });
+    return true;
+  } catch (error) {
+    reportStorageError('secret-delete', error);
+    return false;
+  }
+}
+
 /** 清理计划只持有原生 SHA-256 指纹，不另建明文缓存；由配置队列调用。 */
 export async function readProviderSecretFingerprint(connectionId: string): Promise<string | null> {
   if (!isTauriEnv()) return null;

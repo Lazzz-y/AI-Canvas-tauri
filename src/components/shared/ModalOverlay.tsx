@@ -22,6 +22,7 @@ export default function ModalOverlay({
   draggable = false,
   motionPreset = 'spring',
   backdropBlur = true,
+  zIndex = 250,
 }: {
   isOpen: boolean;
   onClose: () => void;
@@ -32,6 +33,8 @@ export default function ModalOverlay({
   draggable?: boolean;
   motionPreset?: 'spring' | 'quick';
   backdropBlur?: boolean;
+  /** Overlay stacking order. Higher values keep nested dialogs above their parent modal. */
+  zIndex?: number;
 }) {
   const reduceMotion = useReducedMotion();
   const quickMotion = motionPreset === 'quick';
@@ -154,6 +157,7 @@ export default function ModalOverlay({
         <motion.div
           ref={overlayRef}
           className="fixed inset-0 z-[250] flex items-center justify-center overflow-hidden rounded-2xl"
+          style={{ zIndex }}
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}

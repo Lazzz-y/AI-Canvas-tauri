@@ -751,7 +751,11 @@ export default function AssetsPanel() {
                 </Suspense>
               ) : visibleTab === 'ark' ? (
                 <Suspense fallback={<div className="flex flex-1 items-center justify-center text-xs text-canvas-text-muted">正在加载方舟素材库...</div>}>
-                  <VolcengineAssetLibraryPanel compact={isDrawer} onCountChange={setArkAssetCount} />
+                  <VolcengineAssetLibraryPanel
+                    compact={isDrawer}
+                    onCountChange={setArkAssetCount}
+                    onOpenProviderSettings={() => useAppStore.getState().openApiKeySettings('volcengine')}
+                  />
                 </Suspense>
               ) : (
                 <>

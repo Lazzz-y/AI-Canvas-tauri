@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react';
 import { Icon } from '@iconify/react';
-import { readAppSecret, writeAppSecret } from '../../services/providerSecretService';
+import { deleteAppSecret, readAppSecret, writeAppSecret } from '../../services/providerSecretService';
 import type { ApiProviderConfig } from '../../types';
 
 const ACCESS_KEY_REF = 'secret:provider/volcengine/asset-library/access-key';
 const SECRET_KEY_REF = 'secret:provider/volcengine/asset-library/secret-key';
 
-export default function VolcengineAssetLibrarySettings({ config, onChange, onPersist }: { config: ApiProviderConfig; onChange: (next: ApiProviderConfig) => void; onPersist?: (assetLibrary: NonNullable<ApiProviderConfig['assetLibrary']>) => Promise<void> }) {
+export default function VolcengineAssetLibrarySettings({ config, onChange, onPersist, defaultEnabled = false }: { config: ApiProviderConfig; onChange: (next: ApiProviderConfig) => void; onPersist?: (assetLibrary: NonNullable<ApiProviderConfig['assetLibrary']>) => Promise<void>; defaultEnabled?: boolean }) {
   const provider = config;
   const library = provider?.assetLibrary;
   const [accessKeyId, setAccessKeyId] = useState('');
@@ -20,7 +20,7 @@ export default function VolcengineAssetLibrarySettings({ config, onChange, onPer
     return () => { cancelled = true; };
   }, [provider?.assetLibrary?.accessKeyIdRef, provider?.assetLibrary?.secretAccessKeyRef]);
 
-  const patchLibrary = (patch: Record<string, unknown>) => onChange({ ...provider, assetLibrary: { ...library, enabled: library?.enabled ?? false, projectName: library?.projectName || 'default', ...patch } });
+  const patchLibrary = (patch: Record<string, unknown>) => onChange({ ...provider, assetLibrary: { ...library, enabled: library?.enabled ?? defaultEnabled, projectName: library?.projectName || 'default', ...patch } });
 
   const save = async () => {
     setMessage('');
@@ -29,13 +29,33 @@ export default function VolcengineAssetLibrarySettings({ config, onChange, onPer
     const nextLibrary = {
       accessKeyIdRef: ACCESS_KEY_REF,
       secretAccessKeyRef: SECRET_KEY_REF,
-      enabled: true,
+      enabled: library?.enabled ?? defaultEnabled,
       projectName: library?.projectName || 'default',
       region: library?.region || 'cn-beijing',
     };
     patchLibrary(nextLibrary);
     if (onPersist) await onPersist(nextLibrary);
     setMessage(accessStored && secretStored ? '虚拟人像库配置已保存' : '当前环境无法持久化 AK/SK，仅本次会话有效');
+  };
+
+  const disconnect = async () => {
+    setMessage('');
+    await Promise.all([
+      deleteAppSecret(ACCESS_KEY_REF.slice('secret:'.length)),
+      deleteAppSecret(SECRET_KEY_REF.slice('secret:'.length)),
+    ]);
+    setAccessKeyId('');
+    setSecretAccessKey('');
+    const nextLibrary = {
+      enabled: false,
+      accessKeyIdRef: undefined,
+      secretAccessKeyRef: undefined,
+      projectName: 'default',
+      region: library?.region || 'cn-beijing',
+    };
+    patchLibrary(nextLibrary);
+    if (onPersist) await onPersist(nextLibrary);
+    setMessage('虚拟人像库已断开，AK/SK 已清空');
   };
 
   return (
@@ -47,18 +67,19 @@ export default function VolcengineAssetLibrarySettings({ config, onChange, onPer
           <p className="mt-1 text-xs text-canvas-text-secondary">用于素材资产组合与个人素材管理，不复用上方模型 API Key。</p>
         </div>
         <label className="flex items-center gap-1 text-xs text-canvas-text-secondary">
-          <input type="checkbox" checked={library?.enabled ?? false} onChange={(event) => patchLibrary({ enabled: event.target.checked })} />
+          <input type="checkbox" checked={library?.enabled ?? defaultEnabled} onChange={(event) => patchLibrary({ enabled: event.target.checked })} />
           启用
         </label>
       </div>
       <div className="mt-3 grid gap-2 sm:grid-cols-2">
-        <label className="text-xs text-canvas-text-secondary">Access Key（AK）<input className="ui-input mt-1 w-full" value={accessKeyId} onChange={(event) => setAccessKeyId(event.target.value)} placeholder="火山引擎访问密钥 AK" autoComplete="off" /></label>
+        <label className="text-xs text-canvas-text-secondary">Access Key（AK）<input className="ui-input mt-1 w-full" type="password" value={accessKeyId} onChange={(event) => setAccessKeyId(event.target.value)} placeholder="火山引擎访问密钥 AK" autoComplete="new-password" /></label>
         <label className="text-xs text-canvas-text-secondary">Secret Key（SK）<input className="ui-input mt-1 w-full" type="password" value={secretAccessKey} onChange={(event) => setSecretAccessKey(event.target.value)} placeholder="火山引擎访问密钥 SK" autoComplete="new-password" /></label>
         <label className="text-xs text-canvas-text-secondary">项目名称<input className="ui-input mt-1 w-full" value={library?.projectName ?? 'default'} onChange={(event) => patchLibrary({ projectName: event.target.value })} placeholder="default" /></label>
         <label className="text-xs text-canvas-text-secondary">区域<input className="ui-input mt-1 w-full" value={library?.region ?? 'cn-beijing'} onChange={(event) => patchLibrary({ region: event.target.value })} placeholder="cn-beijing" /></label>
       </div>
       <div className="mt-3 flex items-center gap-2">
         <button type="button" className="ui-btn ui-btn--sm ui-btn--primary" disabled={!accessKeyId.trim() || !secretAccessKey.trim()} onClick={() => void save()}>保存虚拟人像库配置</button>
+        <button type="button" className="ui-btn ui-btn--sm ui-btn--ghost" disabled={!accessKeyId && !secretAccessKey && !library?.enabled} onClick={() => void disconnect()}>断开虚拟人像库</button>
         {message && <span className="text-xs text-canvas-text-muted">{message}</span>}
       </div>
     </section>

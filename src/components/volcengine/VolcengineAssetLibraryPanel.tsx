@@ -18,7 +18,7 @@ type Dialog =
 
 const PAGE_SIZE = 20;
 
-export default function VolcengineAssetLibraryPanel({ compact = false, onCountChange }: { compact?: boolean; onCountChange?: (count: number) => void }) {
+export default function VolcengineAssetLibraryPanel({ compact = false, onCountChange, onOpenProviderSettings }: { compact?: boolean; onCountChange?: (count: number) => void; onOpenProviderSettings?: () => void }) {
   const provider = useAppStore((state) => state.config.providers.volcengine || Object.values(state.config.providers).find((item) => item.catalogId === 'volcengine'));
   const [groups, setGroups] = useState<VolcengineAssetGroup[]>([]);
   const [assets, setAssets] = useState<VolcengineAsset[]>([]);
@@ -28,6 +28,7 @@ export default function VolcengineAssetLibraryPanel({ compact = false, onCountCh
   const [message, setMessage] = useState('');
   const [accessKeyId, setAccessKeyId] = useState('');
   const [secretAccessKey, setSecretAccessKey] = useState('');
+  const [loadedSecretFingerprint, setLoadedSecretFingerprint] = useState('');
   const [dialog, setDialog] = useState<Dialog>(null);
   const [formName, setFormName] = useState('');
   const [formDescription, setFormDescription] = useState('');
@@ -38,7 +39,14 @@ export default function VolcengineAssetLibraryPanel({ compact = false, onCountCh
   const [assetPage, setAssetPage] = useState(1);
   const [groupTotal, setGroupTotal] = useState(0);
   const [assetTotal, setAssetTotal] = useState(0);
-  const enabled = Boolean(provider?.assetLibrary?.enabled || (provider?.assetLibrary?.accessKeyIdRef && provider?.assetLibrary?.secretAccessKeyRef)); const projectName = provider?.assetLibrary?.projectName || 'default'; const region = provider?.assetLibrary?.region || 'cn-beijing';
+  const enabled = Boolean(provider?.assetLibrary?.enabled);
+  const configured = Boolean(accessKeyId && secretAccessKey);
+  const resolveSecretRef = (value: string | undefined, fallback: string) => (value?.startsWith('secret:') ? value.slice(7) : value || fallback);
+  const accessKeySecretRef = resolveSecretRef(provider?.assetLibrary?.accessKeyIdRef, 'provider/volcengine/asset-library/access-key');
+  const secretAccessKeySecretRef = resolveSecretRef(provider?.assetLibrary?.secretAccessKeyRef, 'provider/volcengine/asset-library/secret-key');
+  const secretFingerprint = `${accessKeySecretRef}\u0000${secretAccessKeySecretRef}`;
+  const secretsLoaded = loadedSecretFingerprint === secretFingerprint;
+  const projectName = provider?.assetLibrary?.projectName || 'default'; const region = provider?.assetLibrary?.region || 'cn-beijing';
   const options = useMemo(() => ({ accessKeyId, secretAccessKey, projectName, region, baseUrl: provider?.assetLibrary?.apiBaseUrl }), [accessKeyId, secretAccessKey, projectName, region, provider?.assetLibrary?.apiBaseUrl]);
   const load = useCallback(async () => {
     if (!accessKeyId || !secretAccessKey) { setMessage('请先在火山方舟连接中配置 AK/SK'); return; }
@@ -54,8 +62,8 @@ export default function VolcengineAssetLibraryPanel({ compact = false, onCountCh
     } catch (error) { setMessage(error instanceof Error ? error.message : '同步失败'); }
     finally { setBusy(false); }
   }, [accessKeyId, secretAccessKey, options, selectedGroup, query, groupPage, assetPage]);
-  useEffect(() => { let cancelled = false; const ref = (value: string | undefined, fallback: string) => (value?.startsWith('secret:') ? value.slice(7) : value || fallback); void Promise.all([readAppSecret(ref(provider?.assetLibrary?.accessKeyIdRef, 'provider/volcengine/asset-library/access-key')), readAppSecret(ref(provider?.assetLibrary?.secretAccessKeyRef, 'provider/volcengine/asset-library/secret-key'))]).then(([ak, sk]) => { if (!cancelled) { setAccessKeyId(ak || ''); setSecretAccessKey(sk || ''); } }); return () => { cancelled = true; }; }, [provider?.assetLibrary?.accessKeyIdRef, provider?.assetLibrary?.secretAccessKeyRef]);
-  useEffect(() => { if (!enabled) return; const timer = window.setTimeout(() => { void load(); }, 0); return () => window.clearTimeout(timer); }, [enabled, load]);
+  useEffect(() => { let cancelled = false; void Promise.all([readAppSecret(accessKeySecretRef), readAppSecret(secretAccessKeySecretRef)]).then(([ak, sk]) => { if (!cancelled) { setAccessKeyId(ak || ''); setSecretAccessKey(sk || ''); setLoadedSecretFingerprint(secretFingerprint); } }); return () => { cancelled = true; }; }, [accessKeySecretRef, secretAccessKeySecretRef, secretFingerprint]);
+  useEffect(() => { if (!enabled || !secretsLoaded || !configured) return; const timer = window.setTimeout(() => { void load(); }, 0); return () => window.clearTimeout(timer); }, [enabled, secretsLoaded, configured, load]);
   const openDialog = (next: Dialog) => {
     setDialog(next); setDeleteConfirmation('');
     if (next?.kind === 'create-group') { setFormName(''); setFormDescription(''); }
@@ -78,6 +86,9 @@ export default function VolcengineAssetLibraryPanel({ compact = false, onCountCh
   const selectedGroupItem = groups.find((item) => item.id === selectedGroup);
   const groupPages = Math.max(1, Math.ceil(groupTotal / PAGE_SIZE));
   const assetPages = Math.max(1, Math.ceil(assetTotal / PAGE_SIZE));
+  const showConfigPrompt = !enabled || (secretsLoaded && !configured);
+  const showSecretsLoading = !showConfigPrompt && !secretsLoaded;
+  const showLibrary = !showConfigPrompt && secretsLoaded;
   useEffect(() => { onCountChange?.(assetTotal); }, [assetTotal, onCountChange]);
   const groupedAssets = useMemo(() => {
     const groupsById = new Map(groups.map((group) => [group.id, group]));
@@ -93,7 +104,14 @@ export default function VolcengineAssetLibraryPanel({ compact = false, onCountCh
   const pageControls = (page: number, pages: number, setPage: (value: number) => void, label: string) => <div className="mt-2 flex items-center justify-between text-xs text-canvas-text-muted"><span>{label} · 第 {page} / {pages} 页</span><span className="flex gap-1"><button type="button" className="ui-btn ui-btn--sm ui-btn--ghost" disabled={page <= 1 || busy} onClick={() => setPage(page - 1)}>上一页</button><button type="button" className="ui-btn ui-btn--sm ui-btn--ghost" disabled={page >= pages || busy} onClick={() => setPage(page + 1)}>下一页</button></span></div>;
   return <section className={compact ? 'p-2' : 'ui-card mt-3 p-3'} aria-label="火山方舟虚拟人像库">
     <div className="flex items-center gap-2"><Icon icon="mdi:account-box-multiple-outline" width="18" /><strong>火山方舟虚拟人像库</strong></div>
-    {!enabled ? <p className="mt-2 text-xs text-canvas-text-muted">请先在火山方舟编辑连接中启用并保存配置。</p> : <>
+    {showConfigPrompt && (
+      <div className="mt-3 rounded-lg border border-canvas-border bg-canvas-surface p-4"><div className="flex items-start gap-3"><Icon icon="mdi:cloud-alert-outline" width="22" className="mt-0.5 shrink-0 text-canvas-text-secondary" /><div className="min-w-0"><h3 className="text-sm font-medium text-canvas-text">还没有配置火山方舟虚拟人像库</h3><p className="mt-1 text-xs leading-5 text-canvas-text-muted">请在火山方舟编辑连接中填写 AK/SK，并启用虚拟人像库。配置完成后即可在这里查看和管理素材。</p><button type="button" className="ui-btn ui-btn--sm ui-btn--primary mt-3" onClick={() => provider ? onOpenProviderSettings?.() : useAppStore.getState().openApiKeySettings()}><Icon icon="mdi:cog-outline" width="15" />前往火山方舟配置<Icon icon="mdi:arrow-right" width="15" /></button></div></div></div>
+    )}
+    {showSecretsLoading && (
+      <p className="mt-3 text-xs text-canvas-text-muted">正在读取火山方舟素材库配置...</p>
+    )}
+    {showLibrary && (
+      <div>
       <div className="mt-2 flex flex-wrap gap-2"><select className="ui-input min-w-0 flex-1" value={selectedGroup} onChange={(event) => { setSelectedGroup(event.target.value); setAssetPage(1); }}><option value="">全部素材组</option>{groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}</select><button type="button" className="ui-btn ui-btn--sm ui-btn--ghost" onClick={() => openDialog({ kind: 'create-group' })}>新建组</button><button type="button" className="ui-btn ui-btn--sm ui-btn--ghost" disabled={!selectedGroupItem} onClick={() => selectedGroupItem && openDialog({ kind: 'edit-group', group: selectedGroupItem })}>改名</button><button type="button" className="ui-btn ui-btn--sm ui-btn--ghost" disabled={!selectedGroup} onClick={() => void inspectGroup()}>详情</button><button type="button" className="ui-btn ui-btn--sm ui-btn--ghost" disabled={!selectedGroupItem} onClick={() => selectedGroupItem && openDialog({ kind: 'delete-group', group: selectedGroupItem })}>删除组</button><button type="button" className="ui-btn ui-btn--sm ui-btn--ghost" disabled={busy} onClick={() => void load()}><Icon icon="mdi:refresh" /></button></div>
       {pageControls(groupPage, groupPages, setGroupPage, '素材组')}
       <div className="mt-2 flex gap-2"><input className="ui-input min-w-0 flex-1" placeholder="按名称搜索素材" value={query} onChange={(event) => { setQuery(event.target.value); setAssetPage(1); }} /><button type="button" className="ui-btn ui-btn--sm ui-btn--primary" onClick={() => openDialog({ kind: 'create-asset' })}>上传素材</button></div>
@@ -108,7 +126,8 @@ export default function VolcengineAssetLibraryPanel({ compact = false, onCountCh
         </article>;
       })}</div></section>)}{!assets.length && <p className="text-xs text-canvas-text-muted">暂无素材</p>}</div>
       {pageControls(assetPage, assetPages, setAssetPage, '素材')}
-    </>}
+      </div>
+    )}
     {message && <p className="mt-2 text-xs text-canvas-text-muted">{message}</p>}
     <ModalOverlay isOpen={Boolean(dialog)} onClose={() => setDialog(null)} ariaLabel="虚拟人像库操作" className="w-[min(92vw,30rem)]" closeOnBackdrop={false}>
       {dialog && <div className="flex flex-col"><div className="flex items-center justify-between border-b border-canvas-border px-5 py-4"><div><h2 className="ui-title">{dialog.kind === 'create-group' ? '新建素材组' : dialog.kind === 'edit-group' ? '编辑素材组' : dialog.kind === 'create-asset' ? '上传素材' : dialog.kind === 'edit-asset' ? '编辑素材' : dialog.kind === 'delete-group' ? '删除素材组' : '删除素材'}</h2><p className="mt-1 text-xs text-canvas-text-muted">{dialog.kind === 'delete-group' ? '删除后组内素材也会一并删除，且无法恢复。' : '请填写完整信息后提交。'}</p></div><button type="button" className="ui-icon-btn ui-icon-btn--sm" onClick={() => setDialog(null)} aria-label="关闭"><Icon icon="mdi:close" /></button></div><div className="ui-stack p-5">
