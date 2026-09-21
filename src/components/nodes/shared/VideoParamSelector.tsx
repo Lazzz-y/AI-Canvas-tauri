@@ -67,7 +67,9 @@ const SEEDANCE_RATIOS = [
   { value: 'adaptive', label: '自适应' },
 ];
 
-const FRAME_ROLE_OPTIONS: Array<{ value: VideoReferenceItem['role']; label: string }> = [
+type ImageReferenceRole = 'first_frame' | 'last_frame' | 'reference';
+
+const FRAME_ROLE_OPTIONS: Array<{ value: ImageReferenceRole; label: string }> = [
   { value: 'first_frame', label: '首帧' },
   { value: 'reference', label: '中间帧' },
   { value: 'last_frame', label: '尾帧' },
@@ -175,7 +177,7 @@ export default function VideoParamSelector({
 }: VideoParamSelectorProps) {
   const [open, setOpen] = useState(false);
   // 正在展开的来源选择器：frame = 加参考帧，character = 加参考角色
-  const [pickerFor, setPickerFor] = useState<VideoReferenceItem['kind'] | null>(null);
+  const [pickerFor, setPickerFor] = useState<'frame' | 'character' | null>(null);
   const ref = useRef<HTMLDivElement>(null);
   const generalModels = useAppStore((state) => state.config.generalModels);
   const projectCharacters = useAppStore((state) => state.dramaAssets.characters);
@@ -201,37 +203,57 @@ export default function VideoParamSelector({
     )];
     return merged.flatMap((character: DramaCharacter) => {
       const resolved = resolveDramaAssetImageRef(character, canvasNodes);
-      return resolved ? [{ id: `character:${character.id}`, label: character.name, url: resolved.imageUrl }] : [];
+      return resolved ? [{ id: `character:${character.id}`, label: character.name, url: resolved.imageUrl, volcengineBinding: character.volcengineBinding }] : [];
     });
   }, [canvasNodes, globalCharacters, projectCharacters]);
 
-  const addReference = (kind: VideoReferenceItem['kind'], option: { id: string; label: string; url: string }) => {
+  const addReference = (kind: 'frame' | 'character', option: { id: string; label: string; url: string; volcengineBinding?: DramaCharacter['volcengineBinding'] }) => {
     setPickerFor(null);
     if (references.some((item) => item.id === option.id && item.kind === kind)) return;
     // 参考帧默认补上还空着的那一端，参考角色一律当普通参考图提交
     const role: VideoReferenceItem['role'] = kind === 'character'
       ? 'reference'
       : frameReferences.some((item) => item.role === 'first_frame') ? 'last_frame' : 'first_frame';
-    onChangeVideoReferences?.([...references, {
-      id: option.id,
-      kind,
-      role,
-      url: option.url,
-      label: option.label,
-      sourceNodeId: option.id.startsWith('character:') ? undefined : option.id,
-    }]);
+    const binding = provider === 'volcengine' ? option.volcengineBinding : undefined;
+    // 角色与方舟视觉资产是一对一绑定；旧版多资产数据只取第一项兼容读取。
+    const asset = binding?.imageAssetId
+      ? { assetId: binding.imageAssetId, name: binding.imageAssetName, status: binding.imageAssetStatus }
+      : binding?.imageAssets?.[0];
+    const visualAssets = asset ? [asset] : [];
+    const imageReferences = visualAssets.length > 0
+      ? visualAssets.map((asset, index) => ({
+        id: `${option.id}:volcengine:${asset.assetId}`,
+        kind,
+        role: index === 0 ? role : 'reference' as const,
+        url: `asset://${asset.assetId}`,
+        previewUrl: option.url,
+        label: asset.name || `${option.label}视觉参考${index + 1}`,
+        sourceNodeId: undefined,
+        provider: 'volcengine' as const,
+        assetId: asset.assetId,
+        projectName: binding?.projectName || 'default',
+      }))
+      : [{ id: option.id, kind, role, url: option.url, label: option.label, sourceNodeId: option.id.startsWith('character:') ? undefined : option.id }];
+    onChangeVideoReferences?.([...references, ...imageReferences]);
   };
 
-  const setFrameRole = (itemId: string, role: VideoReferenceItem['role']) => {
+  const setFrameRole = (itemId: string, role: ImageReferenceRole) => {
     onChangeVideoReferences?.(references.map((item) => {
       if (item.id === itemId) return { ...item, role };
       // 首帧、尾帧各自唯一
-      if (item.kind === 'frame' && role !== 'reference' && item.role === role) {
+      if ((item.mediaKind ?? 'image') === 'image' && role !== 'reference' && item.role === role) {
         return { ...item, role: 'reference' as const };
       }
       return item;
     }));
   };
+
+  const getReferencePreviewUrl = (item: VideoReferenceItem) => {
+    if (item.previewUrl || !item.url.startsWith('asset://')) return item.previewUrl || item.url;
+    const characterOptionId = item.id.split(':volcengine:')[0];
+    return characterOptions.find((option) => option.id === characterOptionId)?.url || item.url;
+  };
+
 
   // 关弹窗时一并收起来源选择器，下次打开从干净状态开始
   const closePopup = () => {
@@ -506,7 +528,7 @@ export default function VideoParamSelector({
       ? `${genericRatio} · ${legacyVideoResolution} · 时长${displayedDuration}s`
       : `时长${displayedDuration}s · 帧率${legacyVideoFps} · 分辨率${legacyVideoResolution}`;
 
-  return (
+  return (<>
     <div className="ui-schema-renderer" data-ui-schema-placement="videoParams" ref={ref}>
       <div className="ui-schema-quality-ratio-pill">
         <AnimatedButton
@@ -539,7 +561,7 @@ export default function VideoParamSelector({
                   <div className="rh-video-frame-list">
                     {frameReferences.map((item) => (
                       <div key={item.id} className="rh-video-frame-row">
-                        <img className="rh-video-frame-thumb" src={item.url} alt={item.label || '参考帧'} title={item.label} loading="lazy" />
+                        <img className="rh-video-frame-thumb" src={getReferencePreviewUrl(item)} alt={item.label || '参考帧'} title={item.label} loading="lazy" />
                         <div className="img-rp-quality-segmented rh-video-frame-seg">
                           {FRAME_ROLE_OPTIONS.map((option) => (
                             <AnimatedButton
@@ -571,7 +593,7 @@ export default function VideoParamSelector({
                   <div className="rh-video-frame-list">
                     {characterReferences.map((item) => (
                       <div key={item.id} className="rh-video-frame-row">
-                        <img className="rh-video-frame-thumb" src={item.url} alt={item.label || '参考角色'} title={item.label} loading="lazy" />
+                        <img className="rh-video-frame-thumb" src={getReferencePreviewUrl(item)} alt={item.label || '参考角色'} title={item.label} loading="lazy" />
                         <span className="rh-video-ref-name">{item.label || '参考角色'}</span>
                         <button type="button" className="rh-video-ref-remove" aria-label={`移除 ${item.label || '参考角色'}`} onClick={() => removeReference(item.id)}>✕</button>
                       </div>
@@ -992,5 +1014,5 @@ export default function VideoParamSelector({
         )}
       </div>
     </div>
-  );
+  </>);
 }
