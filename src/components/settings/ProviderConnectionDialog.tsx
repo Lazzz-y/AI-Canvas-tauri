@@ -600,6 +600,7 @@ export default function ProviderConnectionDialog({
       ariaLabel={editing ? t('编辑 API 厂商') : t('添加 API 厂商')}
       className="provider-dialog"
       closeOnBackdrop={false}
+      zIndex={260}
     >
       <header className="provider-dialog-header">
         <div>
@@ -681,6 +682,7 @@ export default function ProviderConnectionDialog({
                 onChange={(next) => {
                   setAssetLibraryConfig(next.assetLibrary);
                 }}
+                defaultEnabled={!editing || !assetLibraryConfig}
                 onPersist={connectionId ? async (nextLibrary) => {
                   const current = useAppStore.getState().config.providers[connectionId];
                   if (!current) return;

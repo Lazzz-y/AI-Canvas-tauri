@@ -1557,7 +1557,7 @@ function CharacterAssetEditorDialog({
             <div className="flex items-center gap-2">
               <span className="min-w-0 flex-1 truncate text-xs text-canvas-text-secondary">{draft.volcengineBinding?.imageAssetId ? `已绑定：${draft.volcengineBinding.imageAssetName || draft.volcengineBinding.imageAssetId}` : '未绑定'}</span>
               <button type="button" className="character-button-secondary" onClick={() => setVolcenginePickerMode('image')}>选择视觉资产</button>
-              {draft.volcengineBinding?.imageAssetId && <button type="button" className="character-button-secondary" onClick={() => patchDraft({ volcengineBinding: { ...draft.volcengineBinding, imageAssetId: undefined, imageAssetName: undefined, imageAssetStatus: undefined } })}>清除</button>}
+              {draft.volcengineBinding?.imageAssetId && <button type="button" className="character-button-secondary" onClick={() => patchDraft({ volcengineBinding: { projectName: draft.volcengineBinding?.projectName ?? 'default', imageAssetId: undefined, imageAssetName: undefined, imageAssetStatus: undefined, imageAssets: undefined } })}>清除</button>}
             </div>
           </div>
         </section>

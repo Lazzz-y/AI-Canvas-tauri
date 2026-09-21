@@ -5,6 +5,7 @@ import { Icon } from '@iconify/react';
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { useAppStore } from '../../store/useAppStore';
+import { NEW_API_KEY_CONNECTION_ID } from '../../store/store.ui';
 import {
   createConnectionId,
   getProviderDefinition,
@@ -28,7 +29,7 @@ import AnimatedButton from '../shared/AnimatedButton';
 import ProviderBadge from '../shared/ProviderBadge';
 import { defaultModelGroups } from '../nodes/shared/defaultModels';
 import { shouldListProviderConnection } from './apiKeySettingsUtils';
-import { isSecretStoreAvailable } from '../../services/providerSecretService';
+import { deleteAppSecret, isSecretStoreAvailable } from '../../services/providerSecretService';
 import { testProviderConnection } from '../../services/testConnection';
 import { replaceLegacyApimartOmni } from '../../services/ai/apimartVideoModels';
 import DreaminaLoginModal from './DreaminaLoginModal';
@@ -189,11 +190,15 @@ export default function ApiKeySettings({ onClose }: { onClose: () => void }) {
 
   // Agent 保存厂商配置后请求补填密钥：在渲染期直接生效，不用 effect 回写本地 state。
   // 任何一次手动开关对话框都视为消费掉该请求（关闭设置面板时 store 也会清空它）。
-  const requestedConnectionId = pendingApiKeyConnectionId && config.providers[pendingApiKeyConnectionId]
-    ? pendingApiKeyConnectionId
-    : null;
+  const requestedConnectionId = pendingApiKeyConnectionId === NEW_API_KEY_CONNECTION_ID
+    ? NEW_API_KEY_CONNECTION_ID
+    : pendingApiKeyConnectionId && config.providers[pendingApiKeyConnectionId]
+      ? pendingApiKeyConnectionId
+      : null;
   const connectionDialogOpen = dialog.open || !!requestedConnectionId;
-  const editingConnectionId = requestedConnectionId ?? dialog.connectionId;
+  const editingConnectionId = requestedConnectionId === NEW_API_KEY_CONNECTION_ID
+    ? undefined
+    : requestedConnectionId ?? dialog.connectionId;
   const connectionDialogKey = requestedConnectionId
     ? `pending-${requestedConnectionId}`
     : dialog.revision;
@@ -485,6 +490,7 @@ export default function ApiKeySettings({ onClose }: { onClose: () => void }) {
       const providerConfig = useAppStore.getState().config.providers[connectionId];
       const definition = getProviderDefinition(connectionId, providerConfig);
       if (connectionId === 'dreamina') await handleDreaminaLogout();
+      const shouldClearVolcengineAssetLibrary = definition?.id === 'volcengine';
       const connectionIds = definition?.kind === 'web-search'
         ? getWebSearchProviderDefinitions().map((provider) => provider.id)
         : [connectionId];
@@ -502,6 +508,12 @@ export default function ApiKeySettings({ onClose }: { onClose: () => void }) {
       }
       if (definition?.kind === 'web-search') updateConfig({ webSearchProviderId: undefined });
       await saveConfig({ silent: true, throwOnError: true });
+      if (shouldClearVolcengineAssetLibrary) {
+        await Promise.all([
+          deleteAppSecret('provider/volcengine/asset-library/access-key'),
+          deleteAppSecret('provider/volcengine/asset-library/secret-key'),
+        ]);
+      }
       setPendingDeleteId(undefined);
       useAppStore.getState().showToast(
         cleanupFailed ? t('连接已删除，但部分项目的模型引用清理失败，请检查相关项目') : t('连接已删除'),
