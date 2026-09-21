@@ -1,4 +1,4 @@
-import { useId, useMemo, useState } from 'react';
+import { useId, useMemo, useRef, useState } from 'react';
 import { Icon } from '@iconify/react';
 import { useShallow } from 'zustand/react/shallow';
 import type { EpisodeCreativeInfo } from '../types';
@@ -18,6 +18,8 @@ import PopupCloseButton from './shared/PopupCloseButton';
 import Select from './shared/Select';
 import { createEpisodeShotlist } from '../services/shotlistService';
 import SeriesSourceBrowser from './SeriesSourceBrowser';
+import type { DramaAssetKind } from '../types/dramaAssets';
+import { extractSeriesAssetsFromFullScript } from '../services/seriesAssetExtractionService';
 
 type EditorTab = 'outline' | 'script' | 'creative';
 type PendingAction = { type: 'close' } | { type: 'switch'; episodeId: string };
@@ -85,6 +87,16 @@ const CREATIVE_ACTION_GROUPS: Array<{
       { id: 'add-performance-cues', label: '补表演标注' },
     ],
   },
+];
+
+const SERIES_ASSET_EXTRACTION_ACTIONS: Array<{
+  kind: DramaAssetKind;
+  label: string;
+  icon: string;
+}> = [
+  { kind: 'character', label: '提取人物', icon: 'lucide:user-round-search' },
+  { kind: 'scene', label: '提取场景', icon: 'lucide:map-pinned' },
+  { kind: 'prop', label: '提取道具', icon: 'lucide:briefcase-business' },
 ];
 
 function toCreativeDraft(value: EpisodeCreativeInfo | undefined): CreativeDraft {
@@ -264,6 +276,8 @@ export default function ScriptWorkbench({
   const [targetEpisodeCount, setTargetEpisodeCount] = useState('24');
   const [sourceOpen, setSourceOpen] = useState(false);
   const [targetDurationSec, setTargetDurationSec] = useState('90');
+  const [extractingAssetKind, setExtractingAssetKind] = useState<DramaAssetKind | null>(null);
+  const extractingAssetKindRef = useRef<DramaAssetKind | null>(null);
   const splitSourceAvailable = splitSource === 'script'
     ? Boolean(series?.series?.script?.trim())
     : Boolean(series?.series?.originalWork);
@@ -381,6 +395,25 @@ export default function ScriptWorkbench({
       existingEpisodeCount: episodes.length,
     }));
     showToast(t('已准备拆分草案请求，不会直接创建分集'));
+  };
+
+  const extractFullScriptAssets = async (kind: DramaAssetKind, label: string) => {
+    if (!series || !currentProjectId || extractingAssetKindRef.current) return;
+    extractingAssetKindRef.current = kind;
+    setExtractingAssetKind(kind);
+    try {
+      const result = await extractSeriesAssetsFromFullScript({
+        kind,
+        seriesId: series.id,
+        projectId: currentProjectId,
+      });
+      showToast(t('已提取并添加 {count} 项{name}资产', { count: result.count, name: label }));
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : t('全剧资产提取失败'), 'error');
+    } finally {
+      extractingAssetKindRef.current = null;
+      setExtractingAssetKind(null);
+    }
   };
 
   const setCreative = (field: keyof CreativeDraft, value: string) => {
@@ -772,6 +805,49 @@ export default function ScriptWorkbench({
                 </p>
               ) : null}
             </div>
+
+            <section className="mt-4 rounded-xl border border-canvas-border bg-canvas-card p-2.5">
+              <div className="flex items-center gap-1.5">
+                <Icon icon="lucide:scan-text" className="h-3.5 w-3.5 text-indigo-400" />
+                <h3 className="text-[10px] font-semibold text-canvas-text-secondary">{t('全剧资产提取')}</h3>
+                <span className="ml-auto rounded-full bg-indigo-500/10 px-1.5 py-0.5 text-[9px] text-indigo-300">
+                  {t('完整剧本')}
+                </span>
+              </div>
+              <p className="mt-1.5 text-[10px] leading-4 text-canvas-text-muted">
+                {series?.series?.script?.trim()
+                  ? t('使用当前文本模型读取全剧剧本，成功后自动合并到共享资产库。')
+                  : t('请先填写全剧剧本。')}
+              </p>
+              <div className="mt-2 grid grid-cols-3 gap-1.5">
+                {SERIES_ASSET_EXTRACTION_ACTIONS.map((action) => {
+                  const running = extractingAssetKind === action.kind;
+                  const label = t(action.label);
+                  return (
+                    <button
+                      key={action.kind}
+                      type="button"
+                      aria-busy={running}
+                      disabled={!series?.series?.script?.trim()
+                        || extractingAssetKind !== null
+                        || projectLoadStatus !== 'ready'}
+                      onClick={() => { void extractFullScriptAssets(action.kind, label); }}
+                      className="flex min-w-0 flex-col items-center justify-center gap-1 rounded-lg border
+                                 border-canvas-border bg-[var(--white-alpha-04)] px-1.5 py-2 text-[10px]
+                                 text-canvas-text-secondary transition-colors hover:border-indigo-400/40
+                                 hover:bg-indigo-500/10 hover:text-indigo-200 disabled:cursor-not-allowed
+                                 disabled:opacity-40"
+                    >
+                      <Icon
+                        icon={running ? 'lucide:loader-circle' : action.icon}
+                        className={`h-3.5 w-3.5 ${running ? 'animate-spin' : ''}`}
+                      />
+                      <span className="truncate">{running ? t('提取中…') : label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
 
             <div className="mt-4 grid gap-3">
               {CREATIVE_ACTION_GROUPS.map((group) => (

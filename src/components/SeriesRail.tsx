@@ -259,7 +259,7 @@ export default function SeriesRail() {
             <section className="grid gap-2 border-b border-border-subtle p-2">
               <div className="flex items-start gap-2">
                 <div className="grid min-w-0 flex-1 gap-1.5">
-                  <div className="flex items-center gap-1.5 text-[11px] font-semibold text-canvas-text-secondary">
+                  <div className="flex min-h-[var(--ui-control-h-sm)] items-center gap-1.5 text-[11px] font-semibold text-canvas-text-secondary">
                     <Icon icon="lucide:book-open" className="h-3.5 w-3.5 shrink-0" />
                     <span className="truncate">{t('原著')}</span>
                     <button type="button" className="ui-btn ui-btn--sm" disabled={!ready || !originalWork}
@@ -298,7 +298,7 @@ export default function SeriesRail() {
                   </div>
                 </div>
                 <div className="grid min-w-0 flex-1 gap-1.5">
-                  <div className="flex items-center gap-1.5 text-[11px] font-semibold text-canvas-text-secondary">
+                  <div className="flex min-h-[var(--ui-control-h-sm)] items-center gap-1.5 text-[11px] font-semibold text-canvas-text-secondary">
                     <Icon icon="lucide:scroll-text" className="h-3.5 w-3.5 shrink-0" />
                     <span className="truncate">{t('剧本')}</span>
                   </div>
