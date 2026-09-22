@@ -15,6 +15,10 @@ import type {
 } from '../../types';
 import type { VolcengineAssetLibraryConfig } from '../../types/volcengineAssetLibrary';
 import { resolveChatApiProtocol } from '../../services/ai/chatApiProtocol';
+import {
+  applySeedanceTemplateDefaults,
+  inferSeedanceModelVariant,
+} from '../../services/ai/seedanceModelCapabilities';
 import type { VideoModelCapability } from '../../types/aiTypes';
 import {
   capCatalogModels,
@@ -75,13 +79,14 @@ export default function ProviderConnectionDialog({
   const initialSelectedModels = initialConfig?.selectedModels || [];
   const initialCatalogModels = initialConfig?.catalogModels || [];
   const initialLocalModels = initialDefinition ? (fallbackModels[initialDefinition.id] || []) : [];
+  const initialBaseUrl = initialConfig?.baseUrl || initialDefinition?.defaultBaseUrl || '';
   const [definitionId, setDefinitionId] = useState(initialDefinitionId);
   const [connectionName, setConnectionName] = useState(initialConfig?.name || initialDefinition?.name || '');
   const [chatApiProtocol, setChatApiProtocol] = useState<ChatApiProtocol>(
     () => resolveChatApiProtocol(initialConfig?.chatApiProtocol),
   );
   const [apiKey, setApiKey] = useState(initialConfig?.apiKey || '');
-  const [baseUrl, setBaseUrl] = useState(initialConfig?.baseUrl || initialDefinition?.defaultBaseUrl || '');
+  const [baseUrl, setBaseUrl] = useState(initialBaseUrl);
   const [assetLibraryConfig, setAssetLibraryConfig] = useState<VolcengineAssetLibraryConfig | undefined>(initialConfig?.assetLibrary);
   const [workflowApiKey, setWorkflowApiKey] = useState(runninghubWorkflowApiKey);
   const [workflowDrafts, setWorkflowDrafts] = useState<WorkflowApiDraft[]>(() =>
@@ -89,7 +94,8 @@ export default function ProviderConnectionDialog({
       .map((workflow) => ({ id: workflow.id, name: workflow.name, manifest: editableWorkflowApiManifest(workflow.workflowApi!) })));
   const [workflowValid, setWorkflowValid] = useState(false);
   const [models, setModels] = useState<ProviderModelSelection[]>(
-    mergeModels(mergeModels(initialLocalModels, initialCatalogModels), initialSelectedModels),
+    () => mergeModels(mergeModels(initialLocalModels, initialCatalogModels), initialSelectedModels)
+      .map((model) => applySeedanceTemplateDefaults(model, initialBaseUrl)),
   );
   const [selectedIds, setSelectedIds] = useState(() =>
     new Set(initialSelectedModels.map((model) => model.id)),
@@ -256,7 +262,9 @@ export default function ProviderConnectionDialog({
         fallbackModels: fallbackModels[definition.id] || [],
         signal: controller.signal,
       });
-      setModels((current) => mergeModels(current, result.models));
+      const resolvedBaseUrl = result.resolvedBaseUrl || baseUrl;
+      setModels((current) => mergeModels(current, result.models)
+        .map((model) => applySeedanceTemplateDefaults(model, resolvedBaseUrl)));
       setCatalogStatus(result.warning ? 'warning' : 'ready');
       const corrected = adoptResolvedBaseUrl(result.resolvedBaseUrl);
       setCatalogMessage(
@@ -385,13 +393,15 @@ export default function ProviderConnectionDialog({
   const addManualModel = () => {
     const id = manualModelId.trim();
     if (!id || !definition) return;
-    const model: ProviderModelSelection = {
+    const name = manualModelName.trim() || id;
+    const seedanceVariant = inferSeedanceModelVariant(id, name);
+    const model = applySeedanceTemplateDefaults({
       id,
-      name: manualModelName.trim() || id,
-      category: manualCategory,
+      name,
+      category: seedanceVariant ? 'video' : manualCategory,
       provider: connectionId || definition.id,
-      categoryManual: true,
-    };
+      ...(!seedanceVariant ? { categoryManual: true } : {}),
+    }, baseUrl);
     setModels((current) => mergeModels(current, [model]));
     setSelectedIds((current) => new Set(current).add(id));
     setManualModelId('');

@@ -445,6 +445,31 @@ describe('provider config agent tools', () => {
     expect(prepared).toMatchObject({ ok: true });
   });
 
+  it('exposes verified Seedance templates to assistant and MCP callers', () => {
+    const tool = getAgentTool('provider_config_preview')!;
+    const modelSchema = tool.inputSchema.properties?.models.items;
+    const templateSchema = modelSchema?.properties?.templateId;
+
+    expect(templateSchema).toMatchObject({
+      type: 'string',
+      enum: expect.arrayContaining([
+        '2.0-standard:volcengine',
+        '2.0-fast:apimart',
+        '2.5:lec',
+      ]),
+    });
+    expect(tool.description).toContain('Seedance 2.0/2.5');
+    expect(prepareAgentToolCall({
+      callId: 'call-seedance-template-preview',
+      toolId: 'provider_config_preview',
+      input: {
+        connectionName: 'Lec Seedance',
+        baseUrl: 'https://api.paipu.net',
+        models: [{ modelId: 'lec-gt-seedance-2-5-720p', templateId: '2.5:lec' }],
+      },
+    }, context)).toMatchObject({ ok: true });
+  });
+
   it('exposes and executes the declarative protocol input without request examples', async () => {
     const tool = getAgentTool('provider_config_preview')!;
     const modelSchema = tool.inputSchema.properties?.models.items;

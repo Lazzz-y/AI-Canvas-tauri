@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
+  applySeedanceTemplateDefaults,
   createSeedanceQuickAdaptTemplate,
   getOfficialSeedanceCapability,
+  inferSeedanceModelVariant,
+  resolveSeedanceAutoTemplate,
   SEEDANCE_QUICK_ADAPT_OPTIONS,
 } from '../../src/services/ai/seedanceModelCapabilities';
+import type { VideoModelCapability } from '../../src/types/aiTypes';
 
 describe('Seedance capability templates', () => {
   it('declares the official 2.0 resolution tiers and adaptive ratio support', () => {
@@ -79,11 +83,128 @@ describe('Seedance capability templates', () => {
     });
   });
 
-  it('returns independent clones and exposes all eight explicit choices', () => {
+  it('returns independent clones and exposes all explicit transport choices', () => {
     const first = createSeedanceQuickAdaptTemplate('2.5', 'volcengine');
     const second = createSeedanceQuickAdaptTemplate('2.5', 'volcengine');
     first.capability.ratios?.push('test-only');
     expect(second.capability.ratios).not.toContain('test-only');
-    expect(SEEDANCE_QUICK_ADAPT_OPTIONS).toHaveLength(8);
+    expect(SEEDANCE_QUICK_ADAPT_OPTIONS).toHaveLength(12);
+  });
+
+  it.each([
+    ['doubao-seedance-2-0-260128', '2.0-standard'],
+    ['apimart/doubao-seedance-2.0-fast', '2.0-fast'],
+    ['lec-gt-seedance-2-0-mini', '2.0-mini'],
+    ['lec-seed-2-5-900', '2.5'],
+    ['seedance_2.5_character', '2.5'],
+  ] as const)('infers %s as %s', (modelId, expected) => {
+    expect(inferSeedanceModelVariant(modelId)).toBe(expected);
+  });
+
+  it('does not mistake unrelated 2.5 models for Seedance', () => {
+    expect(inferSeedanceModelVariant('agnes-video-2.5')).toBeUndefined();
+    expect(inferSeedanceModelVariant('seedream-5.0-pro')).toBeUndefined();
+  });
+
+  it('matches the Lec protocol and exact per-line capability overrides', () => {
+    const official = resolveSeedanceAutoTemplate({
+      modelId: 'lec-gt-seedance-2-5-720p',
+      baseUrl: 'https://api.paipu.net/v1',
+    });
+    expect(official).toMatchObject({
+      templateId: '2.5:lec',
+      capability: {
+        resolutions: ['480p', '720p', '1080p'],
+        minDuration: 12,
+        maxDuration: 30,
+        defaultDuration: 12,
+      },
+      executionProfile: {
+        preset: 'custom',
+        protocol: {
+          submit: {
+            path: '/v1/videos',
+            pathMode: 'origin',
+            body: {
+              aspect_ratio: '{{seedanceRatio}}',
+              images: '{{imageUrls}}',
+              videos: '{{videoUrls}}',
+              audios: '{{audioUrls}}',
+            },
+          },
+          poll: {
+            path: '/v1/videos/{{submit.id}}',
+            pathMode: 'origin',
+            response: { result: { urlPath: 'url' } },
+          },
+        },
+      },
+    });
+    expect(official?.capability).not.toHaveProperty('automaticDurationValue');
+
+    expect(resolveSeedanceAutoTemplate({
+      modelId: 'lec-seedance-2-5-30s',
+      baseUrl: 'https://api.paipu.net',
+    })?.capability).toMatchObject({
+      resolutions: ['720p'],
+      durations: [30],
+      maxImageReferences: 30,
+      maxVideoReferences: 0,
+      maxAudioReferences: 0,
+    });
+    expect(resolveSeedanceAutoTemplate({
+      modelId: 'lec-ac-seedance-2-5-all-reference',
+      baseUrl: 'https://api.paipu.net',
+    })?.capability).toMatchObject({
+      resolutions: ['720p'],
+      minDuration: 4,
+      maxDuration: 30,
+      maxImageReferences: 30,
+      maxVideoReferences: 0,
+      maxAudioReferences: 10,
+    });
+  });
+
+  it('returns capability-only defaults for an unverified relay', () => {
+    const match = resolveSeedanceAutoTemplate({
+      modelId: 'doubao-seedance-2-5-260628',
+      baseUrl: 'https://ailingg.store/v1',
+    });
+    expect(match?.model).toBe('2.5');
+    expect(match?.executionProfile).toBeUndefined();
+    expect(match?.capability.maxImageReferences).toBe(30);
+  });
+
+  it('only fills missing fields and preserves explicit user configuration', () => {
+    const existingCapability: VideoModelCapability = { operations: ['text-to-video'], durations: [8] };
+    const existingProfile = { preset: 'custom' as const, protocol: {
+      version: 2 as const,
+      mode: 'sync' as const,
+      submit: { method: 'POST' as const, path: '/custom' },
+      response: { type: 'json' as const, result: { urlPath: 'url' } },
+    } };
+    const model = applySeedanceTemplateDefaults({
+      id: 'lec-gt-seedance-2-0-full',
+      name: 'Seedance',
+      category: 'video',
+      provider: 'custom-test',
+      videoCapability: existingCapability,
+      executionProfile: existingProfile,
+    }, 'https://api.paipu.net');
+    expect(model.videoCapability).toBe(existingCapability);
+    expect(model.executionProfile).toBe(existingProfile);
+  });
+
+  it('respects an explicit non-video manual category', () => {
+    const model = applySeedanceTemplateDefaults({
+      id: 'doubao-seedance-2-5-260628',
+      name: 'Not a video model here',
+      category: 'text',
+      categoryManual: true,
+      provider: 'custom-test',
+    }, 'https://ark.cn-beijing.volces.com/api/v3');
+    expect(model.category).toBe('text');
+    expect(model.videoCapability).toBeUndefined();
+    expect(model.executionProfile).toBeUndefined();
   });
 });

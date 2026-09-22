@@ -41,6 +41,10 @@ import {
   resolveChatApiProtocol,
 } from '../ai/chatApiProtocol';
 import { assertVideoModelCapability } from '../ai/videoRequestResolver';
+import {
+  resolveSeedanceAutoTemplate,
+  type SeedanceTemplateId,
+} from '../ai/seedanceModelCapabilities';
 
 const PROVIDER_CONFIG_DRAFT_TTL_MS = 30 * 60 * 1_000;
 const MAX_PROVIDER_CONFIG_DRAFTS = 32;
@@ -93,6 +97,8 @@ const VIDEO_GENERIC_REFERENCE_VARIABLES = ['referenceUrls', 'inlineReferences'] 
 export type ProviderConfigProtocolSource = 'examples' | 'declarative';
 
 export interface ProviderConfigModelExamples extends Partial<ModelProtocolExamples> {
+  /** 直接采用内置 Seedance 模板；未填写时也会按模型 ID 与已知网关自动匹配。 */
+  templateId?: SeedanceTemplateId;
   /** 缺省保持原有示例推断模式；declarative 直接使用本地校验通过的声明式协议。 */
   protocolSource?: ProviderConfigProtocolSource;
   /** protocolSource=declarative 时必填；不得与四个请求/响应示例字段混用。 */
@@ -730,9 +736,44 @@ function createModelSelection(
   declaredBaseUrl?: string,
   chatApiProtocol: ChatApiProtocol = 'openai-compatible',
 ): { selection: ProviderModelSelection; baseUrl: string; updateFields: Array<keyof ProviderModelSelection> } {
-  const result = resolveDraftModelProtocol(examples, declaredBaseUrl);
+  const templateMatch = examples.modelId?.trim()
+    ? resolveSeedanceAutoTemplate({
+        modelId: examples.modelId,
+        name: examples.name,
+        baseUrl: declaredBaseUrl,
+        templateId: examples.templateId,
+        capability: examples.videoCapability,
+      })
+    : undefined;
+  const useTemplateProtocol = Boolean(
+    templateMatch?.executionProfile
+    && !hasOwnExampleField(examples)
+    && !Object.hasOwn(examples, 'executionProtocol')
+    && examples.protocolSource === undefined,
+  );
+  let result: ResolvedDraftModelProtocol;
+  if (useTemplateProtocol) {
+    if (!declaredBaseUrl) throw new Error('使用 Seedance 模板必须显式提供 connection baseUrl');
+    const modelId = examples.modelId?.trim();
+    if (!modelId) throw new Error('使用 Seedance 模板必须显式提供 modelId');
+    const protocol = resolveModelExecutionProfile(templateMatch?.executionProfile);
+    if (!protocol) throw new Error(`模型“${examples.name?.trim() || modelId}”的 Seedance 模板缺少执行协议`);
+    const protocolErrors = validateModelExecutionProtocol(protocol);
+    if (protocolErrors.length > 0) {
+      throw new Error(`模型“${examples.name?.trim() || modelId}”模板协议校验失败：${protocolErrors[0]}`);
+    }
+    result = {
+      baseUrl: declaredBaseUrl,
+      modelId,
+      category: 'video',
+      protocol,
+    };
+  } else {
+    result = resolveDraftModelProtocol(examples, declaredBaseUrl);
+  }
   const displayName = examples.name?.trim() || result.modelId;
   const category = result.category;
+  const videoCapability = examples.videoCapability ?? templateMatch?.capability;
   // 文本模型由连接级标准聊天协议统一处理。仍先解析文档示例以验证模型 ID、
   // Base URL 和文档证据，但不把一次性 OpenAI 风格模板写进模型配置。
   const executionProfile: ModelExecutionProfile | undefined = category === 'text'
@@ -747,18 +788,18 @@ function createModelSelection(
     throw new Error(`模型“${displayName || result.modelId}”只有图片分类可以配置参考图请求协议`);
   }
   // 能力声明只对视频模型生效：参数面板据此约束时长 / 比例 / 分辨率 / 参考素材数量
-  if (examples.videoCapability && category !== 'video') {
+  if (videoCapability && category !== 'video') {
     throw new Error(`模型“${displayName || result.modelId}”只有视频分类可以声明 videoCapability`);
   }
-  if (category === 'video' && !examples.videoCapability?.operations?.length) {
+  if (category === 'video' && !videoCapability?.operations?.length) {
     throw new Error(
       `模型“${displayName || result.modelId}”必须按接口文档声明非空 videoCapability.operations，`
       + '避免运行时猜测文生视频、图生视频或视频生视频能力',
     );
   }
-  if (examples.videoCapability) {
+  if (videoCapability) {
     try {
-      assertVideoModelCapability(examples.videoCapability);
+      assertVideoModelCapability(videoCapability);
     } catch (error) {
       const message = error instanceof Error ? error.message : '能力声明无效';
       throw new Error(
@@ -768,13 +809,13 @@ function createModelSelection(
     }
   }
   if (
-    examples.protocolSource === 'declarative'
+    (examples.protocolSource === 'declarative' || useTemplateProtocol)
     && category === 'video'
-    && examples.videoCapability
+    && videoCapability
   ) {
     assertDeclarativeVideoProtocolSemantics(
       result.protocol,
-      examples.videoCapability,
+      videoCapability,
       result.baseUrl,
       result.modelId,
     );
@@ -794,12 +835,12 @@ function createModelSelection(
   }
   const updateFields: Array<keyof ProviderModelSelection> = ['provider', 'executionProfile'];
   if (examples.name?.trim()) updateFields.push('name');
-  if (examples.category) updateFields.push('category', 'categoryManual');
+  if (examples.category || templateMatch) updateFields.push('category', 'categoryManual');
   if (examples.description !== undefined) updateFields.push('description', 'descriptionManual');
   if (inputModalities) updateFields.push('inputModalities', 'inputModalitiesManual');
   if (contextWindow) updateFields.push('contextWindow');
   if (examples.imageReferenceRequestMode) updateFields.push('imageReferenceRequestMode');
-  if (examples.videoCapability) updateFields.push('videoCapability');
+  if (videoCapability) updateFields.push('videoCapability');
   return {
     baseUrl: normalizeBaseUrl(result.baseUrl, chatApiProtocol),
     updateFields,
@@ -810,12 +851,12 @@ function createModelSelection(
       provider: connectionId,
       executionProfile,
       // 助手按文档定下的分类比拉取目录时的 ID 正则更准，标成手动避免下次刷新被改回去
-      ...(examples.category ? { categoryManual: true } : {}),
+      ...(examples.category || templateMatch ? { categoryManual: true } : {}),
       ...(description !== undefined ? { description, descriptionManual: true } : {}),
       ...(inputModalities ? { inputModalities, inputModalitiesManual: true } : {}),
       ...(contextWindow ? { contextWindow } : {}),
       ...(imageReferenceRequestMode ? { imageReferenceRequestMode } : {}),
-      ...(examples.videoCapability ? { videoCapability: examples.videoCapability } : {}),
+      ...(videoCapability ? { videoCapability } : {}),
     },
   };
 }

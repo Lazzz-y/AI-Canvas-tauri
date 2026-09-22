@@ -1050,3 +1050,71 @@ curl https://gateway.example.com/v1/videos \
     })).toThrow('只有视频分类可以声明 videoCapability');
   });
 });
+
+describe('Seedance built-in provider templates', () => {
+  it('auto-matches a verified relay from baseUrl and exact model id', () => {
+    const draft = createProviderConfigDraft('task-seedance-lec', {
+      connectionName: 'Lec Seedance',
+      baseUrl: 'https://api.paipu.net',
+      models: [{ modelId: 'lec-gt-seedance-2-5-720p' }],
+    });
+    const [model] = draft.config.selectedModels ?? [];
+
+    expect(model).toMatchObject({
+      id: 'lec-gt-seedance-2-5-720p',
+      category: 'video',
+      categoryManual: true,
+      videoCapability: {
+        resolutions: ['480p', '720p', '1080p'],
+        minDuration: 12,
+        maxDuration: 30,
+        maxImageReferences: 30,
+        maxVideoReferences: 10,
+        maxAudioReferences: 10,
+      },
+      executionProfile: {
+        preset: 'custom',
+        protocol: {
+          submit: { path: '/v1/videos' },
+          poll: { path: '/v1/videos/{{submit.id}}' },
+        },
+      },
+    });
+  });
+
+  it('lets an explicit template work on a custom gateway while preserving explicit capability', () => {
+    const explicitCapability: VideoModelCapability = {
+      operations: ['text-to-video'],
+      resolutions: ['720p'],
+      durations: [8],
+      maxImageReferences: 0,
+      maxVideoReferences: 0,
+      maxAudioReferences: 0,
+    };
+    const draft = createProviderConfigDraft('task-seedance-explicit', {
+      connectionName: 'Private Seedance Gateway',
+      baseUrl: 'https://gateway.example.com/api',
+      models: [{
+        modelId: 'private-seedance-2.5',
+        templateId: '2.5:lec',
+        videoCapability: explicitCapability,
+      }],
+    });
+    const [model] = draft.config.selectedModels ?? [];
+
+    expect(model.videoCapability).toEqual(explicitCapability);
+    expect(model.executionProfile?.protocol?.submit.body).toEqual(expect.not.objectContaining({
+      images: expect.anything(),
+      videos: expect.anything(),
+      audios: expect.anything(),
+    }));
+  });
+
+  it('does not invent a transport protocol for an unknown relay', () => {
+    expect(() => createProviderConfigDraft('task-seedance-unknown', {
+      connectionName: 'Unknown Relay',
+      baseUrl: 'https://unknown.example.com',
+      models: [{ modelId: 'doubao-seedance-2-5-pro' }],
+    })).toThrow('examples 模式必须提供 submitRequest');
+  });
+});

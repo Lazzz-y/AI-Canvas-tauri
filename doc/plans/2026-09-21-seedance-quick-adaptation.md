@@ -98,3 +98,64 @@
 - 安全边界：快速适配只由用户手动应用，不按模型名称推断；未知复合 `content` 文档继续走原有人工确认逻辑，未扩大自动导入范围。
 - 验证：`npm run typecheck`、`npm run test:typecheck`、改动文件定向 ESLint、`git diff --check` 均通过；全量 `npm run test` 为 344 个文件、4391 项通过。
 - 未覆盖：未使用真实火山/APIMart Key 发起付费生成，也未做桌面端人工视觉验收；协议字段与能力边界由本地合同测试覆盖。
+
+## 第二阶段：自定义接口自动匹配与工具调用（2026-09-22）
+
+**Goal:** 在不覆盖用户已有手工配置的前提下，根据 Seedance 模型 ID 与已验证网关自动补齐能力和协议，并让设置页、对话助手与 MCP 复用同一模板解析器。
+
+**Architecture:** 继续把模型能力与平台传输分层。匹配顺序固定为“精确模型 ID 覆盖 → 已验证 Base URL 平台协议 → Seedance 家族能力”；未知平台只补能力，不猜请求协议。对话助手和 MCP 继续调用现有 `provider_config_preview` / `provider_config_apply` 工具链，模板只负责生成受本地校验约束的草稿，不绕过 `config_write` Policy、审批或 MCP 审计。
+
+### Task 7: 扩展共享模板解析器
+
+**Files:**
+- Modify: `src/services/ai/seedanceModelCapabilities.ts`
+- Test: `tests/services/seedanceModelCapabilities.test.ts`
+
+**Steps:**
+1. 增加失败测试，覆盖 Seedance 2.0/2.5、Fast/Mini 名称归一化、已知网关识别、未知平台只返回能力。
+2. 增加 Lec `/v1/videos` 异步协议和已核验模型 ID 的线路能力覆盖。
+3. 提供“只补空白”的单模型与模型列表应用函数，保证已有 `videoCapability`、`executionProfile` 和手工分类不被覆盖。
+4. 重跑模板定向测试。
+
+### Task 8: 设置页自动补齐
+
+**Files:**
+- Modify: `src/components/settings/ProviderConnectionDialog.tsx`
+
+**Steps:**
+1. 手动添加或拉取目录后，对识别到的 Seedance 模型调用共享模板解析器。
+2. 模型 ID 明确属于 Seedance 时自动归类为视频；已有手工分类保持不变。
+3. 已有能力或协议只保留，不因重新拉取模型或修改 Base URL 被静默覆盖。
+
+### Task 9: 对话助手与 MCP 调用模板
+
+**Files:**
+- Modify: `src/services/chat/providerConfigDraftService.ts`
+- Modify: `src/services/chat/tools/providerConfigTools.ts`
+- Test: `tests/services/chat/providerConfigDraftService.test.ts`
+- Test: `tests/services/chat/providerConfigTools.test.ts`
+
+**Steps:**
+1. 给 `provider_config_preview` 的模型输入增加可选 `templateId`，并允许已识别的 Seedance 模型按 Base URL 自动选择模板。
+2. 显式文档示例、声明式协议和能力始终优先；模板只填缺失字段。
+3. 模板仍生成任务级草稿，由既有 `provider_config_apply` 保存；普通助手保留确认，MCP 继续按现有 C 模式自动执行并记录审计任务。
+4. 增加 schema、草稿、合并与“不覆盖已有配置”测试。
+
+### Task 10: 验证与记录
+
+**Files:**
+- Modify: `doc/模型与生成模块.md`（仅在不覆盖当前 ComfyUI 在途改动的独立段落追加边界说明）
+
+**Steps:**
+1. 运行 Seedance、厂商配置工具与协议定向测试。
+2. 运行改动文件 ESLint、`npm run typecheck`、`npm run test:typecheck` 和 `git diff --check`。
+3. 严格 UTF-8 解码改动文件并扫描常见乱码；检查提交仅包含本阶段文件。
+
+**Rollback:** 移除自动匹配调用和工具 `templateId` 输入，保留第一阶段的显式快速适配模板；已保存的模型配置仍是普通 `videoCapability + executionProfile` 数据，不依赖模板 ID 运行，无需迁移或回滚用户数据。
+
+### 第二阶段完成记录（2026-09-22）
+
+- 已完成：设置页在打开连接、拉取模型目录和手动添加模型时自动识别 Seedance 2.0/2.5；已验证火山、APIMart、Lec 网关补齐协议，未知网关只补能力，已有手工字段保持优先。
+- 已完成：`provider_config_preview` 支持自动匹配及显式 `templateId`，生成的草稿继续由 `provider_config_apply` 写入，因此普通助手确认、MCP 自主模式和审计边界保持不变。
+- 验证：Seedance、Provider 草稿和 Provider 工具 3 个定向测试文件共 86 项通过；`npm run typecheck`、`npm run test:typecheck`、改动文件定向 ESLint、`git diff --check` 与 9 个文件严格 UTF-8 检查通过。
+- 未覆盖：未使用真实中转站 Key 发起付费视频任务；Ailingg、RealmRouter、Agnes、AI派缺少足够公开合同的网关不自动套用传输协议。
