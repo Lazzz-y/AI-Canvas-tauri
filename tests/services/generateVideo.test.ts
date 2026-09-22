@@ -507,6 +507,53 @@ describe('Volcengine Seedance content', () => {
     });
   });
 
+  it('submits an explicit 30 second duration unchanged for official Seedance 2.5', async () => {
+    const state = useAppStore.getState();
+    useAppStore.setState({
+      config: {
+        ...state.config,
+        providers: {
+          ...state.config.providers,
+          volcengine: {
+            name: '火山方舟',
+            apiKey: 'test-key',
+            baseUrl: 'https://ark.example/api/v3',
+          },
+        },
+      },
+    });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 'seedance-task-30s' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        status: 'succeeded',
+        content: { video_url: 'https://cdn.example/seedance-30s.mp4' },
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(generateVideo({
+      provider: 'volcengine',
+      model: 'volcengine/doubao-seedance-2-5-260628',
+      prompt: '连续三十秒的长镜头',
+      seedanceDuration: 30,
+      seedanceResolution: '480p',
+      seedanceRatio: '21:9',
+    })).resolves.toEqual({ url: 'https://cdn.example/seedance-30s.mp4' });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({
+      model: 'doubao-seedance-2-5-260628',
+      resolution: '480p',
+      ratio: '21:9',
+      duration: 30,
+    });
+  });
+
   it('uses official adaptive ratio and automatic duration defaults for Seedance 2.5', () => {
     expect(buildVolcengineVideoRequestBody(
       'doubao-seedance-2-5-260628',

@@ -572,19 +572,20 @@ export async function generateVideo(
     const volcengineCapability = params.provider === 'volcengine'
       ? getVolcengineSeedanceCapability(params.model)
       : undefined;
+    const maxDuration = volcengineCapability?.maxDuration;
     const preservesAutomaticDuration = volcengineCapability?.automaticDurationValue !== undefined
       && (params.seedanceDuration === volcengineCapability.automaticDurationValue
         || (params.seedanceDuration === undefined && params.videoFrames === undefined));
     const seedanceDuration = preservesAutomaticDuration
       ? params.seedanceDuration
-      : resolveVideoDurationSeconds(params.seedanceDuration, params.videoFrames, videoFps);
+      : resolveVideoDurationSeconds(params.seedanceDuration, params.videoFrames, videoFps, maxDuration);
     params = {
       ...params,
       videoFps,
       seedanceDuration,
       videoFrames: seedanceDuration === undefined || seedanceDuration < 0
         ? params.videoFrames
-        : videoFramesFromDuration(seedanceDuration, videoFps),
+        : videoFramesFromDuration(seedanceDuration, videoFps, maxDuration),
     };
   }
   const { prompt: rawPrompt, model, provider } = params;
