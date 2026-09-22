@@ -3,6 +3,14 @@
  */
 import Select from '../../shared/Select';
 import { lazy, Suspense, useState, useRef, useCallback, useEffect, useMemo } from 'react';
+import { useReducedMotion } from 'framer-motion';
+const MetalFx = lazy(() => import('./PolishMetalFx'));
+// 与参考徽标相同的全填充金属遮罩，宽度随中文标签自适应。
+function paintPolishBadge(ctx: CanvasRenderingContext2D, width: number, height: number) {
+  ctx.beginPath();
+  ctx.roundRect(0, 0, width, height, height / 2);
+  ctx.fill();
+}
 // 生成中的思考球：仅在生成时按需加载
 const ThinkingOrb = lazy(() => import('thinking-orbs').then((m) => ({ default: m.ThinkingOrb })));
 import type {
@@ -339,6 +347,8 @@ function AnimationPoseIcon({ action }: { action: AnimationAction }) {
 }
 
 interface PromptPanelProps {
+  onPolish?: () => void;
+  polishOpen?: boolean;
   nodeType: NodeType;
   nodeId?: string;
   prompt?: string;
@@ -415,6 +425,8 @@ interface PromptPanelProps {
 }
 
 export default function PromptPanel({
+  onPolish,
+  polishOpen = false,
   nodeType,
   nodeId,
   prompt = '',
@@ -489,6 +501,8 @@ export default function PromptPanel({
   onStyleChange,
 }: PromptPanelProps) {
   const t = useT();
+  const reduceMotion = useReducedMotion();
+  const theme = useAppStore((state) => state.config.theme);
   const effectivePlaceholder = placeholder ?? t('输入提示词开始创作   (Enter 生成，Shift+Enter 换行)');
   const [focused, setFocused] = useState(false);
   const [slashOpen, setSlashOpen] = useState(false);
@@ -769,6 +783,39 @@ export default function PromptPanel({
   const runninghubModel = selectedProvider === 'runninghub' ? getRunningHubModel(selectedModel, true) : undefined;
   const runninghubWorkflow = workflows?.find((workflow) => workflow.id === selectedWorkflowId && workflow.adapterType === 'runninghub');
   const workflowApi = workflows?.find((workflow) => workflow.id === selectedWorkflowId && workflow.adapterType === 'workflow-api');
+  const submitButton = (
+    <button
+      type="button"
+      className={`prompt-btn prompt-submit-btn${isGenerating ? ' is-generating' : ''} ${!canGenerate || !hasGenerationInput ? 'disabled' : ''}`}
+      aria-label={isGenerating ? t('生成中') : t('调用模型生成')}
+      disabled={!canGenerate || !hasGenerationInput}
+      aria-haspopup={batchSupported ? 'menu' : undefined}
+      aria-expanded={batchSupported ? batchMenuOpen : undefined}
+      data-tooltip={isGenerating ? t('生成中') : (batchSupported ? t('点击生成 1 张，长按选择数量') : t('调用模型生成'))}
+      onPointerDown={handleBatchPointerDown}
+      onPointerUp={clearBatchLongPress}
+      onPointerCancel={clearBatchLongPress}
+      onPointerLeave={clearBatchLongPress}
+      onContextMenu={(event) => { if (batchSupported) event.preventDefault(); }}
+      onClick={handleSubmitClick}
+    >
+      {isGenerating && !performanceMode ? (
+        <Suspense fallback={null}>
+          <ThinkingOrb state="composing" size={20} aria-label={t('生成中')} />
+        </Suspense>
+      ) : (
+        <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <line x1="12" y1="19" x2="12" y2="5" />
+          <polyline points="5 12 12 5 19 12" />
+        </svg>
+      )}
+    </button>
+  );
+  const polishButton = onPolish ? (
+    <button type="button" className="prompt-polish-button" aria-expanded={polishOpen} onClick={onPolish}>
+      {t('AI 润色')}
+    </button>
+  ) : null;
   return (
     <>
     <div className={`prompt-panel ${focused ? 'focused' : ''}`}>
@@ -790,6 +837,11 @@ export default function PromptPanel({
           onSlashTrigger={handleEditorSlash}
         />
       </div>
+      {polishButton && (
+        <div className="prompt-polish-entry">
+          {performanceMode || reduceMotion ? polishButton : <Suspense fallback={polishButton}><MetalFx className="prompt-polish-metal" variant="button" preset={theme === 'light' ? 'silver' : 'chromatic'} theme={theme} strength={theme === 'light' ? 0.55 : 0.8} shaderScale={1.6} mask={paintPolishBadge} glowMode="ring" normalizeHostStyles={false} innerShadow>{polishButton}</MetalFx></Suspense>}
+        </div>
+      )}
       {runninghubModel && onRunninghubModelParametersChange && <details className="ui-card m-2 p-2">
         <summary className="cursor-pointer text-xs">模型参数 · {runninghubModel.parameters.filter((field) => field.required && !field.binding && field.defaultValue === undefined).length} 项需填写</summary>
         <div className="mt-2 max-h-80 overflow-y-auto"><RunningHubModelParameterFields model={runninghubModel} values={runninghubModelParameters} onChange={onRunninghubModelParametersChange} disabled={isGenerating} /></div>
@@ -1032,31 +1084,22 @@ export default function PromptPanel({
               ref={batchTriggerRef}
               className={`prompt-submit-wrap${batchMenuOpen ? ' batch-open' : ''}`}
             >
-              <button
-                type="button"
-                className={`prompt-btn prompt-submit-btn${isGenerating ? ' is-generating' : ''} ${!canGenerate || !hasGenerationInput ? 'disabled' : ''}`}
-                disabled={!canGenerate || !hasGenerationInput}
-                aria-haspopup={batchSupported ? 'menu' : undefined}
-                aria-expanded={batchSupported ? batchMenuOpen : undefined}
-                data-tooltip={isGenerating ? t('生成中') : (batchSupported ? t('点击生成 1 张，长按选择数量') : t('调用模型生成'))}
-                onPointerDown={handleBatchPointerDown}
-                onPointerUp={clearBatchLongPress}
-                onPointerCancel={clearBatchLongPress}
-                onPointerLeave={clearBatchLongPress}
-                onContextMenu={(event) => { if (batchSupported) event.preventDefault(); }}
-                onClick={handleSubmitClick}
-              >
-                {isGenerating && !performanceMode ? (
-                  <Suspense fallback={null}>
-                    <ThinkingOrb state="composing" size={20} aria-label={t('生成中')} />
-                  </Suspense>
-                ) : (
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <line x1="5" y1="12" x2="19" y2="12" />
-                    <polyline points="12 5 19 12 12 19" />
-                  </svg>
-                )}
-              </button>
+              {performanceMode || reduceMotion ? submitButton : (
+                <Suspense fallback={submitButton}>
+                  <MetalFx
+                    className="prompt-send-metal"
+                    variant="circle"
+                    preset={theme === 'light' ? 'silver' : 'chromatic'}
+                    theme={theme}
+                    strength={theme === 'light' ? 0.65 : 0.81}
+                    paused={!canGenerate || !hasGenerationInput}
+                    normalizeHostStyles={false}
+                    innerShadow
+                  >
+                    {submitButton}
+                  </MetalFx>
+                </Suspense>
+              )}
               {batchSupported && (
                 <div className="image-batch-clip">
                   <div

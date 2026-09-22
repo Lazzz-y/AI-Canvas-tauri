@@ -4,6 +4,7 @@
 import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 // 生成中的流光边框：仅在生成时按需加载
 const BorderBeam = lazy(() => import('border-beam').then((m) => ({ default: m.BorderBeam })));
+const PromptPolishPanel = lazy(() => import('./shared/PromptPolishPanel'));
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { useShallow } from 'zustand/react/shallow';
 import { generateId, useAppStore } from '../../store/useAppStore';
@@ -78,6 +79,12 @@ function AINodeDialog() {
   const previewRef = useRef<HTMLDivElement>(null);
   const cancellingNodeIdsRef = useRef(new Set<string>());
   const [isExpanded, setIsExpanded] = useState(false);
+  const [polishTarget, setPolishTarget] = useState<{ nodeId: string; projectId: string | null } | null>(null);
+  const polishOpen = isExpanded && polishTarget?.nodeId === activeNodeId && polishTarget?.projectId === currentProjectId;
+  const closePolish = useCallback(() => {
+    setPolishTarget(null);
+    requestAnimationFrame(() => panelRef.current?.querySelector<HTMLButtonElement>('.prompt-polish-button')?.focus());
+  }, []);
   const [recoveryInput, setRecoveryInput] = useState({ nodeId: '', taskId: '', confirmed: false });
 
   useLayoutEffect(() => {
@@ -281,6 +288,10 @@ function AINodeDialog() {
         // 先让顶层 UI Kit 下拉处理 Escape，保留当前节点参数弹窗。
         if (document.querySelector('[data-ui-select-portal]')) return;
         e.stopPropagation();
+        if (polishOpen) {
+          closePolish();
+          return;
+        }
         if (isExpanded) {
           setIsExpanded(false);
         } else {
@@ -290,7 +301,7 @@ function AINodeDialog() {
     };
     window.addEventListener('keydown', handler, true);
     return () => window.removeEventListener('keydown', handler, true);
-  }, [handleCloseNodeDialog, isExpanded]);
+  }, [handleCloseNodeDialog, isExpanded, polishOpen, closePolish]);
 
   // All hooks must be called before any early return
   const onPromptChange = useCallback(
@@ -1042,13 +1053,13 @@ function AINodeDialog() {
           type="button"
           className="ai-dialog-expanded-backdrop"
           aria-label={t('还原')}
-          onClick={() => setIsExpanded(false)}
+          onClick={() => { setPolishTarget(null); setIsExpanded(false); }}
         />
       )}
 
       <div
         ref={panelRef}
-        className={`ai-dialog-float${isExpanded ? ' is-expanded' : ''}`}
+        className={`ai-dialog-float${isExpanded ? ' is-expanded' : ''}${polishOpen ? ' is-polishing' : ''}`}
         role={isExpanded ? 'dialog' : undefined}
         aria-modal={isExpanded ? true : undefined}
         aria-label={isExpanded ? t('节点生成对话框') : undefined}
@@ -1092,6 +1103,7 @@ function AINodeDialog() {
           onClick={(event) => {
             event.stopPropagation();
             setIsExpanded((current) => !current);
+            setPolishTarget(null);
           }}
         >
           {isExpanded ? (
@@ -1145,6 +1157,12 @@ function AINodeDialog() {
           </div>
         )}
         <PromptPanel
+          onPolish={isExpanded ? () => {
+            finishContinuousEdit();
+            if (polishOpen) closePolish();
+            else setPolishTarget({ nodeId: activeNodeId, projectId: currentProjectId });
+          } : undefined}
+          polishOpen={polishOpen}
           editorRef={editorApiRef}
           nodeType={nodeType}
           nodeId={activeNodeId}
@@ -1217,6 +1235,11 @@ function AINodeDialog() {
           selectedStyle={data.style as string | undefined}
           onStyleChange={onStyleChange}
         />
+        {polishOpen && (
+          <Suspense fallback={<aside className="prompt-polish-panel" role="status">{t('正在打开润色…')}</aside>}>
+            <PromptPolishPanel key={`${currentProjectId}:${activeNodeId}`} nodeId={activeNodeId} onClose={closePolish} />
+          </Suspense>
+        )}
       </div>
     </>
   );
