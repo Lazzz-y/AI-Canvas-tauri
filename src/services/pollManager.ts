@@ -15,6 +15,7 @@ import { mapImageDimensions } from './aiDimensions';
 import { parseMultiPathResponse, splitCommaSeparatedUrls } from './ai/helpers';
 import { resolveComfyOutputUrl, type ComfyOutputKind, type ComfyOutputs } from './comfyOutputs';
 import { ComfyPendingError, pollComfyHistory } from './comfyPolling';
+import { maybeAutoReleaseComfyMemory } from './comfyMemory';
 import { completeCanvasDerivation, isCanvasDerivationFresh, registerCanvasDerivation } from './canvasDerivationGuard';
 import { pollResolvedModelProtocol } from './ai/modelProtocol';
 import {
@@ -735,7 +736,7 @@ async function resumeComfyUI(task: PendingTask): Promise<void> {
   updatePendingTask(nodeId, { comfyRecoveryState: undefined }, taskId);
 
   const kinds: ComfyOutputKind[] =
-    nodeType === 'ai-video' ? ['video', 'image']
+    nodeType === 'ai-video' ? ['video']
       : nodeType === 'ai-audio' ? ['audio', 'video', 'image']
         : ['image'];
   const extract = (outputs: ComfyOutputs) => resolveComfyOutputUrl(baseUrl, outputs, kinds);
@@ -750,6 +751,10 @@ async function resumeComfyUI(task: PendingTask): Promise<void> {
       extract,
       signal,
     );
+    await maybeAutoReleaseComfyMemory(
+      baseUrl,
+      useAppStore.getState().config.comfyMemoryPolicy ?? 'smart',
+    ).catch(() => {});
     await applyNodeResult(nodeId, url, label, isCurrent);
     removePendingTask(nodeId, taskId);
   } catch (err) {
@@ -758,8 +763,12 @@ async function resumeComfyUI(task: PendingTask): Promise<void> {
     if (err instanceof ComfyPendingError) {
       updatePendingTask(nodeId, { comfyRecoveryState: 'disconnected' }, taskId);
       if (isCurrent()) useAppStore.getState().updateNodeDataTransient(nodeId, { status: 'error', error: err.message });
-    } else if (isCurrent()) {
-      await handleResumeError(task, err);
+    } else {
+      await maybeAutoReleaseComfyMemory(
+        baseUrl,
+        useAppStore.getState().config.comfyMemoryPolicy ?? 'smart',
+      ).catch(() => {});
+      if (isCurrent()) await handleResumeError(task, err);
     }
   } finally {
     cleanupNodePolling(nodeId, signal);

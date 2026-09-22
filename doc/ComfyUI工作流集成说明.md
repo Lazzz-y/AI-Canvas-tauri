@@ -1,7 +1,7 @@
 # ComfyUI 工作流集成说明
 
 > 本文档描述 AI Canvas 如何导入、管理和执行 ComfyUI 工作流，包括 IO 节点识别、内容与参数注入规则、结果取回和编辑回写链路。
-> 最后更新：2026-09-18。范围、验证与回滚见[可靠性修复](./plans/2026-09-08-comfyui-reliability.md)、[助手多服务器支持](./plans/2026-09-08-comfyui-assistant-servers.md)和[打开与编辑体验](./plans/2026-09-08-comfyui-editor-experience.md)。
+> 最后更新：2026-09-22。范围、验证与回滚见[可靠性修复](./plans/2026-09-08-comfyui-reliability.md)、[助手多服务器支持](./plans/2026-09-08-comfyui-assistant-servers.md)和[打开与编辑体验](./plans/2026-09-08-comfyui-editor-experience.md)。
 
 ## 1. 概览
 
@@ -29,6 +29,7 @@ ComfyUI 在 AI Canvas 里是一种 **provider**：工作流导入后会出现在
 - **服务地址**：默认 `http://127.0.0.1:8188`，存在 `config.comfyUIUrl`。未配置时执行会直接抛「未配置 ComfyUI 服务地址」。
 - **额外服务器**：`config.comfyServers` 保存服务器名称和 URL；工作流通过 `serverId` 绑定。未绑定或服务器记录已删除时回落到默认地址；可用性灯通过 `/system_stats` 探测。
 - **本地安装目录**：存在 `config.comfyUIPath`，配好后可以一键启动本地 ComfyUI（Tauri 命令 `launch_comfyui`，固定使用 `--listen 127.0.0.1 --enable-cors-header`）。当前本地启动尚未关联自定义端口。
+- **显存与缓存**：设置页可按服务器读取 `/system_stats`，并手动调用 `/free` 的“卸载模型”或“完全释放”。默认策略为“保留智能缓存”；只有用户显式选择时，任务终态后才会在队列空闲时自动释放，而且自动策略仅作用于 `localhost`、`127.0.0.1` 和 `::1`，不会清理远程或共享服务器。
 
 请求通过 [comfyPolling.ts](../src/services/comfyPolling.ts) 的 `comfyFetch`，出口按环境分流：
 
@@ -277,9 +278,17 @@ Qwen 验证入口为 `builtinWorkflows.test.ts`、`audioSpeechSettings.test.ts` 
 1. **按已知键名**：图片 `images`/`image`，视频 `videos`/`video`/`gifs`，音频 `audio`/`audios`；
 2. **按扩展名**：键名认不出时扫描其余键，按 `.mp4`/`.png`/`.mp3` 这类扩展名认领。
 
-找到后拼成 `{baseUrl}/view?filename=…&subfolder=…&type=output`。视频按 `['video', 'image']` 的优先级找 —— `SaveWEBM`/`SaveVideo` 常把成片挂在 `images` 下。
+找到后拼成 `{baseUrl}/view?filename=…&subfolder=…&type=output`。视频只认视频扩展名；`SaveWEBM`/`SaveVideo` 即使把 `.mp4` / `.webm` 挂在 `images` 下也能识别，但编码前的 `PreviewImage` PNG 不再被当成成片。
 
-轮询节奏：**3 秒一次，最多 1200 次（1 小时）**。失败信息从 `status.messages` 里倒着找 `exception_message` / `error` / `message`，找不到就报「ComfyUI 执行失败」。执行完成但取不到目标媒体，报「执行完成但未返回目标媒体」。
+轮询节奏：**3 秒一次，最多 1200 次（1 小时）**。当 history 带 `status` 时，必须等到 `completed=true` 或 `status_str=success` 才交付输出；没有 `status` 的旧兼容服务仍按已有输出判断。失败信息从 `status.messages` 里倒着找 `exception_message` / `error` / `message`，找不到就报「ComfyUI 执行失败」。执行完成但取不到目标媒体，报「执行完成但未返回目标媒体」。
+
+### 9.1 显存释放边界
+
+- `/history` 记录清理与 GPU 显存释放是两回事；本项目不会通过删除 history 来“清显存”。
+- “卸载模型”发送 `{ unload_models: true, free_memory: false }`；“完全释放”发送 `{ unload_models: true, free_memory: true }`。后者还会清执行缓存，下次生成需要重新加载模型。
+- 自动释放前会查询 `/queue`；只要存在运行中或等待中的任务就跳过，避免一项任务结束时影响同一服务上的其他任务。
+- 手动释放是整台 ComfyUI 服务级操作，允许用户针对已配置服务器主动执行；共享服务器上使用前须确认不会影响其他调用方。
+- 常规连续生成建议保持默认智能缓存。只有显存需让给其他应用、工作流切换后长期占用或特定节点确有缓存异常时，才考虑卸载或完全释放；这不是每次 API 调用的必要步骤。
 
 ## 10. 断点续查
 

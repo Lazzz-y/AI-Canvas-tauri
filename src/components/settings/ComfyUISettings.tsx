@@ -9,14 +9,21 @@ import { invoke } from '@tauri-apps/api/core';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { useShallow } from 'zustand/react/shallow';
 import { useAppStore } from '../../store/useAppStore';
-import type { ComfyServer } from '../../types';
+import type { ComfyMemoryPolicy, ComfyServer } from '../../types';
 import AnimatedButton from '../shared/AnimatedButton';
+import Select from '../shared/Select';
 import { useT } from '../../i18n';
 import {
   DEFAULT_COMFY_URL,
   probeComfyServer,
   type ComfyServerAvailability,
 } from '../../services/comfyServers';
+import {
+  fetchComfyMemoryStats,
+  releaseComfyMemory,
+  type ComfyMemoryReleaseMode,
+  type ComfyMemoryStats,
+} from '../../services/comfyMemory';
 
 type ComfyStatus = 'idle' | 'starting' | 'ready' | 'failed';
 
@@ -24,6 +31,10 @@ const INPUT_CLASS = 'text-xs bg-canvas-surface border border-canvas-border round
 const DEFAULT_SERVER_STATUS_KEY = '__default__';
 const STATUS_REFRESH_INTERVAL_MS = 15_000;
 const STATUS_DEBOUNCE_MS = 250;
+
+function formatGiB(bytes: number): string {
+  return `${(bytes / 1024 ** 3).toFixed(1)} GiB`;
+}
 
 interface ServerStatusEntry {
   url: string;
@@ -77,8 +88,44 @@ export default function ComfyUISettings() {
   const [opening, setOpening] = useState(false);
   const [status, setStatus] = useState<ComfyStatus>('idle');
   const [serverStatuses, setServerStatuses] = useState<Record<string, ServerStatusEntry>>({});
+  const [memoryTargetKey, setMemoryTargetKey] = useState(DEFAULT_SERVER_STATUS_KEY);
+  const [memorySnapshot, setMemorySnapshot] = useState<{
+    url: string;
+    stats?: ComfyMemoryStats;
+    error?: string;
+  } | null>(null);
+  const [memoryAction, setMemoryAction] = useState<'refresh' | ComfyMemoryReleaseMode | null>(null);
   const comfyUIPath = config.comfyUIPath;
   const servers = useMemo(() => config.comfyServers ?? [], [config.comfyServers]);
+  const memoryTargets = useMemo(() => [
+    {
+      key: DEFAULT_SERVER_STATUS_KEY,
+      name: t('默认服务器'),
+      url: config.comfyUIUrl?.trim() || DEFAULT_COMFY_URL,
+    },
+    ...servers.map((server) => ({ key: server.id, name: server.name || t('未命名服务端'), url: server.url.trim() })),
+  ], [config.comfyUIUrl, servers, t]);
+  const memoryTarget = memoryTargets.find((target) => target.key === memoryTargetKey) ?? memoryTargets[0];
+  const memoryStats = memorySnapshot?.url === memoryTarget.url ? memorySnapshot.stats ?? null : null;
+  const memoryError = memorySnapshot?.url === memoryTarget.url ? memorySnapshot.error ?? null : null;
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void fetchComfyMemoryStats(memoryTarget.url, controller.signal).then(
+      (stats) => {
+        if (!controller.signal.aborted) setMemorySnapshot({ url: memoryTarget.url, stats });
+      },
+      (error: unknown) => {
+        if (!controller.signal.aborted) {
+          setMemorySnapshot({
+            url: memoryTarget.url,
+            error: error instanceof Error ? error.message : t('读取显存状态失败'),
+          });
+        }
+      },
+    );
+    return () => controller.abort();
+  }, [memoryTarget.url, t]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -214,6 +261,47 @@ export default function ComfyUISettings() {
 
   const removeServer = (id: string) => saveServers(servers.filter((server) => server.id !== id));
 
+  const refreshMemoryStats = async () => {
+    setMemoryAction('refresh');
+    setMemorySnapshot(null);
+    try {
+      setMemorySnapshot({ url: memoryTarget.url, stats: await fetchComfyMemoryStats(memoryTarget.url) });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : t('读取显存状态失败');
+      setMemorySnapshot({ url: memoryTarget.url, error: message });
+      showToast(message, 'error');
+    } finally {
+      setMemoryAction(null);
+    }
+  };
+
+  const releaseMemory = async (mode: ComfyMemoryReleaseMode) => {
+    setMemoryAction(mode);
+    setMemorySnapshot(null);
+    try {
+      await releaseComfyMemory(memoryTarget.url, mode);
+      showToast(
+        mode === 'free-memory'
+          ? t('已请求完全释放 ComfyUI 资源')
+          : t('已请求卸载 ComfyUI 模型'),
+        'success',
+      );
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      setMemorySnapshot({ url: memoryTarget.url, stats: await fetchComfyMemoryStats(memoryTarget.url) });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : t('释放 ComfyUI 资源失败');
+      setMemorySnapshot({ url: memoryTarget.url, error: message });
+      showToast(message, 'error');
+    } finally {
+      setMemoryAction(null);
+    }
+  };
+
+  const saveMemoryPolicy = async (policy: ComfyMemoryPolicy) => {
+    updateConfig({ comfyMemoryPolicy: policy });
+    await saveConfig().catch(() => {});
+  };
+
   const openWorkflows = () => {
     setSettingsOpen(false);
     setWorkflowPanelOpen(true);
@@ -274,6 +362,104 @@ export default function ComfyUISettings() {
             {status === 'ready' && <p className="text-[11px] text-emerald-400 mt-2 flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />{t('ComfyUI 服务已就绪（{url}），可以开始使用', { url: config.comfyUIUrl?.trim() || 'http://127.0.0.1:8188' })}</p>}
             {status === 'failed' && <p className="text-[11px] text-red-400 mt-2 flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-red-400 shrink-0" />{t('服务未就绪，请查看弹出的终端窗口中的日志')}</p>}
             {status === 'idle' && <p className="text-[11px] text-canvas-text-muted mt-2">{t('服务就绪后会自动在软件内打开 ComfyUI 窗口，也可以使用右侧按钮手动打开')}</p>}
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <h3 className="text-sm font-medium text-canvas-text mb-2">{t('ComfyUI 显存与缓存')}</h3>
+        <div className="bg-canvas-card border border-canvas-border rounded-lg p-2 space-y-3">
+          <div className="flex items-center gap-2">
+            <Select
+              fixedMenu
+              size="sm"
+              className="min-w-0 flex-1"
+              value={memoryTarget.key}
+              onChange={setMemoryTargetKey}
+              options={memoryTargets.map((target) => ({ value: target.key, label: target.name }))}
+              aria-label={t('显存状态服务端')}
+            />
+            <button
+              type="button"
+              className="ui-btn ui-btn--secondary ui-btn--sm shrink-0"
+              onClick={() => void refreshMemoryStats()}
+              disabled={memoryAction !== null}
+            >
+              <Icon icon={memoryAction === 'refresh' ? 'lucide:loader-circle' : 'lucide:refresh-cw'} width="13" height="13" className={memoryAction === 'refresh' ? 'animate-spin' : ''} />
+              {t('刷新')}
+            </button>
+          </div>
+
+          {memoryStats ? (
+            <div className="space-y-2">
+              {memoryStats.devices.map((device, index) => (
+                <div key={`${device.type}-${device.index ?? index}`} className="rounded-md border border-canvas-border bg-canvas-surface px-2.5 py-2">
+                  <div className="text-xs font-medium text-canvas-text break-all">{device.name}</div>
+                  <div className="mt-1 text-[11px] text-canvas-text-secondary">
+                    {t('显存已用 {used} / {total}，设备空闲 {free}', {
+                      used: formatGiB(Math.max(0, device.vramTotal - device.vramFree)),
+                      total: formatGiB(device.vramTotal),
+                      free: formatGiB(device.vramFree),
+                    })}
+                  </div>
+                  {device.torchVramFree !== undefined && (
+                    <div className="mt-0.5 text-[11px] text-canvas-text-muted">
+                      {t('PyTorch 报告空闲 {free}', { free: formatGiB(device.torchVramFree) })}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          ) : memoryError ? (
+            <p className="text-[11px] text-red-400 leading-relaxed">{memoryError}</p>
+          ) : (
+            <p className="text-[11px] text-canvas-text-muted">{t('正在读取显存状态…')}</p>
+          )}
+
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              className="ui-btn ui-btn--secondary ui-btn--sm"
+              onClick={() => void releaseMemory('unload-models')}
+              disabled={memoryAction !== null}
+            >
+              <Icon icon={memoryAction === 'unload-models' ? 'lucide:loader-circle' : 'lucide:package-minus'} width="13" height="13" className={memoryAction === 'unload-models' ? 'animate-spin' : ''} />
+              {t('卸载模型')}
+            </button>
+            <button
+              type="button"
+              className="ui-btn ui-btn--danger ui-btn--sm"
+              onClick={() => void releaseMemory('free-memory')}
+              disabled={memoryAction !== null}
+            >
+              <Icon icon={memoryAction === 'free-memory' ? 'lucide:loader-circle' : 'lucide:eraser'} width="13" height="13" className={memoryAction === 'free-memory' ? 'animate-spin' : ''} />
+              {t('完全释放')}
+            </button>
+          </div>
+          <p className="text-[11px] text-canvas-text-muted leading-relaxed">
+            {t('释放操作作用于整台 ComfyUI 服务；任务运行中时会在服务空闲后执行。完全释放会同时清空执行缓存，下次生成需要重新加载模型。')}
+          </p>
+
+          <div className="pt-3 border-t border-canvas-border">
+            <label className="block text-xs text-canvas-text-muted mb-1.5" htmlFor="comfy-memory-policy">
+              {t('本地任务结束后')}
+            </label>
+            <Select
+              fixedMenu
+              size="sm"
+              id="comfy-memory-policy"
+              className="w-full"
+              value={config.comfyMemoryPolicy ?? 'smart'}
+              onChange={(value) => void saveMemoryPolicy(value as ComfyMemoryPolicy)}
+              options={[
+                { value: 'smart', label: t('保留智能缓存（推荐）') },
+                { value: 'unload-models', label: t('队列空闲时卸载模型') },
+                { value: 'free-memory', label: t('队列空闲时完全释放') },
+              ]}
+            />
+            <p className="text-[11px] text-canvas-text-muted mt-2 leading-relaxed">
+              {t('自动策略只对 localhost、127.0.0.1 或 ::1 生效，不会自动清理远程或共享服务器。')}
+            </p>
           </div>
         </div>
       </div>

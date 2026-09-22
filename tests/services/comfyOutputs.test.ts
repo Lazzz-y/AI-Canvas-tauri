@@ -25,6 +25,13 @@ describe('findComfyOutputFile', () => {
     expect(findComfyOutputFile({ '9': { images: [file('preview.png')] } }, ['audio'])).toBeNull();
   });
 
+  it('finds a video stored under images by extension without accepting a preview png', () => {
+    expect(findComfyOutputFile({ '9': { images: [file('result.mp4')] } }, ['video']))
+      .toEqual(file('result.mp4'));
+    expect(findComfyOutputFile({ '9': { images: [file('preview.png')] } }, ['video']))
+      .toBeNull();
+  });
+
   it('honours the kind priority across nodes', () => {
     const outputs = {
       '8': { images: [file('frame.png')] },

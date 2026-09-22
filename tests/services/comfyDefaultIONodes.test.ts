@@ -73,7 +73,12 @@ beforeEach(() => {
       return jsonResponse({
         'prompt-1': {
           status: { completed: true },
-          outputs: { '9': { images: [{ filename: 'out.png', subfolder: '', type: 'output' }] } },
+          outputs: {
+            '9': {
+              images: [{ filename: 'out.png', subfolder: '', type: 'output' }],
+              videos: [{ filename: 'out.mp4', subfolder: '', type: 'output' }],
+            },
+          },
         },
       });
     }

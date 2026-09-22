@@ -54,6 +54,19 @@ function readComfyFailureMessage(entry: ComfyHistoryEntry): string | null {
   return null;
 }
 
+/**
+ * Stock ComfyUI writes history after task_done, but some gateways expose a partial
+ * history entry while encoders or output nodes are still running. When status is
+ * present, require its terminal success signal before returning a media result.
+ * Status-less entries remain supported for older ComfyUI-compatible services.
+ */
+function isComfyHistoryEntryComplete(entry: ComfyHistoryEntry): boolean {
+  const status = entry.status;
+  if (!status) return true;
+  if (typeof status.completed === 'boolean') return status.completed;
+  return status.status_str?.toLowerCase() === 'success';
+}
+
 /** 队列项形如 [优先级, prompt_id, prompt, extra_data, outputs]；问不到就当还在排队，宁可继续等 */
 async function isPromptQueued(
   baseUrl: string,
@@ -133,7 +146,9 @@ export async function pollComfyHistory<T>(
         return {};
       }
     },
-    isComplete: ({ entry }) => (entry?.outputs ? extract(entry.outputs) : null),
+    isComplete: ({ entry }) => (
+      entry?.outputs && isComfyHistoryEntryComplete(entry) ? extract(entry.outputs) : null
+    ),
     isFailed: ({ entry, gone }) => {
       if (gone) return TASK_GONE_MESSAGE;
       if (!entry) return null;

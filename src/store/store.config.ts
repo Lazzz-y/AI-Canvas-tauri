@@ -31,6 +31,7 @@ const defaultConfig: AppConfig = {
   canvasBackground: 'default',
   comfyUIUrl: 'http://127.0.0.1:8188',
   comfyUIPath: '',
+  comfyMemoryPolicy: 'smart',
   generalModels: [],
   mascotVisible: false,
   interactionMode: 'default',

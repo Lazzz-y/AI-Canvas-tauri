@@ -614,6 +614,7 @@ export interface AppConfig {
   comfyUIUrl?: string;        // ComfyUI 默认服务地址（工作流没绑定服务端时用它）
   comfyServers?: ComfyServer[]; // 额外的 ComfyUI 服务端，供工作流按需绑定
   comfyUIPath?: string;       // ComfyUI 安装目录路径
+  comfyMemoryPolicy?: ComfyMemoryPolicy; // 本地服务任务结束后的资源策略，默认保留智能缓存
   dreaminaAuth?: DreaminaAuthData; // 即梦登录态
   baseDataDir?: string;       // 用户自定义文件保存根目录，保存结构为 {baseDataDir}/{projectId}/**
   generalModels?: GeneralModelConfig[]; // 用户自建通用模型
@@ -712,6 +713,9 @@ export interface ModelGroup {
 // ============================================
 // 工作流定义 — ComfyUI workflow import
 // ============================================
+
+/** ComfyUI 任务结束后的资源策略；自动策略只对回环地址生效。 */
+export type ComfyMemoryPolicy = 'smart' | 'unload-models' | 'free-memory';
 
 /** 额外的 ComfyUI 服务端；图片 / 视频分开部署时，工作流各自绑定一台 */
 export interface ComfyServer {

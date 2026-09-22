@@ -61,7 +61,7 @@ describe('ComfyUI 任务恢复合同', () => {
     ['图片', () => executeComfyUIGenerate(params)],
     ['视频', () => executeComfyUIVideoGenerate(params)],
     ['音频', () => executeComfyUIAudioGenerate(params)],
-  ] as const)('%s 查询中断保留任务，继续查询不再次生成', async (_kind, generate) => {
+  ] as const)('%s 查询中断保留任务，继续查询不再次生成', async (kind, generate) => {
     mocks.history.mockRejectedValue(new TypeError('network unavailable'));
     const result = expect(generate()).rejects.toBeInstanceOf(ComfyPendingError);
     await vi.waitFor(() => expect(pending()[0]?.submitted).toBe(true));
@@ -69,7 +69,9 @@ describe('ComfyUI 任务恢复合同', () => {
     await result;
     expect(pending()[0]).toMatchObject({ taskId: 'prompt-1', comfyRecoveryState: 'disconnected' });
     await expect(executeComfyUIGenerate(params)).rejects.toThrow('未确认结束');
-    mocks.history.mockResolvedValue(completed());
+    mocks.history.mockResolvedValue(kind === '视频'
+      ? json({ 'prompt-1': { status: { completed: true }, outputs: { '9': { images: [{ filename: 'out.mp4' }] } } } })
+      : completed());
     await resumeComfyUINodeTask('n1');
     expect(promptCalls()).toHaveLength(1);
     expect(pending()).toEqual([]);
@@ -129,6 +131,33 @@ describe('ComfyUI 任务恢复合同', () => {
     const result = expect(pollComfyHistory(task.baseUrl, task.taskId, 'test-timeout', () => null)).rejects.toBeInstanceOf(ComfyPendingError);
     await vi.advanceTimersByTimeAsync(3_600_000);
     await result;
+  });
+
+  it('history 已有输出但状态未完成时继续等待终态', async () => {
+    let historyCalls = 0;
+    mocks.history.mockImplementation(async () => {
+      historyCalls += 1;
+      return historyCalls === 1
+        ? json({ 'prompt-1': { status: { completed: false }, outputs: { '9': { images: [{ filename: 'preview.png' }] } } } })
+        : completed();
+    });
+    const result = executeComfyUIGenerate(params);
+    await vi.waitFor(() => expect(historyCalls).toBe(1));
+    let settled = false;
+    void result.finally(() => { settled = true; });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(3_000);
+    await expect(result).resolves.toMatchObject({ url: expect.stringContaining('out.png') });
+  });
+
+  it('兼容没有 status 字段的旧版终态 history', async () => {
+    mocks.history.mockResolvedValue(json({
+      'prompt-1': { outputs: { '9': { images: [{ filename: 'legacy.png' }] } } },
+    }));
+    await expect(executeComfyUIGenerate(params)).resolves.toMatchObject({
+      url: expect.stringContaining('legacy.png'),
+    });
   });
 
   it('旧控制器清理和延迟取消回执不能删除新任务', async () => {

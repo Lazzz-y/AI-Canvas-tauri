@@ -25,10 +25,24 @@ import { ComfyPendingError, comfyFetch, pollComfyHistory } from './comfyPolling'
 import { corsSafeFetch } from './ai/httpTransport';
 import { resolveComfyOutputUrl } from './comfyOutputs';
 import { createComfyProgressSession, type ComfyProgressSession } from './comfyProgress';
+import { maybeAutoReleaseComfyMemory } from './comfyMemory';
 
 /** ComfyUI 已注册的节点类型；同一次会话里短暂缓存，装完插件重开也能很快看到变化 */
 let nodeClassCache: { baseUrl: string; classes: Set<string>; fetchedAt: number } | null = null;
 const NODE_CLASS_CACHE_TTL = 30_000;
+
+async function applyConfiguredComfyMemoryPolicy(baseUrl: string): Promise<void> {
+  const policy = useAppStore.getState().config.comfyMemoryPolicy ?? 'smart';
+  if (policy === 'smart') return;
+  try {
+    await maybeAutoReleaseComfyMemory(baseUrl, policy);
+  } catch (error) {
+    console.warn(
+      '[ComfyUI] 自动释放资源失败',
+      error instanceof Error ? error.message : '未知错误',
+    );
+  }
+}
 
 function queueContainsPrompt(queue: unknown, promptId: string): boolean {
   return Array.isArray(queue)
@@ -1511,13 +1525,18 @@ export async function executeComfyUIGenerate(
     const dims = dimensionInjection.dimensions;
 
     // 轮询等待结果
-    return await pollComfyUIHistory(baseUrl, promptId, dims, signal);
+    const result = await pollComfyUIHistory(baseUrl, promptId, dims, signal);
+    await applyConfiguredComfyMemoryPolicy(baseUrl);
+    return result;
   } catch (error) {
     if (submittedTaskId && (error instanceof ComfyPendingError || signal?.aborted)) {
       retainPending = true;
       if (params.nodeId && !nodeSignal?.aborted) {
         updatePendingTask(params.nodeId, { comfyRecoveryState: 'disconnected' }, submittedTaskId);
       }
+    }
+    if (submittedTaskId && !(error instanceof ComfyPendingError) && !signal?.aborted) {
+      await applyConfiguredComfyMemoryPolicy(comfyUrl);
     }
     throw error;
   } finally {
@@ -1535,8 +1554,9 @@ async function pollComfyUIHistoryForVideo(
   signal?: AbortSignal,
 ): Promise<{ url: string }> {
   return pollComfyHistory(baseUrl, promptId, 'ComfyUI 视频生成超时（1 小时）', (outputs) => (
-    // 视频节点常把成片挂在 images 下（SaveWEBM / SaveVideo），所以图片也算命中
-    resolveComfyOutputUrl(baseUrl, outputs, ['video', 'image'])
+    // SaveWEBM / SaveVideo 可能把 mp4/webm 挂在 images 下；输出解析器会按扩展名识别，
+    // 这里只接受真实视频，避免把编码前的 PreviewImage PNG 当作最终成片。
+    resolveComfyOutputUrl(baseUrl, outputs, ['video'])
   ), signal);
 }
 
@@ -1617,13 +1637,18 @@ export async function executeComfyUIVideoGenerate(
     }
 
     // 轮询等待结果
-    return await pollComfyUIHistoryForVideo(baseUrl, promptId, signal);
+    const result = await pollComfyUIHistoryForVideo(baseUrl, promptId, signal);
+    await applyConfiguredComfyMemoryPolicy(baseUrl);
+    return result;
   } catch (error) {
     if (submittedTaskId && (error instanceof ComfyPendingError || signal?.aborted)) {
       retainPending = true;
       if (params.nodeId && !nodeSignal?.aborted) {
         updatePendingTask(params.nodeId, { comfyRecoveryState: 'disconnected' }, submittedTaskId);
       }
+    }
+    if (submittedTaskId && !(error instanceof ComfyPendingError) && !signal?.aborted) {
+      await applyConfiguredComfyMemoryPolicy(comfyUrl);
     }
     throw error;
   } finally {
@@ -1698,13 +1723,18 @@ export async function executeComfyUIAudioGenerate(
     }
 
     // 轮询等待结果
-    return await pollComfyUIHistoryForAudio(baseUrl, promptId, signal);
+    const result = await pollComfyUIHistoryForAudio(baseUrl, promptId, signal);
+    await applyConfiguredComfyMemoryPolicy(baseUrl);
+    return result;
   } catch (error) {
     if (submittedTaskId && (error instanceof ComfyPendingError || signal?.aborted)) {
       retainPending = true;
       if (params.nodeId && !nodeSignal?.aborted) {
         updatePendingTask(params.nodeId, { comfyRecoveryState: 'disconnected' }, submittedTaskId);
       }
+    }
+    if (submittedTaskId && !(error instanceof ComfyPendingError) && !signal?.aborted) {
+      await applyConfiguredComfyMemoryPolicy(comfyUrl);
     }
     throw error;
   } finally {
