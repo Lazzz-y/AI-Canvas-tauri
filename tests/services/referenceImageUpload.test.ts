@@ -20,6 +20,36 @@ function png(color = 2, extra?: 'tRNS' | 'acTL', width = 3648): Blob {
   ], { type: 'image/png' });
 }
 
+function jpeg(width = 3840, height = 2160): Blob {
+  return new Blob([Uint8Array.from([
+    0xff, 0xd8,
+    0xff, 0xc0, 0x00, 0x11, 0x08,
+    (height >> 8) & 0xff, height & 0xff,
+    (width >> 8) & 0xff, width & 0xff,
+    0x03,
+    0x01, 0x11, 0x00,
+    0x02, 0x11, 0x00,
+    0x03, 0x11, 0x00,
+    0xff, 0xd9,
+  ])], { type: 'image/jpeg' });
+}
+
+function webp(width = 3840, height = 2160, flags = 0): Blob {
+  const bytes = new Uint8Array(30);
+  bytes.set(new TextEncoder().encode('RIFF'), 0);
+  bytes.set(new TextEncoder().encode('WEBP'), 8);
+  bytes.set(new TextEncoder().encode('VP8X'), 12);
+  bytes[20] = flags;
+  const writeU24 = (offset: number, value: number) => {
+    bytes[offset] = value & 0xff;
+    bytes[offset + 1] = (value >> 8) & 0xff;
+    bytes[offset + 2] = (value >> 16) & 0xff;
+  };
+  writeU24(24, width - 1);
+  writeU24(27, height - 1);
+  return new Blob([bytes], { type: 'image/webp' });
+}
+
 const close = vi.fn();
 const decode = vi.fn();
 const draw = vi.fn();
@@ -50,6 +80,81 @@ describe('临时参考图上传副本', () => {
     expect(encode).toHaveBeenCalledWith({ type: 'image/jpeg', quality: 0.95 });
     expect(close).toHaveBeenCalledOnce();
     expect(original.type).toBe('image/png');
+  });
+
+  it('将 4K PNG 等比缩到 2K 长边后再编码', async () => {
+    const original = png(2, undefined, 3840);
+    decode.mockImplementationOnce(async (_blob, options?: ImageBitmapOptions) => ({
+      width: options?.resizeWidth ?? 3840,
+      height: options?.resizeHeight ?? 2048,
+      close,
+    }));
+
+    const uploaded = await prepareReferenceImageUpload(original);
+
+    expect(uploaded.type).toBe('image/jpeg');
+    expect(decode).toHaveBeenCalledWith(original, {
+      resizeWidth: 2048,
+      resizeHeight: 1092,
+      resizeQuality: 'high',
+    });
+    expect(sizes).toEqual([[2048, 1092]]);
+    expect(draw).toHaveBeenCalledWith(expect.any(Object), 0, 0, 2048, 1092);
+  });
+
+  it('小体积 4K JPEG 也会缩到 2K，而普通 JPEG 不做无意义重编码', async () => {
+    const original = jpeg();
+    decode.mockImplementationOnce(async (_blob, options?: ImageBitmapOptions) => ({
+      width: options?.resizeWidth ?? 3840,
+      height: options?.resizeHeight ?? 2160,
+      close,
+    }));
+
+    expect((await prepareReferenceImageUpload(original)).type).toBe('image/jpeg');
+    expect(decode).toHaveBeenCalledWith(original, {
+      resizeWidth: 2048,
+      resizeHeight: 1152,
+      resizeQuality: 'high',
+    });
+    expect(sizes).toEqual([[2048, 1152]]);
+  });
+
+  it('静态 4K WebP 会缩放，动画 WebP 保留原字节', async () => {
+    const still = webp();
+    decode.mockImplementationOnce(async (_blob, options?: ImageBitmapOptions) => ({
+      width: options?.resizeWidth ?? 3840,
+      height: options?.resizeHeight ?? 2160,
+      close,
+    }));
+
+    expect((await prepareReferenceImageUpload(still)).type).toBe('image/jpeg');
+    expect(sizes).toEqual([[2048, 1152]]);
+    const animated = webp(3840, 2160, 0x02);
+    expect(await prepareReferenceImageUpload(animated)).toBe(animated);
+    expect(decode).toHaveBeenCalledOnce();
+  });
+
+  it('4K 透明 PNG 缩放后仍输出 PNG', async () => {
+    const original = png(6, undefined, 3840);
+    decode.mockImplementationOnce(async (_blob, options?: ImageBitmapOptions) => ({
+      width: options?.resizeWidth ?? 3840,
+      height: options?.resizeHeight ?? 2048,
+      close,
+    }));
+    readPixels.mockImplementation((_x, _y, width, height) => {
+      const data = new Uint8ClampedArray(width * height * 4).fill(255);
+      data[data.length - 1] = 0;
+      return { data };
+    });
+    encode.mockImplementationOnce(async (options: ImageEncodeOptions) => (
+      new Blob(['png'], { type: options.type })
+    ));
+
+    const uploaded = await prepareReferenceImageUpload(original);
+
+    expect(uploaded.type).toBe('image/png');
+    expect(encode).toHaveBeenCalledWith({ type: 'image/png' });
+    expect(sizes).toEqual([[2048, 1092]]);
   });
 
   it.each([png(2, 'acTL'), png(3), png(2, undefined, 20000)])(
