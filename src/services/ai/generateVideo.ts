@@ -245,8 +245,7 @@ export function compileVideoReferencePrompt(
 }
 
 function assignVideoReferenceRoles(references: readonly MediaReference[]): MediaReference[] {
-  // 手动挑过参考帧：保留指派，其余降为普通参考图，并按 首帧 → 中间 → 尾帧 重排
-  // （APIMart / 即梦 / 通用协议都只看图片顺序判断首尾帧）
+  // 只有用户明确挑选的参考帧才保留首/尾帧语义，并按 首帧 → 参考图 → 尾帧 重排。
   if (hasManualFrameRoles(references)) {
     const rank = (role: MediaReferenceRole) => (role === 'first_frame' ? 0 : role === 'last_frame' ? 2 : 1);
     return references
@@ -256,15 +255,9 @@ function assignVideoReferenceRoles(references: readonly MediaReference[]): Media
       }))
       .sort((a, b) => rank(a.role) - rank(b.role));
   }
-  const imageIndexes = references.flatMap((reference, index) => (
-    reference.kind === 'image' ? [index] : []
-  ));
-  const firstImageIndex = imageIndexes[0];
-  const lastImageIndex = imageIndexes.length > 1 ? imageIndexes[imageIndexes.length - 1] : undefined;
-  return references.map((reference, index) => {
+  // 连线图片和普通 @ 图片默认都是参考图，不能再按图片顺序偷偷推断首尾帧。
+  return references.map((reference) => {
     if (reference.kind === 'audio') return { ...reference, role: 'reference_audio' };
-    if (index === firstImageIndex) return { ...reference, role: 'first_frame' };
-    if (index === lastImageIndex) return { ...reference, role: 'last_frame' };
     return { ...reference, role: 'reference' };
   });
 }
@@ -314,9 +307,8 @@ async function resolveVideoReferenceInput(
   );
   const collectedReferences = options.promptFirst
     ? mergeMediaReferences(promptInput.references, regularReferences) : regularReferences;
-  // 通用声明式协议必须保留用户/连线给出的角色：普通 reference 图片不能
-  // 被全局规则偷偷改成 first_frame，否则 MetaSo 一类接口会把互斥模式混在一起。
-  // 内置 Provider 暂时保留原有“按图片顺序推断首尾帧”的兼容行为。
+  // 普通 reference 图片不能被偷偷改成 first_frame；内置 Provider 也只接受用户
+  // 明确指定的首/尾帧角色，连线与 @ 图片默认保持普通参考语义。
   const references = options.preserveDeclaredRoles || options.promptFirst
     ? collectedReferences.map((reference) => reference.kind === 'audio'
       ? { ...reference, role: 'reference_audio' as const }

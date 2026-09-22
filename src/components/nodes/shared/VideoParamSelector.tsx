@@ -194,6 +194,26 @@ export function resolveEffectiveVideoParameterCapability(
   };
 }
 
+/** 只有用户显式指定首/尾帧才进入 keyframe；普通连线图片只是参考图。 */
+// eslint-disable-next-line react-refresh/only-export-components
+export function resolveVideoParameterInputMode(
+  frameReferences: readonly Pick<VideoReferenceItem, 'role'>[],
+  characterReferenceCount: number,
+  connectedCounts: { image: number; video: number; audio: number },
+): VideoGenerationInputMode {
+  const hasKeyframe = frameReferences.some((item) => (
+    item.role === 'first_frame' || item.role === 'last_frame'
+  ));
+  const hasReference = characterReferenceCount > 0
+    || frameReferences.some((item) => item.role === 'reference')
+    || connectedCounts.image > 0
+    || connectedCounts.video > 0
+    || connectedCounts.audio > 0;
+  if (hasKeyframe && hasReference) return 'mixed';
+  if (hasKeyframe) return 'keyframe';
+  return hasReference ? 'reference' : 'text';
+}
+
 /** 返回扁平数组，供 useShallow 对节点引用逐项比较并复用上一次快照。 */
 // eslint-disable-next-line react-refresh/only-export-components
 export function selectConnectedVideoSourceNodes(
@@ -353,20 +373,15 @@ export default function VideoParamSelector({
   const baseParameterCapability = nativeParameterCapability
     ?? workflowApiCapability
     ?? generalCapability;
-  const usesAutomaticConnectedFrameRoles = frameReferences.length === 0
-    && connectedImageNodes.length > 0;
-  const hasSelectedKeyframe = usesAutomaticConnectedFrameRoles
-    || frameReferences.some((item) => (
-      item.role === 'first_frame' || item.role === 'last_frame'
-    ));
-  const hasSelectedReference = characterReferences.length > 0
-    || frameReferences.some((item) => item.role === 'reference')
-    || (usesAutomaticConnectedFrameRoles && connectedImageNodes.length > 2)
-    || connectedVideoCount > 0
-    || connectedAudioCount > 0;
-  const selectedInputMode: VideoGenerationInputMode = hasSelectedKeyframe
-    ? hasSelectedReference ? 'mixed' : 'keyframe'
-    : hasSelectedReference ? 'reference' : 'text';
+  const selectedInputMode = resolveVideoParameterInputMode(
+    frameReferences,
+    characterReferences.length,
+    {
+      image: connectedImageNodes.length,
+      video: connectedVideoCount,
+      audio: connectedAudioCount,
+    },
+  );
   const selectedOperation: VideoGenerationOperation = connectedVideoCount > 0
     ? 'video-to-video'
     : references.length > 0 || connectedImageNodes.length > 0

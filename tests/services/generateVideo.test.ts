@@ -24,6 +24,7 @@ import * as apimartApi from '../../src/services/ai/apimartGen';
 import * as imageUtils from '../../src/services/ai/imageUtils';
 import * as uploadService from '../../src/services/uploadService';
 import { createSeedanceQuickAdaptTemplate } from '../../src/services/ai/seedanceModelCapabilities';
+import { resolveVideoParameterInputMode } from '../../src/components/nodes/shared/VideoParamSelector';
 import type {
   ModelExecutionProfile,
   VideoModelCapability,
@@ -636,6 +637,15 @@ describe('Volcengine Seedance content', () => {
 });
 
 describe('manual frame and character references', () => {
+  it('treats connected images as references until the user explicitly assigns a frame role', () => {
+    expect(resolveVideoParameterInputMode([], 0, { image: 1, video: 0, audio: 0 }))
+      .toBe('reference');
+    expect(resolveVideoParameterInputMode([{ role: 'first_frame' }], 0, { image: 0, video: 0, audio: 0 }))
+      .toBe('keyframe');
+    expect(resolveVideoParameterInputMode([{ role: 'last_frame' }], 1, { image: 0, video: 0, audio: 0 }))
+      .toBe('mixed');
+  });
+
   it('reorders references by the node 首帧/尾帧 picks and keeps 参考角色 as plain references', async () => {
     const imageNode = (id: string, url: string): Node<BaseNodeData> => ({
       id,
@@ -759,7 +769,7 @@ describe('manual frame and character references', () => {
       .toBe('推开门走进房间');
   });
 
-  it('leaves the connection order alone when nothing was picked', async () => {
+  it('keeps connected and mentioned images as plain references when no frame role was picked', async () => {
     const imageNode = (id: string, url: string): Node<BaseNodeData> => ({
       id,
       type: 'ai-image',
@@ -770,6 +780,7 @@ describe('manual frame and character references', () => {
       nodes: [
         imageNode('image-a', 'https://cdn.example/a.png'),
         imageNode('image-b', 'https://cdn.example/b.png'),
+        imageNode('image-c', 'https://cdn.example/c.png'),
         { id: 'video-1', type: 'ai-video', position: { x: 0, y: 0 }, data: { label: '镜头', type: 'ai-video' } },
       ],
       edges: ['image-a', 'image-b'].map((source) => ({ id: `e-${source}`, source, target: 'video-1' })),
@@ -787,7 +798,7 @@ describe('manual frame and character references', () => {
 
     try {
       await generateVideo({
-        prompt: '推进镜头',
+        prompt: '@{image-c:人物参考} 推进镜头',
         model: 'test/frame-default',
         provider: 'test-frame-default-provider',
         nodeId: 'video-1',
@@ -797,8 +808,13 @@ describe('manual frame and character references', () => {
     }
 
     const referenceInput = captured as VideoGenerationReferenceInput | null;
-    expect(referenceInput?.imageUrls).toEqual(['https://cdn.example/a.png', 'https://cdn.example/b.png']);
-    expect(referenceInput?.references?.map((reference) => reference.role)).toEqual(['first_frame', 'last_frame']);
+    expect(referenceInput?.imageUrls).toEqual([
+      'https://cdn.example/c.png',
+      'https://cdn.example/a.png',
+      'https://cdn.example/b.png',
+    ]);
+    expect(referenceInput?.references?.map((reference) => reference.role))
+      .toEqual(['reference', 'reference', 'reference']);
   });
 });
 
@@ -833,8 +849,8 @@ describe('caller-supplied reference media', () => {
         model: 'test/transition',
         provider: 'test-transition-provider',
         referenceMedia: [
-          { kind: 'image', url: 'asset://tail.png', origin: 'connection', role: 'reference' },
-          { kind: 'image', url: 'asset://head.png', origin: 'connection', role: 'reference' },
+          { kind: 'image', url: 'asset://tail.png', origin: 'connection', role: 'first_frame' },
+          { kind: 'image', url: 'asset://head.png', origin: 'connection', role: 'last_frame' },
         ],
       });
     } finally {
@@ -845,19 +861,22 @@ describe('caller-supplied reference media', () => {
     expect(referenceInput?.operation).toBe('image-to-video');
     expect(referenceInput?.imageUrls).toEqual([
       'asset://tail.png',
-      'asset://head.png',
       'https://cdn.example/concept.png',
+      'asset://head.png',
     ]);
-    // 首帧固定是调用方给的第一张；尾帧是整串的最后一张
+    // 只有调用方明确指定的图片承担首尾帧，提示词中的图片保持普通参考。
     expect(referenceInput?.references?.[0]).toMatchObject({
       url: 'asset://tail.png',
       role: 'first_frame',
     });
     expect(referenceInput?.references?.[1]).toMatchObject({
-      url: 'asset://head.png',
+      url: 'https://cdn.example/concept.png',
       role: 'reference',
     });
-    expect(referenceInput?.references?.at(-1)).toMatchObject({ role: 'last_frame' });
+    expect(referenceInput?.references?.at(-1)).toMatchObject({
+      url: 'asset://head.png',
+      role: 'last_frame',
+    });
   });
 });
 
