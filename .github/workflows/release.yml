@@ -74,32 +74,15 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: 'AI Canvas v0.9.16 - H3/Seedance 模板统一与画布性能模式'
+          releaseName: 'AI Canvas v0.9.17 - 修复 Seedance 2.5 时长截断'
           releaseBody: |
             ## ✨ 版本摘要
 
-            AI Canvas v0.9.16 统一 MiniMax H3 与 Seedance 的供应商模板与接口接入，完善 ComfyUI 终态判断与显存策略；参考图上传前自动将 4K 图像缩至 2K 以减小体积，并新增性能模式画布显示优化。同时更新贡献者列表。
+            AI Canvas v0.9.17 修复 Seedance 2.5 生成视频时时长被截断为 15 秒的问题，按模型能力正确解析并传递时长参数。
 
-            ## 🔌 供应商模板统一
+            ## 🐛 修复
 
-            - 统一 MiniMax H3 模板与接口适配，补全 H3 模型能力定义，并在连接对话框与视频能力编辑器中同步。
-            - 统一 Seedance 模板与接口接入，扩展 Seedance 模型能力，并支持配置草稿与工具侧同步。
-
-            ## 🖼️ 参考图上传
-
-            - 4K 参考图在上传前自动缩放到 2K，减少上传体积并提升请求成功率。
-
-            ## 🧩 ComfyUI 稳定性
-
-            - 完善终态判断与显存策略，减少任务状态误判与显存不足导致的失败。
-
-            ## ⚡ 画布性能
-
-            - 新增性能模式画布显示优化，按显示层级降低图片渲染开销。
-
-            ## 📄 其他
-
-            - 更新贡献者列表。
+            - 修复 Seedance 2.5 视频时长被截为 15 秒的问题，时长参数按模型支持范围正确传递。
 
             ## ⚠️ 升级与兼容性
 
