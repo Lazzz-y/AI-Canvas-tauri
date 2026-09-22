@@ -128,9 +128,11 @@ export function createCanvasImageDisplay(options: {
   }
 
   return {
-    viewport(zoom: number, width: number, height: number, pixelRatio: number) {
+    viewport(zoom: number, width: number, height: number, pixelRatio: number, performanceMode = false) {
       if (!Number.isFinite(zoom) || zoom <= 0) return;
-      request(canvasImageTier(Math.max(width, height) * zoom * pixelRatio, target));
+      const tier = canvasImageTier(Math.max(width, height) * zoom * pixelRatio, target);
+      // 只限制画布预览的自动档位；原图查看和加载失败回退仍保留。
+      request(performanceMode && tier === 0 ? 1024 : tier);
     },
     original() { request(0, true); },
     committed(lease: DisplayImageLease) {

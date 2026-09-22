@@ -1,5 +1,6 @@
 import { memo, useContext, useEffect, useLayoutEffect, useRef, useState, type ImgHTMLAttributes } from 'react';
 import { useStoreApi } from '@xyflow/react';
+import { useAppStore } from '../../../../store/useAppStore';
 import { CanvasNodeLodContext } from '../../../../hooks/useCanvasNodeLod';
 import { createCanvasDisplayScheduler } from '../../../../services/canvasDisplayScheduler';
 import { createCanvasImageDisplay, type DisplayImageLease } from './canvasImageDisplay';
@@ -21,7 +22,7 @@ function CanvasPreviewImage({ src, nodeWidth, nodeHeight, nodeId, projectId, onE
 
   useLayoutEffect(() => {
     geometry.current = { width: nodeWidth, height: nodeHeight };
-    controller.current?.viewport(flow.getState().transform[2], nodeWidth, nodeHeight, window.devicePixelRatio || 1);
+    controller.current?.viewport(flow.getState().transform[2], nodeWidth, nodeHeight, window.devicePixelRatio || 1, useAppStore.getState().config.performanceMode === true);
   }, [flow, nodeWidth, nodeHeight]);
 
   useEffect(() => {
@@ -40,19 +41,27 @@ function CanvasPreviewImage({ src, nodeWidth, nodeHeight, nodeId, projectId, onE
     controller.current = display;
     let lastZoom: number | undefined;
     let lastRatio: number | undefined;
+    let lastPerformanceMode: boolean | undefined;
     const refresh = () => {
       const zoom = flow.getState().transform[2];
       const ratio = window.devicePixelRatio || 1;
-      if (lastZoom === zoom && lastRatio === ratio) return;
+      const performanceMode = useAppStore.getState().config.performanceMode === true;
+      if (lastZoom === zoom && lastRatio === ratio && lastPerformanceMode === performanceMode) return;
       lastZoom = zoom;
       lastRatio = ratio;
-      display.viewport(zoom, geometry.current.width, geometry.current.height, ratio);
+      lastPerformanceMode = performanceMode;
+      display.viewport(zoom, geometry.current.width, geometry.current.height, ratio, performanceMode);
     };
     refresh();
     const unsubscribe = flow.subscribe(refresh);
+    // 更新现有控制器，保留当前图片和租约，避免开关引发整批图片重新挂载。
+    const unsubscribeConfig = useAppStore.subscribe((state, previous) => {
+      if (state.config.performanceMode !== previous.config.performanceMode) refresh();
+    });
     window.addEventListener('resize', refresh);
     return () => {
       unsubscribe();
+      unsubscribeConfig();
       window.removeEventListener('resize', refresh);
       display.dispose();
       fallback?.deactivate();

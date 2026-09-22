@@ -84,6 +84,44 @@ describe('canvas image preparation', () => {
 });
 
 describe('canvas image display transitions', () => {
+  it.each([1, 1.5, 2])('caps only performance previews at DPR %s, keeping the image until the replacement commits', async (dpr) => {
+    const f = fixture();
+    f.display.viewport(3, 1024, 768, dpr);
+    await f.settle();
+    expect(f.prepare.mock.calls[0][1]).toBe(0);
+    const originalSignal = f.prepare.mock.calls[0][2];
+    f.queue.interaction(true);
+    f.display.viewport(3, 1024, 768, dpr, true);
+    await f.tick(1000);
+    expect(f.prepare).toHaveBeenCalledOnce();
+    expect(originalSignal.aborted).toBe(false);
+    f.queue.interaction(false); await f.settle();
+    expect(f.prepare.mock.calls[1][1]).toBe(1024);
+    expect(originalSignal.aborted).toBe(false);
+    f.display.committed(f.publish.mock.calls[1][0]);
+    expect(originalSignal.aborted).toBe(true);
+    // 同一模式内的大倍率往返不再请求原图，也不重复生成最高档。
+    for (const zoom of [2, 5, 1.2, 3]) f.display.viewport(zoom, 1024, 768, dpr, true);
+    await f.settle(); expect(f.prepare).toHaveBeenCalledTimes(2);
+    f.display.viewport(3, 1024, 768, dpr, false); await f.settle();
+    expect(f.prepare.mock.calls[2][1]).toBe(0);
+    f.display.dispose();
+  });
+
+  it('keeps small tiers and error fallback in performance mode, cancelling obsolete mode changes', async () => {
+    const f = fixture();
+    for (const [zoom, edge] of [[0.2, 256], [0.4, 512], [0.8, 1024]]) {
+      f.display.viewport(zoom, 512, 288, 2, true); await f.settle();
+      expect(f.prepare.mock.lastCall?.[1]).toBe(edge);
+    }
+    f.display.viewport(3, 512, 288, 2, false);
+    f.display.viewport(3, 512, 288, 2, true);
+    await f.settle(); expect(f.prepare).toHaveBeenCalledTimes(3);
+    f.display.original(); await f.settle();
+    expect(f.prepare.mock.lastCall?.[1]).toBe(0);
+    f.display.dispose();
+  });
+
   it.each([1, 1.5, 2])('holds tiers around every boundary at DPR %s and crosses outside hysteresis', (dpr) => {
     for (const [edge, next] of [[256, 512], [512, 1024], [1024, 0]]) {
       let tier = edge;

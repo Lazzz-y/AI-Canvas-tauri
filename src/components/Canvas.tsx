@@ -398,9 +398,17 @@ function CanvasInner() {
   const flowStore = useStoreApi();
   const lodSession = useMemo(() => ({
     projectId: currentProjectId,
-    runtime: createCanvasNodeLodRuntime(reactFlowInstance.getViewport().zoom),
+    runtime: createCanvasNodeLodRuntime(reactFlowInstance.getViewport().zoom, undefined, useAppStore.getState().config.performanceMode === true),
   }), [currentProjectId, reactFlowInstance]);
   const nodeLodRuntime = lodSession.runtime;
+  useEffect(() => {
+    nodeLodRuntime.setPerformanceMode(useAppStore.getState().config.performanceMode === true);
+    return useAppStore.subscribe((state, previous) => {
+      if (state.config.performanceMode !== previous.config.performanceMode) {
+        nodeLodRuntime.setPerformanceMode(state.config.performanceMode === true);
+      }
+    });
+  }, [nodeLodRuntime]);
   useEffect(() => {
     nodeLodRuntime.activate();
     const { x, y, zoom } = reactFlowInstance.getViewport();
@@ -464,6 +472,7 @@ function CanvasInner() {
   const latestCanvasZoomRef = useRef(Number.NaN);
   const localToolbarsRef = useRef(new Set<HTMLElement>());
   const localGooeyButtonsRef = useRef(new Set<HTMLElement>());
+  const cachedZoomTargetsRef = useRef(new WeakSet<Set<HTMLElement>>());
   const zoomTargetsObserverRef = useRef<MutationObserver | null>(null);
 
   const clearLocalZoomCompensation = useCallback(() => {
@@ -471,6 +480,8 @@ function CanvasInner() {
     localGooeyButtonsRef.current.forEach((element) => element.style.removeProperty('--gooey-inv-zoom'));
     localToolbarsRef.current.clear();
     localGooeyButtonsRef.current.clear();
+    cachedZoomTargetsRef.current.delete(localToolbarsRef.current);
+    cachedZoomTargetsRef.current.delete(localGooeyButtonsRef.current);
   }, []);
 
   const updateNodeZoomCompensation = useCallback((zoom: number, refreshTargets = false) => {
@@ -489,7 +500,12 @@ function CanvasInner() {
       // 普通平移无需查找控件；缩放只改控件自身，避免根变量让整个媒体子树重算样式。
       if (!refreshTargets && zoom === previousZoom) return;
       const updateLocal = (selector: string, elements: Set<HTMLElement>, property: string, value: number) => {
-        canvasRoot.querySelectorAll<HTMLElement>(selector).forEach((element) => elements.add(element));
+        // 性能模式只在首次使用、挂载/可见状态变化时搜索；空结果也缓存。
+        // 普通模式保持原有查询路径，开关切换不影响控件的缩放补偿。
+        if (useAppStore.getState().config.performanceMode !== true || refreshTargets || !cachedZoomTargetsRef.current.has(elements)) {
+          canvasRoot.querySelectorAll<HTMLElement>(selector).forEach((element) => elements.add(element));
+          cachedZoomTargetsRef.current.add(elements);
+        }
         const text = String(value);
         elements.forEach((element) => {
           if (!canvasRoot.contains(element)) {

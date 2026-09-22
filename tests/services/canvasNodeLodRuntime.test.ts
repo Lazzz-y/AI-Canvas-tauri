@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CANVAS_NODE_LOD, createCanvasNodeLodRuntime } from '../../src/services/canvasNodeLodRuntime';
 
-function fixture(zoom = 0.12) {
+function fixture(zoom = 0.12, performanceMode = false) {
   let nextFrame = 0;
   const frames = new Map<number, () => void>();
   const runtime = createCanvasNodeLodRuntime(zoom, {
@@ -10,7 +10,7 @@ function fixture(zoom = 0.12) {
     cancelFrame: (id) => { frames.delete(id); },
     delay: (callback, ms) => setTimeout(callback, ms),
     cancelDelay: (id) => clearTimeout(id),
-  });
+  }, performanceMode);
   const tick = () => {
     vi.advanceTimersByTime(16);
     const batch = [...frames.values()];
@@ -23,6 +23,64 @@ beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(0); });
 afterEach(() => { vi.useRealTimers(); });
 
 describe('canvas node LOD scheduling', () => {
+  it('only simplifies medium zoom in performance mode and uses separate hysteresis', () => {
+    const normal = fixture(0.4);
+    const fast = fixture(0.4, true);
+    expect(normal.runtime.getSnapshot('node')).toBe(true);
+    expect(fast.runtime.getSnapshot('node')).toBe(false);
+    fast.runtime.subscribe('node', vi.fn());
+    for (const zoom of [0.5, 0.55, 0.64]) {
+      fast.runtime.viewport(zoom); fast.tick();
+      expect(fast.runtime.getSnapshot('node')).toBe(false);
+    }
+    fast.runtime.viewport(0.65); fast.tick();
+    expect(fast.runtime.getSnapshot('node')).toBe(true);
+    fast.runtime.viewport(0.55); fast.tick();
+    expect(fast.runtime.getSnapshot('node')).toBe(true);
+    fast.runtime.viewport(0.54); fast.tick();
+    expect(fast.runtime.getSnapshot('node')).toBe(false);
+    normal.runtime.deactivate(); fast.runtime.deactivate();
+  });
+
+  it('switches modes through the idle queue, preserves pins and cancels stale downgrades', () => {
+    const f = fixture(0.4);
+    const changed = vi.fn();
+    f.runtime.subscribe('normal', changed);
+    f.runtime.subscribe('editing', changed);
+    const unpin = f.runtime.pin('editing');
+    f.runtime.interaction(true);
+    f.runtime.setPerformanceMode(true);
+    f.tick();
+    expect(changed).not.toHaveBeenCalled();
+    f.runtime.interaction(false);
+    vi.advanceTimersByTime(180); f.tick();
+    expect(f.runtime.getSnapshot('normal')).toBe(false);
+    expect(f.runtime.getSnapshot('editing')).toBe(true);
+    f.runtime.setPerformanceMode(false); f.tick();
+    expect(f.runtime.getSnapshot('normal')).toBe(true);
+    f.runtime.setPerformanceMode(true);
+    f.runtime.setPerformanceMode(false); f.tick();
+    expect(changed).toHaveBeenCalledTimes(2);
+    unpin(); f.tick();
+    expect(f.runtime.getSnapshot('editing')).toBe(true);
+    f.runtime.deactivate();
+  });
+
+  it('clears performance hysteresis on disable and still simplifies normal far zoom', () => {
+    const f = fixture(0.2, true);
+    f.runtime.subscribe('node', vi.fn());
+    f.runtime.setPerformanceMode(false); f.tick();
+    expect(f.runtime.getSnapshot('node')).toBe(true);
+    f.runtime.viewport(0.15); f.tick();
+    expect(f.runtime.getSnapshot('node')).toBe(false);
+    f.runtime.setPerformanceMode(true); f.tick();
+    f.runtime.setPerformanceMode(false); f.tick();
+    expect(f.runtime.getSnapshot('node')).toBe(false);
+    f.runtime.viewport(0.25); f.tick();
+    expect(f.runtime.getSnapshot('node')).toBe(true);
+    f.runtime.deactivate();
+  });
+
   it('uses hysteresis and never publishes on ordinary pan or threshold-band zoom', () => {
     const { runtime, tick } = fixture(1);
     const changed = vi.fn();
