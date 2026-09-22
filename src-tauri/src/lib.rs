@@ -23,6 +23,7 @@ mod assistant_web;
 #[path = "director/blender_runtime/mod.rs"]
 mod blender_runtime;
 mod canvas_input;
+mod native_rendering;
 #[path = "files/clipboard.rs"]
 mod clipboard;
 #[path = "files/clipboard_read.rs"]
@@ -1105,6 +1106,10 @@ async fn dreamina_login(app: tauri::AppHandle) -> Result<DreaminaLoginPayload, S
 }
 
 pub fn run() {
+    #[allow(unused_mut)]
+    let mut context = tauri::generate_context!();
+    #[cfg(windows)]
+    let main_window_config = native_rendering::defer_main_window(context.config_mut());
     // Windows WebView2/Chromium 渲染优化：
     // - CalculateNativeWinOcclusion：原生窗口遮挡检测。在虚拟显示适配器 / 远程桌面
     //   工具（MuMu、向日葵、Virtual Display 等）环境下常误判窗口被遮挡，从而错误节流。
@@ -1124,6 +1129,7 @@ pub fn run() {
     let proxy_http_state = ProxyHttpState::new().expect("初始化代理 HTTP 客户端失败");
 
     tauri::Builder::default()
+        .manage(native_rendering::NativeRenderingState::default())
         .manage(proxy_http_state)
         .manage(blender_runtime::BlenderRuntimeState::default())
         .manage(blender_runtime::ProjectGrantState::default())
@@ -1191,6 +1197,7 @@ pub fn run() {
             reveal_in_file_manager,
             toggle_devtools,
             set_main_window_native_corners,
+            native_rendering::sync_native_performance_mode,
             sync_authorized_directories,
             comfyui::launch_comfyui,
             comfyui::open_comfyui_window,
@@ -1270,7 +1277,7 @@ pub fn run() {
                 ));
             }
         })
-        .setup(|_app| {
+        .setup(move |_app| {
             // 凭据目录只允许本进程的 secret_* 命令访问：从 fs 与 asset scope 中拒掉，
             // 否则 Renderer 能绕过命令直接读走整份凭据文件
             secret_store::deny_secret_dir_access(_app.handle());
@@ -1283,9 +1290,11 @@ pub fn run() {
                 eprintln!("[blender-runtime] {error}");
             }
 
+            #[cfg(windows)]
+            native_rendering::create_main_window(_app, main_window_config)?;
             Ok(())
         })
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while building tauri application")
         .run(|app_handle, event| {
             if matches!(event, tauri::RunEvent::Exit) {

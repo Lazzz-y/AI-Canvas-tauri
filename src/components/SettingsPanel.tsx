@@ -31,6 +31,7 @@ import type { BackgroundDetection } from '../services/backgroundService';
 
 import type { SettingsTab } from '../store/store.ui';
 import { LOCALES, LOCALE_LABELS, getLocale, useT } from '../i18n';
+import { applyNativePerformanceMode, isNativePerformanceModeSupported } from '../services/nativePerformanceModeService';
 
 /** 窗口尺寸预设：每种比例给紧凑 / 标准 / 大屏三档主流尺寸 */
 const WINDOW_ASPECT_OPTIONS: {
@@ -177,6 +178,16 @@ export default function SettingsPanel() {
   const sidebarFloating = config.sidebarFloating === true; // 默认关闭
   const configuredWindowGlassFrame = config.windowGlassFrame !== false; // 默认开启
   const performanceMode = config.performanceMode === true;
+  const [performanceApplying, setPerformanceApplying] = useState(false);
+  const applyPerformanceMode = async (enabled: boolean) => {
+    setPerformanceApplying(true);
+    try {
+      await applyNativePerformanceMode(enabled);
+      if (!enabled && isNativePerformanceModeSupported()) showToast(t('已关闭性能模式，原生图形设置将在下次启动时恢复'));
+    } catch (error) {
+      showToast(t(error instanceof Error ? error.message : '图形启动设置保存失败，未重启'), 'error');
+    } finally { setPerformanceApplying(false); }
+  };
   const windowAspectRatio = config.windowAspectRatio ?? '16:9';
   const windowAspectLocked = config.windowAspectLocked === true;
   const customCursor = config.customCursor !== false; // 默认开启
@@ -977,10 +988,9 @@ export default function SettingsPanel() {
                   <h3 className="text-sm font-medium text-canvas-text mb-2">{t('图形与性能')}</h3>
                   <button
                     type="button"
-                    onClick={() => {
-                      updateConfig({ performanceMode: !performanceMode });
-                      void persist();
-                    }}
+                    onClick={() => { void applyPerformanceMode(!performanceMode); }}
+                    disabled={!configHydrated || performanceApplying}
+                    aria-busy={performanceApplying}
                     aria-pressed={performanceMode}
                     className={`sidebar-pref-card${performanceMode ? ' is-floating' : ''}`}
                   >
@@ -1015,6 +1025,14 @@ export default function SettingsPanel() {
                       <span />
                     </div>
                   </button>
+                  {isNativePerformanceModeSupported() && (
+                    <div className="mt-2 text-xs text-canvas-text-secondary">
+                      {t('开启后将保存并自动重启，正在运行的任务会中断；关闭后下次启动恢复原生图形设置。')}
+                      {performanceMode && <button type="button" className="ui-btn ui-btn--sm ml-2" disabled={performanceApplying} onClick={() => { void applyPerformanceMode(true); }}>
+                        {t('重新应用')}
+                      </button>}
+                    </div>
+                  )}
                 </div>
 
                 {/* 侧边栏是否悬浮显示 */}

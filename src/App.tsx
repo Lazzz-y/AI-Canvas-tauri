@@ -37,6 +37,8 @@ import type { MascotHandle } from './components/shared/mascot/Mascot';
 import { initComfyUIWindowBridge } from './services/comfyUIWindowService';
 import { invoke } from '@tauri-apps/api/core';
 import { prepareSettingsClose, resumeSettingsPersistence } from './services/configPersistenceQueue';
+import { applyNativePerformanceMode, registerPerformanceRestartHost } from './services/nativePerformanceModeService';
+import { t } from './i18n';
 
 const isTauri = typeof window !== 'undefined' && '__TAURI__' in window;
 
@@ -127,7 +129,7 @@ export default function App() {
 
   // 开屏动画状态
   const [splashDone, setSplashDone] = useState(false);
-  const [closePhase, setClosePhase] = useState<'saving' | 'closing' | null>(null);
+  const [closePhase, setClosePhase] = useState<'saving' | 'closing' | 'restarting' | null>(null);
   const closeInProgress = useRef(false);
   const [freeDistributionNoticeOpen, setFreeDistributionNoticeOpen] = useState(
     () => localStorage.getItem(FREE_DISTRIBUTION_NOTICE_SEEN_KEY) !== 'true',
@@ -152,6 +154,9 @@ export default function App() {
   const [updateBubbleVisible, setUpdateBubbleVisible] = useState(false);
   const [updating, setUpdating] = useState(false);
   const configHydrated = useAppStore((state) => state.configHydrated);
+  const projectLoadStatus = useAppStore((state) => state.projectLoadStatus);
+  const nativePerformanceSynced = useRef(false);
+  const [projectBootReady, setProjectBootReady] = useState(false);
   const mcpAutoStart = useAppStore((state) => state.config.mcpAutoStart === true);
 
   // 开屏动画结束后后台静默检查更新
@@ -195,7 +200,7 @@ export default function App() {
         store.setProjectLibraryOpen(true);
       }
       return migrateHistoryAndLoad();
-    });
+    }).then(() => setProjectBootReady(true));
   }, [initFromDb, migrateHistoryAndLoad]);
 
   // 退出期间阻止画布快捷键继续编辑；窗口原生关闭请求由下面的重入锁处理。
@@ -208,6 +213,29 @@ export default function App() {
     window.addEventListener('keydown', blockKeyDown, true);
     return () => window.removeEventListener('keydown', blockKeyDown, true);
   }, [closePhase]);
+
+  // 性能模式重启与原生关闭共用互斥锁和输入遮罩；保存编排由服务负责。
+  useEffect(() => registerPerformanceRestartHost(async (work) => {
+    if (closeInProgress.current) throw new Error('窗口正在保存，请稍后重试');
+    closeInProgress.current = true;
+    try {
+      flushSync(() => setClosePhase('restarting'));
+      // 先展示遮罩，避免保存期间继续编辑；不依赖可能被遮挡节流的 rAF。
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+      await work();
+    } finally {
+      closeInProgress.current = false;
+      setClosePhase(null);
+    }
+  }), []);
+
+  useEffect(() => {
+    if (!isTauri || !splashDone || !projectBootReady || !configHydrated || projectLoadStatus !== 'ready' || nativePerformanceSynced.current) return;
+    nativePerformanceSynced.current = true;
+    void applyNativePerformanceMode().catch((error: unknown) => {
+      useAppStore.getState().showToast(t(error instanceof Error ? error.message : '图形启动设置保存失败，未重启'), 'error');
+    });
+  }, [configHydrated, projectBootReady, projectLoadStatus, splashDone]);
 
   // 保存与清理完成后再关闭窗口，全程展示反馈。
   useEffect(() => {
@@ -675,9 +703,9 @@ export default function App() {
               className="h-7 w-7 animate-spin rounded-full border-2 border-canvas-border border-t-canvas-text-secondary motion-reduce:animate-none"
             />
             <p className="text-sm font-medium text-canvas-text">
-              {closePhase === 'closing' ? '正在关闭…' : '正在保存，准备关闭…'}
+              {closePhase === 'restarting' ? t('正在保存并重启，应用性能模式…') : closePhase === 'closing' ? '正在关闭…' : '正在保存，准备关闭…'}
             </p>
-            <p className="text-xs text-canvas-text-secondary">完成后将自动退出，请稍候</p>
+            <p className="text-xs text-canvas-text-secondary">{closePhase === 'restarting' ? t('完成后将自动重新打开，请稍候') : '完成后将自动退出，请稍候'}</p>
           </div>
         </ModalOverlay>
       </>

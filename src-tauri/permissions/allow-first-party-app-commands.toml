@@ -51,6 +51,7 @@ commands.allow = [
   "reveal_in_file_manager",
   "toggle_devtools",
   "set_main_window_native_corners",
+  "sync_native_performance_mode",
   "sync_authorized_directories",
   "launch_comfyui",
   "open_comfyui_window",

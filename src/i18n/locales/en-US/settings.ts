@@ -2,6 +2,20 @@
  * 设置面板：语言与启动 / 画布背景 / 画布交互 / 界面偏好
  */
 const settings = {
+  "图形启动设置保存失败，未重启": "Could not save graphics startup settings. The app was not restarted.",
+  "设置尚未保存，已取消自动重启": "Settings are not saved. Automatic restart was cancelled.",
+  "项目尚未就绪，已取消自动重启": "The project is not ready. Automatic restart was cancelled.",
+  "项目保存未完成，已取消自动重启": "The project could not be fully saved. Automatic restart was cancelled.",
+  "性能模式已变更，已取消自动重启": "Performance mode changed. Automatic restart was cancelled.",
+  "自动重启失败，请手动退出并重新打开应用": "Automatic restart failed. Please quit and reopen the app.",
+  "设置尚未加载，暂时无法切换性能模式": "Settings are still loading. Performance mode cannot be changed yet.",
+  "主窗口尚未就绪，已取消自动重启": "The main window is not ready. Automatic restart was cancelled.",
+  "窗口正在保存，请稍后重试": "The window is saving. Please try again shortly.",
+  "正在保存并重启，应用性能模式…": "Saving and restarting to apply performance mode…",
+  "完成后将自动重新打开，请稍候": "The app will reopen automatically. Please wait.",
+  "已关闭性能模式，原生图形设置将在下次启动时恢复": "Performance mode is off. Native graphics settings will revert on the next launch.",
+  "开启后将保存并自动重启，正在运行的任务会中断；关闭后下次启动恢复原生图形设置。": "Enabling saves and restarts the app, interrupting running tasks. Disabling restores native graphics settings on the next launch.",
+  "重新应用": "Reapply",
   "自定义平台、工作流路径、输入参数与结果映射": "Configure platforms, workflow paths, inputs and result mappings",
   "填写平台提供的密钥": "Enter the platform API key",
   "填写平台提供的密钥，鉴权方式和前缀在各工作流的调用协议中配置。": "Enter your platform key. Configure its authentication method and prefix in each workflow protocol.",
