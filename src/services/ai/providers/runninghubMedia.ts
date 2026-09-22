@@ -12,7 +12,7 @@ import { registerCanvasDerivation, isCanvasDerivationFresh, completeCanvasDeriva
 import { registerNodePolling, cleanupNodePolling, getPendingTasksForProject, savePendingTask, updatePendingTask, removePendingTask } from '../../pollManager';
 import { uploadRunningHubMedia } from './runninghubClient';
 import { saveRunningHubOutputs, RunningHubTaskFailed, type RunningHubReferences } from './runninghubWorkflow';
-import { getRunningHubModel, isLegacyRunningHubModel, parseRunningHubModelParameter, type RunningHubModelDefinition, type RunningHubModelValue } from './runninghubModelManifest';
+import { getRunningHubModel, isLegacyRunningHubModel, parseRunningHubModelParameter, runningHubFrameRole, type RunningHubModelDefinition, type RunningHubModelValue } from './runninghubModelManifest';
 import { mapImageDimensions } from '../../aiDimensions';
 
 class RunningHubModelRequestError extends Error {
@@ -51,14 +51,6 @@ type RunningHubRoleAwareReferences = RunningHubReferences & {
   /** 与 image 数组同序；缺失项按普通参考图处理。 */
   imageRoles?: MediaReferenceRole[];
 };
-
-function runningHubFrameRole(field: RunningHubModelDefinition['parameters'][number]): 'first_frame' | 'last_frame' | undefined {
-  if (field.binding !== 'image') return undefined;
-  const semantic = `${field.name} ${field.label} ${field.hint ?? ''}`.toLowerCase();
-  if (/尾帧|(?:last|end)[\s_-]*(?:frame|image)/.test(semantic)) return 'last_frame';
-  if (/首帧|(?:first|start)[\s_-]*(?:frame|image)/.test(semantic)) return 'first_frame';
-  return undefined;
-}
 
 function runningHubReferenceSelection(
   model: RunningHubModelDefinition,

@@ -37,6 +37,22 @@ beforeEach(() => {
 afterEach(() => { cancelNodePolling('n1'); cancelNodePolling('runninghub-message-m1'); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe('RunningHub 标准媒体执行', () => {
+  it.each(['alibaba/wan-3.0/image-to-video', 'alibaba/wan-3.0-prime/image-to-video'])('万相首帧说明提及尾帧时仍正确绑定：%s', async (id) => {
+    const model = getRunningHubModel(id)!;
+    const first = 'https://input.test/first.png';
+    const last = 'https://input.test/last.png';
+    const body = await buildRunningHubModelRequest(connection, model, 'test', {}, {
+      image: [last, first], imageRoles: ['last_frame', 'first_frame'],
+    });
+    expect(body).toMatchObject({ firstFrameUrl: first, lastFrameUrl: last });
+    await expect(buildRunningHubModelRequest(connection, model, 'test', {}, {
+      image: [first], imageRoles: ['first_frame'],
+    })).resolves.toMatchObject({ firstFrameUrl: first });
+    await expect(buildRunningHubModelRequest(connection, model, 'test', {}, {
+      image: [last], imageRoles: ['last_frame'],
+    })).rejects.toThrow('首帧');
+    expect(mocks.fetch).not.toHaveBeenCalled();
+  });
   it.each(['image', 'video', 'audio'] as const)('%s 使用模型端点及 v2/query，保留长 ID 与所有已保存产物', async (value) => {
     setup(value); const result = await generate();
     expect(result[0].filePath).toBeTruthy();

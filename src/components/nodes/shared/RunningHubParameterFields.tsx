@@ -1,13 +1,12 @@
 import type { RunningHubParameter } from '../../../types/runninghub';
 import { runningHubParameterKey } from '../../../services/runninghubWorkflowService';
-import type { RunningHubModelDefinition } from '../../../services/ai/providers/runninghubModelManifest';
+import { runningHubFrameRole, type RunningHubModelDefinition } from '../../../services/ai/providers/runninghubModelManifest';
 import Select from '../../shared/Select';
 
 function frameBindingLabel(field: RunningHubModelDefinition['parameters'][number]): string | undefined {
-  if (field.binding !== 'image') return undefined;
-  const semantic = `${field.name} ${field.label} ${field.hint ?? ''}`.toLowerCase();
-  if (/尾帧|(?:last|end)[\s_-]*(?:frame|image)/.test(semantic)) return '已设置的尾帧';
-  if (/首帧|(?:first|start)[\s_-]*(?:frame|image)/.test(semantic)) return '已设置的首帧';
+  const role = runningHubFrameRole(field);
+  if (role === 'last_frame') return '已设置的尾帧';
+  if (role === 'first_frame') return '已设置的首帧';
   return undefined;
 }
 

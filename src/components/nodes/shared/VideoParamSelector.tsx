@@ -197,16 +197,21 @@ export function resolveEffectiveVideoParameterCapability(
 /** 只有用户显式指定首/尾帧才进入 keyframe；普通连线图片只是参考图。 */
 // eslint-disable-next-line react-refresh/only-export-components
 export function resolveVideoParameterInputMode(
-  frameReferences: readonly Pick<VideoReferenceItem, 'role'>[],
+  frameReferences: readonly (Pick<VideoReferenceItem, 'role'> & Partial<Pick<VideoReferenceItem, 'url'>>)[],
   characterReferenceCount: number,
-  connectedCounts: { image: number; video: number; audio: number },
+  connectedCounts: { image: number; video: number; audio: number; imageUrls?: readonly string[] },
 ): VideoGenerationInputMode {
   const hasKeyframe = frameReferences.some((item) => (
     item.role === 'first_frame' || item.role === 'last_frame'
   ));
+  // 生成入口按 URL 合并手动角色和连线图片；界面也应排除已被指定角色的同一张图。
+  const assignedUrls = new Set(frameReferences.flatMap((item) => item.url ? [item.url.trim()] : []));
+  const hasConnectedReference = connectedCounts.imageUrls
+    ? connectedCounts.imageUrls.some((url) => !assignedUrls.has(url.trim()))
+    : connectedCounts.image > 0;
   const hasReference = characterReferenceCount > 0
     || frameReferences.some((item) => item.role === 'reference')
-    || connectedCounts.image > 0
+    || hasConnectedReference
     || connectedCounts.video > 0
     || connectedCounts.audio > 0;
   if (hasKeyframe && hasReference) return 'mixed';
@@ -378,6 +383,7 @@ export default function VideoParamSelector({
     characterReferences.length,
     {
       image: connectedImageNodes.length,
+      imageUrls: connectedImageNodes.map((node) => (node.data as BaseNodeData).imageUrl!),
       video: connectedVideoCount,
       audio: connectedAudioCount,
     },

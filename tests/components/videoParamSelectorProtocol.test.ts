@@ -10,6 +10,7 @@ import VideoParamSelector, {
   resolveGeneralVideoModel,
   resolveGeneralVideoParameterDisplayState,
   resolveEffectiveVideoParameterCapability,
+  resolveVideoParameterInputMode,
   selectConnectedVideoSourceNodes,
 } from '../../src/components/nodes/shared/VideoParamSelector';
 import type { AppState } from '../../src/store/useAppStore';
@@ -31,6 +32,20 @@ describe('ComfyUI 时长显示与提交一致', () => {
 });
 
 describe('VideoParamSelector 自定义协议参数识别', () => {
+  it('手动首帧与同图连线合并，其他连线图片仍保留参考语义', () => {
+    const frames = [{ role: 'first_frame' as const, url: 'https://test/first.png' }];
+    const connected = { image: 1, video: 0, audio: 0, imageUrls: ['https://test/first.png'] };
+    const mode = resolveVideoParameterInputMode(frames, 0, connected);
+    expect(mode).toBe('keyframe');
+    expect(resolveEffectiveVideoParameterCapability({
+      ratios: ['16:9', 'adaptive'],
+      inputModeCapabilities: { keyframe: { ratios: ['adaptive'] } },
+    }, mode, 'image-to-video')?.ratios).toEqual(['adaptive']);
+    expect(resolveVideoParameterInputMode(frames, 0, {
+      ...connected, image: 2, imageUrls: [...connected.imageUrls, 'https://test/ref.png'],
+    })).toBe('mixed');
+    expect(resolveVideoParameterInputMode([], 0, connected)).toBe('reference');
+  });
   it('连接素材 selector 始终返回扁平节点数组，避免 React 外部快照循环', () => {
     const imageNode = {
       id: 'image',
