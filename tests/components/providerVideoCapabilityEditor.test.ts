@@ -49,7 +49,7 @@ describe('provider video capability editor normalization', () => {
     expect(source.inputModeCapabilities?.keyframe?.ratios).toEqual(['adaptive']);
   });
 
-  it('shows all explicit Seedance version and transport templates', () => {
+  it('shows all explicit Seedance and MiniMax H3 transport templates', () => {
     const html = renderToStaticMarkup(createElement(VideoCapabilityEditor, {
       model: {
         id: 'custom-video',
@@ -59,6 +59,7 @@ describe('provider video capability editor normalization', () => {
       },
       onChange: () => undefined,
       onApplySeedanceTemplate: () => undefined,
+      onApplyH3Template: () => undefined,
       onClose: () => undefined,
     }));
 
@@ -66,6 +67,9 @@ describe('provider video capability editor normalization', () => {
     expect(html).toContain('Seedance 2.5 · 火山原生');
     expect(html).toContain('Seedance 2.0 Mini · APIMart 兼容');
     expect(html).toContain('不会根据模型名称自动猜测');
+    expect(html).toContain('MiniMax H3 快速适配');
+    expect(html).toContain('MiniMax H3-Max · AI Ping 兼容');
+    expect(html).toContain('Context-IR 与 Regeneration 不属于普通视频生成模板');
   });
 
   it('does not turn the first allowed value into an undeclared default', () => {

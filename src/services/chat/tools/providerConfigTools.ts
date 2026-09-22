@@ -16,6 +16,7 @@ import { readProviderDocsPage } from '../../providerDocsService';
 import { describeWebReadStatus } from '../../webPageService';
 import { normalizeBaseUrl } from '../../ai/providerBaseUrl';
 import { SEEDANCE_QUICK_ADAPT_OPTIONS } from '../../ai/seedanceModelCapabilities';
+import { H3_QUICK_ADAPT_OPTIONS } from '../../ai/h3ModelCapabilities';
 import {
   CHAT_API_PROTOCOL_LABELS,
   resolveChatApiProtocol,
@@ -68,7 +69,10 @@ const CHAT_API_PROTOCOLS: ChatApiProtocol[] = [
   'anthropic-compatible',
   'gemini-native',
 ];
-const SEEDANCE_TEMPLATE_IDS = SEEDANCE_QUICK_ADAPT_OPTIONS.map((option) => option.id);
+const VIDEO_TEMPLATE_IDS = [
+  ...SEEDANCE_QUICK_ADAPT_OPTIONS.map((option) => option.id),
+  ...H3_QUICK_ADAPT_OPTIONS.map((option) => option.id),
+];
 const applyingDrafts = new WeakSet<ProviderConfigDraft>();
 const IMAGE_REFERENCE_REQUEST_MODES: ImageReferenceRequestMode[] = [
   'generation-json-image-urls',
@@ -449,7 +453,7 @@ export function registerProviderConfigAgentTools(): Array<() => void> {
       description: [
         '把已读取厂商文档中的请求和响应示例，或已经逐字段核对过的声明式执行协议，分析为配置草稿。',
         '缺省 protocolSource=examples：每个模型必须提供准确的 modelId、提交请求和提交响应；异步接口还要同时提供轮询请求和轮询响应。',
-        'Seedance 2.0/2.5 可只提供 connection baseUrl 与 modelId：已验证网关会自动匹配内置模板；也可通过 templateId 显式选择火山原生、APIMart 或 Lec 模板。显式 videoCapability 和协议示例优先，未知网关不会猜请求协议。',
+        'Seedance 2.0/2.5 与 MiniMax H3/H3-Max 可只提供 connection baseUrl 与 modelId：已验证网关会自动匹配内置模板；也可通过 templateId 显式选择对应传输。H3 Context-IR 和 Regeneration 不是普通视频生成模型，不会自动匹配。显式 videoCapability 和协议示例优先，未知网关不会猜请求协议。',
         '只有示例推断无法安全表达文档结构时才使用 protocolSource=declarative，并直接提供 executionProtocol JSON 对象；此模式必须显式提供连接 baseUrl、模型 modelId 和 category，且不得再传 submitRequest、submitResponse、pollRequest、pollResponse。',
         'declarative 模板只能引用所选模型分类会提供的受信变量：通用 {{model}}、{{prompt}}；视频还可使用 imageUrls/firstImage/lastImage/imageWithRoles/referenceImageUrls、videoUrls/referenceVideoUrl/referenceVideoUrls、audioUrls/audioUrl/referenceAudioUrls、referenceUrls/inlineReferences，以及分辨率、时长、比例和 videoOperation/videoInputMode 等受信控制变量。禁止表达式、动态键、任意路径或自定义变量。',
         '可选数组项必须写成 {"$whenPresent":"{{imageUrls.0}}","$value":{...}}：只能作为请求体数组元素、对象只能有这两个键，条件必须是完整受信变量模板。多参考素材展开必须写成 {"$forEach":"{{referenceImageUrls}}","$value":{"image_url":"{{referenceImageUrls}}"}}：也只能作为 JSON 请求体数组元素，根变量只允许 referenceImageUrls/referenceVideoUrls/referenceAudioUrls，$value 必须是对象并用同一个完整根变量代表当前 URL；不得用于 query、请求体根、form/multipart 或任意表达式。',
@@ -498,8 +502,8 @@ export function registerProviderConfigAgentTools(): Array<() => void> {
                 category: { type: 'string', enum: MODEL_CATEGORIES },
                 templateId: {
                   type: 'string',
-                  enum: SEEDANCE_TEMPLATE_IDS,
-                  description: '可选的 Seedance 内置模板。使用模板时仍必须在连接级提供实际 HTTPS baseUrl；显式能力和协议字段优先。',
+                  enum: VIDEO_TEMPLATE_IDS,
+                  description: '可选的 Seedance 或 MiniMax H3 内置模板。使用模板时仍必须在连接级提供实际 HTTPS baseUrl；显式能力和协议字段优先。',
                 },
                 protocolSource: {
                   type: 'string',

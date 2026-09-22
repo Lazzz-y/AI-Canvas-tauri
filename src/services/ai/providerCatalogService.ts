@@ -190,6 +190,8 @@ const BUILT_IN_PROVIDER_DEFINITIONS: ProviderDefinition[] = [
     catalogAdapter: 'openai-compatible',
     defaultBaseUrl: APIMART_BASE_URL,
     modelsPath: '/models',
+    // Context-IR 返回提示词文本，Regeneration 需要源任务 ID；两者不能作为普通视频模型新接入。
+    hiddenModelIds: ['MiniMax-H3-Context-IR', 'MiniMax-H3-Regeneration'],
     allowCustomBaseUrl: false,
     credentials: [
       API_KEY_FIELD,
@@ -371,7 +373,13 @@ const BUILT_IN_PROVIDER_DEFINITIONS: ProviderDefinition[] = [
 
 export function isProviderModelVisible(catalogId: string | undefined, modelId: string): boolean {
   if (!catalogId) return true;
-  if (catalogId === 'apimart' && isLegacyApimartOmni(modelId)) return false;
+  if (catalogId === 'apimart') {
+    if (isLegacyApimartOmni(modelId)) return false;
+    const normalized = modelId.trim().toLowerCase();
+    if (normalized === 'minimax-h3-context-ir' || normalized === 'minimax-h3-regeneration') {
+      return false;
+    }
+  }
   const definition = BUILT_IN_PROVIDER_DEFINITIONS.find((item) => item.id === catalogId);
   return !definition?.hiddenModelIds?.includes(modelId);
 }

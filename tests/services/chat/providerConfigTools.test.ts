@@ -470,6 +470,31 @@ describe('provider config agent tools', () => {
     }, context)).toMatchObject({ ok: true });
   });
 
+  it('exposes verified MiniMax H3 templates to assistant and MCP callers', () => {
+    const tool = getAgentTool('provider_config_preview')!;
+    const modelSchema = tool.inputSchema.properties?.models.items;
+    const templateSchema = modelSchema?.properties?.templateId;
+
+    expect(templateSchema).toMatchObject({
+      type: 'string',
+      enum: expect.arrayContaining([
+        'h3-standard:minimax',
+        'h3-standard:apimart',
+        'h3-max:aiping',
+      ]),
+    });
+    expect(tool.description).toContain('MiniMax H3/H3-Max');
+    expect(prepareAgentToolCall({
+      callId: 'call-h3-template-preview',
+      toolId: 'provider_config_preview',
+      input: {
+        connectionName: 'AI Ping H3',
+        baseUrl: 'https://api.aiping.cn',
+        models: [{ modelId: 'MiniMax-H3-Max', templateId: 'h3-max:aiping' }],
+      },
+    }, context)).toMatchObject({ ok: true });
+  });
+
   it('exposes and executes the declarative protocol input without request examples', async () => {
     const tool = getAgentTool('provider_config_preview')!;
     const modelSchema = tool.inputSchema.properties?.models.items;

@@ -1117,4 +1117,41 @@ describe('Seedance built-in provider templates', () => {
       models: [{ modelId: 'doubao-seedance-2-5-pro' }],
     })).toThrow('examples 模式必须提供 submitRequest');
   });
+
+  it('creates an H3 draft from a verified AI Ping template', () => {
+    const draft = createProviderConfigDraft('task-h3-aiping', {
+      connectionName: 'AI Ping H3',
+      baseUrl: 'https://api.aiping.cn',
+      models: [{ modelId: 'MiniMax-H3-Max', templateId: 'h3-max:aiping' }],
+    });
+    const [model] = draft.config.selectedModels ?? [];
+
+    expect(model).toMatchObject({
+      id: 'MiniMax-H3-Max',
+      category: 'video',
+      categoryManual: true,
+      videoCapability: {
+        resolutions: ['480P', '768P'],
+        minDuration: 5,
+        maxDuration: 15,
+      },
+      executionProfile: {
+        preset: 'custom',
+        protocol: {
+          submit: { path: '/api/v1/multimodal/minimax/videos/video_generation' },
+          poll: {
+            path: '/api/v1/multimodal/minimax/videos/query/video_generation/{{submit.task_id}}',
+          },
+        },
+      },
+    });
+  });
+
+  it('does not auto-match H3 special operations as ordinary video generation', () => {
+    expect(() => createProviderConfigDraft('task-h3-context-ir', {
+      connectionName: 'MiniMax Context IR',
+      baseUrl: 'https://api.minimax.io',
+      models: [{ modelId: 'MiniMax-H3-Context-IR' }],
+    })).toThrow('examples 模式必须提供 submitRequest');
+  });
 });

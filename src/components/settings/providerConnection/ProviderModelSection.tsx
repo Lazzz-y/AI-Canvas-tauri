@@ -18,6 +18,7 @@ import type { ModelProtocolImportResult } from '../../../services/ai/modelProtoc
 import type { ProviderDefinition } from '../../../services/ai/providerCatalogService';
 import { normalizeBaseUrl } from '../../../services/ai/providerBaseUrl';
 import { createSeedanceQuickAdaptTemplate } from '../../../services/ai/seedanceModelCapabilities';
+import { createH3QuickAdaptTemplate } from '../../../services/ai/h3ModelCapabilities';
 import { useT } from '../../../i18n';
 import AnimatedButton from '../../shared/AnimatedButton';
 import ModelProtocolEditor from '../ModelProtocolEditor';
@@ -411,6 +412,11 @@ export default function ProviderModelSection({
                 )}
                 onApplySeedanceTemplate={(seedanceModel, transport) => {
                   const template = createSeedanceQuickAdaptTemplate(seedanceModel, transport);
+                  onUpdateVideoCapability(videoCapabilityModel.id, template.capability);
+                  onUpdateModelProtocol(videoCapabilityModel.id, template.executionProfile);
+                }}
+                onApplyH3Template={(h3Model, transport) => {
+                  const template = createH3QuickAdaptTemplate(h3Model, transport);
                   onUpdateVideoCapability(videoCapabilityModel.id, template.capability);
                   onUpdateModelProtocol(videoCapabilityModel.id, template.executionProfile);
                 }}

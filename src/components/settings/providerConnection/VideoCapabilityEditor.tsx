@@ -14,6 +14,11 @@ import {
   type SeedanceModelVariant,
   type SeedanceQuickAdaptTransport,
 } from '../../../services/ai/seedanceModelCapabilities';
+import {
+  H3_QUICK_ADAPT_OPTIONS,
+  type H3ModelVariant,
+  type H3QuickAdaptTransport,
+} from '../../../services/ai/h3ModelCapabilities';
 import PopupCloseButton from '../../shared/PopupCloseButton';
 import {
   VIDEO_DURATION_PRESETS,
@@ -35,6 +40,10 @@ interface VideoCapabilityEditorProps {
     model: SeedanceModelVariant,
     transport: SeedanceQuickAdaptTransport,
   ) => void;
+  onApplyH3Template: (
+    model: H3ModelVariant,
+    transport: H3QuickAdaptTransport,
+  ) => void;
   onClose: () => void;
 }
 
@@ -50,6 +59,7 @@ export default function VideoCapabilityEditor({
   model,
   onChange,
   onApplySeedanceTemplate,
+  onApplyH3Template,
   onClose,
 }: VideoCapabilityEditorProps) {
   const [customRatio, setCustomRatio] = useState('');
@@ -57,6 +67,7 @@ export default function VideoCapabilityEditor({
   const [customFrameRate, setCustomFrameRate] = useState('');
   const [customDuration, setCustomDuration] = useState('');
   const [seedanceTemplateId, setSeedanceTemplateId] = useState('2.5:volcengine');
+  const [h3TemplateId, setH3TemplateId] = useState('h3-standard:minimax');
   const capability = createEditableVideoCapability(model.videoCapability);
   const discreteDurations = capability.durations?.length
     ? [...capability.durations].sort((left, right) => left - right)
@@ -206,6 +217,41 @@ export default function VideoCapabilityEditor({
           </div>
           <p className="mt-2 text-[10px] leading-4 text-canvas-text-muted">
             会同时覆盖当前模型的视频能力与提交/轮询协议。不会根据模型名称自动猜测；应用后仍可继续手动调整。
+          </p>
+        </section>
+
+        <section className="rounded-lg border border-blue-400/25 bg-blue-400/[0.06] p-3">
+          <div className="flex flex-wrap items-end gap-2">
+            <label className="min-w-56 flex-1 space-y-1 text-[10px] text-canvas-text-secondary">
+              <span className="font-medium text-canvas-text">MiniMax H3 快速适配</span>
+              <Select
+                fixedMenu
+                className="w-full"
+                size="sm"
+                value={h3TemplateId}
+                onChange={setH3TemplateId}
+              >
+                {H3_QUICK_ADAPT_OPTIONS.map((option) => (
+                  <option key={option.id} value={option.id}>{option.label}</option>
+                ))}
+              </Select>
+            </label>
+            <button
+              type="button"
+              className="provider-secondary-btn min-h-8 px-3 text-[11px]"
+              onClick={() => {
+                const [h3Model, transport] = h3TemplateId.split(':') as [
+                  H3ModelVariant,
+                  H3QuickAdaptTransport,
+                ];
+                onApplyH3Template(h3Model, transport);
+              }}
+            >
+              应用模板
+            </button>
+          </div>
+          <p className="mt-2 text-[10px] leading-4 text-canvas-text-muted">
+            支持 MiniMax 官方、APIMart 和 AI Ping。Context-IR 与 Regeneration 不属于普通视频生成模板。
           </p>
         </section>
 

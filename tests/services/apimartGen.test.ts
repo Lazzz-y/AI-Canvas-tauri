@@ -718,7 +718,7 @@ describe('APIMart MiniMax-H3 video', () => {
 
   it('supports multimodal reference (image + video + audio) for MiniMax-H3', () => {
     expect(buildApimartSeedanceRequest(
-      'MiniMax-H3-Context-IR',
+      'MiniMax-H3',
       'prompt',
       {
         imageUrls: ['https://cdn.example/char.png'],
@@ -726,7 +726,7 @@ describe('APIMart MiniMax-H3 video', () => {
         audioUrls: ['https://cdn.example/voice.mp3'],
       },
     )).toMatchObject({
-      model: 'MiniMax-H3-Context-IR',
+      model: 'MiniMax-H3',
       image_urls: ['https://cdn.example/char.png'],
       video_urls: ['https://cdn.example/motion.mp4'],
       audio_urls: ['https://cdn.example/voice.mp3'],
@@ -743,7 +743,7 @@ describe('APIMart MiniMax-H3 video', () => {
 
   it('rejects standalone audio references for MiniMax-H3', () => {
     expect(() => buildApimartSeedanceRequest(
-      'MiniMax-H3-Regeneration',
+      'MiniMax-H3',
       'prompt',
       { audioUrls: ['https://cdn.example/voice.mp3'] },
     )).toThrow('参考音频不能单独使用');
@@ -752,6 +752,7 @@ describe('APIMart MiniMax-H3 video', () => {
   it('normalizes MiniMax-H3 model id case-insensitively', () => {
     expect(isApimartSeedanceModel('minimax-h3')).toBe(true);
     expect(isApimartSeedanceModel('MiniMax-H3')).toBe(true);
+    // 旧配置仍保留底层兼容能力，但新目录不会再把特殊操作展示为普通视频模型。
     expect(isApimartSeedanceModel('apimart/MiniMax-H3-Regeneration')).toBe(true);
   });
 });

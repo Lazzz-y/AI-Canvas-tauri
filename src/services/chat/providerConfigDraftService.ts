@@ -45,6 +45,10 @@ import {
   resolveSeedanceAutoTemplate,
   type SeedanceTemplateId,
 } from '../ai/seedanceModelCapabilities';
+import {
+  resolveH3AutoTemplate,
+  type H3TemplateId,
+} from '../ai/h3ModelCapabilities';
 
 const PROVIDER_CONFIG_DRAFT_TTL_MS = 30 * 60 * 1_000;
 const MAX_PROVIDER_CONFIG_DRAFTS = 32;
@@ -97,8 +101,8 @@ const VIDEO_GENERIC_REFERENCE_VARIABLES = ['referenceUrls', 'inlineReferences'] 
 export type ProviderConfigProtocolSource = 'examples' | 'declarative';
 
 export interface ProviderConfigModelExamples extends Partial<ModelProtocolExamples> {
-  /** 直接采用内置 Seedance 模板；未填写时也会按模型 ID 与已知网关自动匹配。 */
-  templateId?: SeedanceTemplateId;
+  /** 直接采用内置视频模板；未填写时也会按模型 ID 与已知网关自动匹配。 */
+  templateId?: SeedanceTemplateId | H3TemplateId;
   /** 缺省保持原有示例推断模式；declarative 直接使用本地校验通过的声明式协议。 */
   protocolSource?: ProviderConfigProtocolSource;
   /** protocolSource=declarative 时必填；不得与四个请求/响应示例字段混用。 */
@@ -744,6 +748,13 @@ function createModelSelection(
         templateId: examples.templateId,
         capability: examples.videoCapability,
       })
+      ?? resolveH3AutoTemplate({
+        modelId: examples.modelId,
+        name: examples.name,
+        baseUrl: declaredBaseUrl,
+        templateId: examples.templateId,
+        capability: examples.videoCapability,
+      })
     : undefined;
   const useTemplateProtocol = Boolean(
     templateMatch?.executionProfile
@@ -753,11 +764,11 @@ function createModelSelection(
   );
   let result: ResolvedDraftModelProtocol;
   if (useTemplateProtocol) {
-    if (!declaredBaseUrl) throw new Error('使用 Seedance 模板必须显式提供 connection baseUrl');
+    if (!declaredBaseUrl) throw new Error('使用内置视频模板必须显式提供 connection baseUrl');
     const modelId = examples.modelId?.trim();
-    if (!modelId) throw new Error('使用 Seedance 模板必须显式提供 modelId');
+    if (!modelId) throw new Error('使用内置视频模板必须显式提供 modelId');
     const protocol = resolveModelExecutionProfile(templateMatch?.executionProfile);
-    if (!protocol) throw new Error(`模型“${examples.name?.trim() || modelId}”的 Seedance 模板缺少执行协议`);
+    if (!protocol) throw new Error(`模型“${examples.name?.trim() || modelId}”的内置模板缺少执行协议`);
     const protocolErrors = validateModelExecutionProtocol(protocol);
     if (protocolErrors.length > 0) {
       throw new Error(`模型“${examples.name?.trim() || modelId}”模板协议校验失败：${protocolErrors[0]}`);

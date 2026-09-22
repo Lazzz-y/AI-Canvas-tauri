@@ -19,6 +19,10 @@ import {
   applySeedanceTemplateDefaults,
   inferSeedanceModelVariant,
 } from '../../services/ai/seedanceModelCapabilities';
+import {
+  applyH3TemplateDefaults,
+  inferH3ModelVariant,
+} from '../../services/ai/h3ModelCapabilities';
 import type { VideoModelCapability } from '../../types/aiTypes';
 import {
   capCatalogModels,
@@ -58,6 +62,13 @@ import {
   type ProviderConnectionDialogProps,
 } from './providerConnection/providerConnectionShared';
 
+function applyKnownVideoTemplateDefaults(
+  model: ProviderModelSelection,
+  baseUrl?: string,
+): ProviderModelSelection {
+  return applyH3TemplateDefaults(applySeedanceTemplateDefaults(model, baseUrl), baseUrl);
+}
+
 export default function ProviderConnectionDialog({
   isOpen,
   connectionId,
@@ -95,7 +106,7 @@ export default function ProviderConnectionDialog({
   const [workflowValid, setWorkflowValid] = useState(false);
   const [models, setModels] = useState<ProviderModelSelection[]>(
     () => mergeModels(mergeModels(initialLocalModels, initialCatalogModels), initialSelectedModels)
-      .map((model) => applySeedanceTemplateDefaults(model, initialBaseUrl)),
+      .map((model) => applyKnownVideoTemplateDefaults(model, initialBaseUrl)),
   );
   const [selectedIds, setSelectedIds] = useState(() =>
     new Set(initialSelectedModels.map((model) => model.id)),
@@ -264,7 +275,7 @@ export default function ProviderConnectionDialog({
       });
       const resolvedBaseUrl = result.resolvedBaseUrl || baseUrl;
       setModels((current) => mergeModels(current, result.models)
-        .map((model) => applySeedanceTemplateDefaults(model, resolvedBaseUrl)));
+        .map((model) => applyKnownVideoTemplateDefaults(model, resolvedBaseUrl)));
       setCatalogStatus(result.warning ? 'warning' : 'ready');
       const corrected = adoptResolvedBaseUrl(result.resolvedBaseUrl);
       setCatalogMessage(
@@ -395,12 +406,13 @@ export default function ProviderConnectionDialog({
     if (!id || !definition) return;
     const name = manualModelName.trim() || id;
     const seedanceVariant = inferSeedanceModelVariant(id, name);
-    const model = applySeedanceTemplateDefaults({
+    const h3Variant = inferH3ModelVariant(id, name);
+    const model = applyKnownVideoTemplateDefaults({
       id,
       name,
-      category: seedanceVariant ? 'video' : manualCategory,
+      category: seedanceVariant || h3Variant ? 'video' : manualCategory,
       provider: connectionId || definition.id,
-      ...(!seedanceVariant ? { categoryManual: true } : {}),
+      ...(!seedanceVariant && !h3Variant ? { categoryManual: true } : {}),
     }, baseUrl);
     setModels((current) => mergeModels(current, [model]));
     setSelectedIds((current) => new Set(current).add(id));

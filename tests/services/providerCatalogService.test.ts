@@ -21,8 +21,6 @@ describe('providerCatalogService 模型分类推断', () => {
   it.each([
     ['MiniMax-H3'],
     ['minimax-h3'],
-    ['MiniMax-H3-Context-IR'],
-    ['minimax-h3-regeneration'],
     ['MiniMax_H3'],
     ['MiniMax H3'],
   ])('中转站拉取 %s 归类为视频模型', async (modelId) => {
@@ -56,6 +54,29 @@ describe('providerCatalogService 模型分类推断', () => {
     expect(result.models).toHaveLength(1);
     expect(result.models[0]?.category).toBe('video');
     expect(result.models[0]?.provider).toBe('apimart');
+  });
+
+  it('APIMart 不再把 H3 特殊操作作为普通视频模型展示', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse({
+      data: [
+        { id: 'MiniMax-H3', object: 'model' },
+        { id: 'MiniMax-H3-Context-IR', object: 'model' },
+        { id: 'MiniMax-H3-Regeneration', object: 'model' },
+      ],
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await fetchProviderModelCatalog({
+      providerId: 'apimart',
+      config: {
+        name: 'APIMart',
+        apiKey: 'test-key',
+        baseUrl: 'https://api.apimart.ai',
+        catalogId: 'apimart',
+      },
+    });
+
+    expect(result.models.map((model) => model.id)).toEqual(['MiniMax-H3']);
   });
 
   it('自定义接口拉取 minimax-h3 同样归类为视频模型', async () => {
