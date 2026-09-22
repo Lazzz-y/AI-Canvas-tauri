@@ -53,8 +53,11 @@ const ChatPanel = lazy(() => import('./components/chat/ChatPanel'));
 const PresetRunnerDialog = lazy(() => import('./components/nodes/shared/PresetRunnerDialog'));
 const ReversePromptDialog = lazy(() => import('./components/nodes/shared/ReversePromptDialog'));
 const DirectorDeskRuntimeManager = lazy(() => import('./components/director/DirectorDeskRuntimeManager'));
+const FreeDistributionNoticeDialog = lazy(() => import('./components/FreeDistributionNoticeDialog'));
 const OnboardingDialog = lazy(() => import('./components/OnboardingDialog'));
 
+/** 免费发行提醒独立记忆；升级后的现有用户也会看到一次。 */
+const FREE_DISTRIBUTION_NOTICE_SEEN_KEY = 'ai-canvas-free-distribution-notice-seen-v1';
 /** 首次启动引导只弹一次；关掉后写入本地标记。 */
 const ONBOARDING_SEEN_KEY = 'ai-canvas-onboarding-seen';
 
@@ -126,6 +129,13 @@ export default function App() {
   const [splashDone, setSplashDone] = useState(false);
   const [closePhase, setClosePhase] = useState<'saving' | 'closing' | null>(null);
   const closeInProgress = useRef(false);
+  const [freeDistributionNoticeOpen, setFreeDistributionNoticeOpen] = useState(
+    () => localStorage.getItem(FREE_DISTRIBUTION_NOTICE_SEEN_KEY) !== 'true',
+  );
+  const acknowledgeFreeDistributionNotice = useCallback(() => {
+    localStorage.setItem(FREE_DISTRIBUTION_NOTICE_SEEN_KEY, 'true');
+    setFreeDistributionNoticeOpen(false);
+  }, []);
   // 首次启动引导（开屏动画结束后才弹）
   const [onboardingOpen, setOnboardingOpen] = useState(
     () => localStorage.getItem(ONBOARDING_SEEN_KEY) !== 'true',
@@ -621,7 +631,13 @@ export default function App() {
         <DirectorDeskRuntimeManager />
       </Suspense>
 
-      {splashDone && onboardingOpen && (
+      {splashDone && freeDistributionNoticeOpen && (
+        <Suspense fallback={null}>
+          <FreeDistributionNoticeDialog onAcknowledge={acknowledgeFreeDistributionNotice} />
+        </Suspense>
+      )}
+
+      {splashDone && !freeDistributionNoticeOpen && onboardingOpen && (
         <Suspense fallback={null}>
           <OnboardingDialog
             onClose={closeOnboarding}
