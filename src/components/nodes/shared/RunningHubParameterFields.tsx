@@ -3,6 +3,14 @@ import { runningHubParameterKey } from '../../../services/runninghubWorkflowServ
 import type { RunningHubModelDefinition } from '../../../services/ai/providers/runninghubModelManifest';
 import Select from '../../shared/Select';
 
+function frameBindingLabel(field: RunningHubModelDefinition['parameters'][number]): string | undefined {
+  if (field.binding !== 'image') return undefined;
+  const semantic = `${field.name} ${field.label} ${field.hint ?? ''}`.toLowerCase();
+  if (/尾帧|(?:last|end)[\s_-]*(?:frame|image)/.test(semantic)) return '已设置的尾帧';
+  if (/首帧|(?:first|start)[\s_-]*(?:frame|image)/.test(semantic)) return '已设置的首帧';
+  return undefined;
+}
+
 export function RunningHubModelParameterFields({ model, values = {}, onChange, disabled = false }: {
   model: RunningHubModelDefinition; values?: Record<string, string>;
   onChange: (values: Record<string, string>) => void; disabled?: boolean;
@@ -13,7 +21,10 @@ export function RunningHubModelParameterFields({ model, values = {}, onChange, d
       const schema = field.schema;
       const value = values[field.name] ?? '';
       const omitted = values[field.name] === '';
-      const defaultLabel = omitted ? '本次不传' : field.defaultValue === undefined ? '自动填入引用或使用平台默认' : `默认：${String(field.defaultValue)}`;
+      const frameBinding = frameBindingLabel(field);
+      const defaultLabel = omitted ? '本次不传' : field.defaultValue === undefined
+        ? frameBinding ? `使用${frameBinding}` : '自动填入引用或使用平台默认'
+        : `默认：${String(field.defaultValue)}`;
       const options = schema.enum?.map(String) ?? (schema.type === 'boolean' ? ['true', 'false'] : undefined);
       const fixed = ['stream', 'enable_base64_output'].includes(field.name);
       const update = (next: string) => {
@@ -29,7 +40,9 @@ export function RunningHubModelParameterFields({ model, values = {}, onChange, d
               options={[{ value: '', label: defaultLabel }, ...options.map((option) => ({ value: option, label: option }))]} />
               : schema.type === 'number' || schema.type === 'integer' ? <input className="ui-input w-full" type="number" min={schema.minimum} max={schema.maximum} step={schema.multipleOf ?? (schema.type === 'integer' ? 1 : 'any')} placeholder={defaultLabel} value={value} disabled={disabled} onChange={(event) => update(event.target.value)} />
                 : <textarea className="ui-textarea w-full" rows={2} placeholder={schema.type === 'array' ? `${defaultLabel}；手动填写 JSON 字符串数组` : defaultLabel} value={value} disabled={disabled} onChange={(event) => update(event.target.value)} />}
-        {field.binding && field.binding !== 'prompt' && <span>自动使用{schema.type === 'array' ? '全部' : `第 ${(field.referenceIndex ?? 0) + 1} 个`}{({ image: '图片', video: '视频', audio: '音频' })[field.binding]}引用；填写后覆盖自动引用。</span>}
+        {field.binding && field.binding !== 'prompt' && <span>{frameBinding
+          ? `仅使用用户${frameBinding}；普通参考图不会自动代填。`
+          : `自动使用${schema.type === 'array' ? '全部' : `第 ${(field.referenceIndex ?? 0) + 1} 个`}${({ image: '图片', video: '视频', audio: '音频' })[field.binding]}引用；填写后覆盖自动引用。`}</span>}
         {!field.required && field.defaultValue !== undefined && !fixed && <button type="button" className="ui-btn ui-btn--sm self-start" disabled={disabled} onClick={() => {
           if (omitted) update(''); else onChange({ ...values, [field.name]: '' });
         }}>{omitted ? '本次不传 · 点击恢复默认' : '本次不传此参数'}</button>}

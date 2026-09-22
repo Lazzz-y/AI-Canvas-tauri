@@ -393,15 +393,12 @@ function referencesFromLegacyInput(
   referenceInput: VideoGenerationReferenceInput,
 ): MediaReference[] {
   if (referenceInput.references?.length) return referenceInput.references;
-  const imageReferences = referenceInput.imageUrls.map((url, index) => ({
+  const imageReferences = referenceInput.imageUrls.map((url) => ({
     kind: 'image' as const,
     url,
     origin: 'connection' as const,
-    role: index === 0
-      ? ('first_frame' as const)
-      : index === referenceInput.imageUrls.length - 1
-        ? ('last_frame' as const)
-        : ('reference' as const),
+    // 旧调用方没有角色数组时只能按普通参考图处理；首尾帧必须由调用方明确声明。
+    role: 'reference' as const,
   }));
   return [
     ...imageReferences,

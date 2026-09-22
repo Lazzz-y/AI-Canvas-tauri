@@ -887,7 +887,7 @@ describe('general video protocol variables', () => {
     expect(resolveVideoGenerationOperation(['first.png'], ['reference.mp4'])).toBe('video-to-video');
   });
 
-  it('maps duration controls and reference media to stable custom-protocol aliases', () => {
+  it('maps role-less relay images to references instead of inferring first and last frames', () => {
     const variables = buildGeneralVideoProtocolVariables(
       'doubao-seedance-2-0-260128',
       {
@@ -926,11 +926,18 @@ describe('general video protocol variables', () => {
       seedanceResolution: '720p',
       generateAudio: true,
       videoOperation: 'video-to-video',
-      videoInputMode: 'mixed',
+      videoInputMode: 'reference',
       durationText: '6',
-      firstImage: 'https://cdn.example/first.png',
-      lastImage: 'https://cdn.example/last.png',
-      referenceImageUrls: undefined,
+      firstImage: undefined,
+      lastImage: undefined,
+      referenceImageUrls: [
+        'https://cdn.example/first.png',
+        'https://cdn.example/last.png',
+      ],
+      imageWithRoles: [
+        { url: 'https://cdn.example/first.png', role: 'reference_image' },
+        { url: 'https://cdn.example/last.png', role: 'reference_image' },
+      ],
       referenceVideoUrl: 'https://cdn.example/reference.mp4',
       referenceVideoUrls: ['https://cdn.example/reference.mp4'],
       audioUrl: 'https://cdn.example/reference.mp3',
@@ -968,7 +975,7 @@ describe('general video protocol variables', () => {
     expect(withoutRoles.imageWithRoles).toBeUndefined();
   });
 
-  it('keeps unknown capability fields unspecified and omits a last frame for one image', () => {
+  it('keeps unknown capability fields unspecified and treats one untyped image as a reference', () => {
     const variables = buildGeneralVideoProtocolVariables(
       'video-model',
       { model: 'general/video', provider: 'general', prompt: 'prompt' },
@@ -988,12 +995,14 @@ describe('general video protocol variables', () => {
       videoFrames: undefined,
       videoFps: undefined,
       size: undefined,
-      firstImage: 'https://cdn.example/only.png',
+      firstImage: undefined,
+      lastImage: undefined,
+      referenceImageUrls: ['https://cdn.example/only.png'],
+      imageWithRoles: [{ url: 'https://cdn.example/only.png', role: 'reference_image' }],
       // 未声明 capability 时不猜比例、尺寸、时长、帧率、分辨率或有声能力
       generateAudio: undefined,
       videoOperation: 'image-to-video',
     });
-    expect(variables.lastImage).toBeUndefined();
   });
 
   it('omits compatibility fps and duration for partial capabilities without declared defaults', () => {

@@ -1039,11 +1039,10 @@ export function toResolvedVideoCompatibilityValues(
   const audioUrls = request.references.audios.map((reference) => reference.url);
   const firstRoleImage = request.references.images.find((item) => item.role === 'first_frame');
   const lastRoleImage = request.references.images.find((item) => item.role === 'last_frame');
-  const firstImageUrl = (firstRoleImage ?? request.references.images[0])?.url;
-  const lastFallback = request.references.images.length > 1
-    ? request.references.images[request.references.images.length - 1]
-    : undefined;
-  const lastImageUrl = (lastRoleImage ?? lastFallback)?.url;
+  // 兼容字段也必须保留角色语义：普通参考图不能因为排列在第一张/最后一张
+  // 就被下游协议误判为首帧或尾帧。
+  const firstImageUrl = firstRoleImage?.url;
+  const lastImageUrl = lastRoleImage?.url;
   const generatedFrameCount = request.output.durationSeconds > 0
     ? Math.round(request.output.durationSeconds * request.output.requestedFrameRate) + 1
     : undefined;

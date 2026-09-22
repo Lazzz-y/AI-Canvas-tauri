@@ -1,7 +1,7 @@
 /** RunningHub 标准模型 Adapter。固定 manifest 选路；工作流协议仍由 runninghubWorkflow 执行。 */
 import { isRemoteMediaUrl } from '../../../utils/mediaUrl';
 import { useAppStore } from '../../../store/useAppStore';
-import type { AIImageGenParams, AIVideoGenParams, AIAudioGenParams } from '../../../types/aiTypes';
+import type { AIImageGenParams, AIVideoGenParams, AIAudioGenParams, MediaReferenceRole } from '../../../types/aiTypes';
 import type { RunningHubConnection, RunningHubMediaKind, RunningHubOutput } from '../../../types/runninghub';
 import type { MediaProviderAdapter } from '../mediaProviderRegistry';
 import { getMediaReferenceUrls } from '../connectedReferenceMedia';
@@ -47,10 +47,42 @@ function mediaSource(value: string): string {
   return value;
 }
 
+type RunningHubRoleAwareReferences = RunningHubReferences & {
+  /** 与 image 数组同序；缺失项按普通参考图处理。 */
+  imageRoles?: MediaReferenceRole[];
+};
+
+function runningHubFrameRole(field: RunningHubModelDefinition['parameters'][number]): 'first_frame' | 'last_frame' | undefined {
+  if (field.binding !== 'image') return undefined;
+  const semantic = `${field.name} ${field.label} ${field.hint ?? ''}`.toLowerCase();
+  if (/尾帧|(?:last|end)[\s_-]*(?:frame|image)/.test(semantic)) return 'last_frame';
+  if (/首帧|(?:first|start)[\s_-]*(?:frame|image)/.test(semantic)) return 'first_frame';
+  return undefined;
+}
+
+function runningHubReferenceSelection(
+  model: RunningHubModelDefinition,
+  field: RunningHubModelDefinition['parameters'][number],
+  references: RunningHubRoleAwareReferences,
+): Array<{ value: string; index: number }> {
+  const sources = references[field.binding as RunningHubMediaKind] ?? [];
+  if (model.kind !== 'video' || field.binding !== 'image') {
+    return sources.map((value, index) => ({ value, index }));
+  }
+  const frameRole = runningHubFrameRole(field);
+  return sources.flatMap((value, index) => {
+    const role = references.imageRoles?.[index] ?? 'reference';
+    const accepted = frameRole
+      ? role === frameRole
+      : role !== 'first_frame' && role !== 'last_frame';
+    return accepted ? [{ value, index }] : [];
+  });
+}
+
 /** 先完成类型/数量校验，再上传；显式参数优先，空字符串表示不使用该可选字段。 */
 export async function buildRunningHubModelRequest(
   connection: RunningHubConnection, model: RunningHubModelDefinition, prompt: string,
-  parameters: Record<string, string> = {}, references: RunningHubReferences = {}, signal?: AbortSignal,
+  parameters: Record<string, string> = {}, references: RunningHubRoleAwareReferences = {}, signal?: AbortSignal,
 ): Promise<Record<string, RunningHubModelValue>> {
   const names = new Set(model.parameters.map((field) => field.name));
   if (Object.keys(parameters).some((name) => !names.has(name))) throw new Error('模型参数已变化，请重新选择模型并检查参数');
@@ -60,9 +92,19 @@ export async function buildRunningHubModelRequest(
     let raw = parameters[field.name];
     if (raw === undefined && field.binding === 'prompt') raw = prompt;
     if (field.binding && field.binding !== 'prompt') {
-      const sources = references[field.binding] ?? [];
-      if (field.schema.type === 'array') { if (raw === undefined && sources.length) raw = JSON.stringify(sources); sources.forEach((_, i) => consumed[field.binding as RunningHubMediaKind].add(i)); }
-      else if (sources[field.referenceIndex ?? 0]) { if (raw === undefined) raw = sources[field.referenceIndex ?? 0]; consumed[field.binding].add(field.referenceIndex ?? 0); }
+      const sources = runningHubReferenceSelection(model, field, references);
+      if (field.schema.type === 'array') {
+        if (raw === undefined && sources.length) raw = JSON.stringify(sources.map((source) => source.value));
+        sources.forEach((source) => consumed[field.binding as RunningHubMediaKind].add(source.index));
+      } else {
+        const source = runningHubFrameRole(field)
+          ? sources[0]
+          : sources[field.referenceIndex ?? 0];
+        if (source) {
+          if (raw === undefined) raw = source.value;
+          consumed[field.binding].add(source.index);
+        }
+      }
     }
     const value = parseRunningHubModelParameter(field, raw);
     if (value !== undefined) {
@@ -143,7 +185,7 @@ export async function queryRunningHubModel(connection: RunningHubConnection, tas
 }
 
 type ModelParams = AIImageGenParams | AIVideoGenParams | AIAudioGenParams;
-export async function executeRunningHubModel(params: ModelParams, kind: RunningHubMediaKind, prompt: string, references: RunningHubReferences, count = 1, externalSignal?: AbortSignal, connectionOverride?: RunningHubConnection): Promise<RunningHubOutput[]> {
+export async function executeRunningHubModel(params: ModelParams, kind: RunningHubMediaKind, prompt: string, references: RunningHubRoleAwareReferences, count = 1, externalSignal?: AbortSignal, connectionOverride?: RunningHubConnection): Promise<RunningHubOutput[]> {
   const store = useAppStore.getState();
   const explicitImage = getRunningHubModel(params.model, true)?.parameters.some((field) => field.binding === 'image' && params.runninghubModelParameters?.[field.name]?.trim());
   const definition = getRunningHubModel(params.model, !!references.image?.length || explicitImage);
@@ -225,8 +267,10 @@ export const runninghubMediaProviderAdapter: MediaProviderAdapter = {
   generateVideo: async ({ params, resolveReferenceInput, signal }) => {
     const input = await resolveReferenceInput();
     const references = input.references ?? [];
+    const imageReferences = references.filter((reference) => reference.kind === 'image');
     const outputs = await executeRunningHubModel(params, 'video', input.prompt, {
-      image: references.length ? getMediaReferenceUrls(references, 'image', 'local') : input.imageUrls,
+      image: references.length ? imageReferences.map((reference) => reference.url) : input.imageUrls,
+      imageRoles: references.length ? imageReferences.map((reference) => reference.role) : undefined,
       video: references.length ? getMediaReferenceUrls(references, 'video', 'local') : input.videoUrls,
       audio: references.length ? getMediaReferenceUrls(references, 'audio', 'local') : input.audioUrls,
     }, 1, signal);

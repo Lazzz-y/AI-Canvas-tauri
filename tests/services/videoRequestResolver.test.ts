@@ -214,6 +214,24 @@ describe('resolveCanonicalVideoRequest', () => {
     });
   });
 
+  it('does not project ordinary reference images into first or last frame compatibility fields', () => {
+    const result = resolveCanonicalVideoRequest(params(), {
+      references: [
+        reference('image', 'https://assets.example/reference-1.png'),
+        reference('image', 'https://assets.example/reference-2.png'),
+      ],
+    });
+
+    expect(toResolvedVideoCompatibilityValues(result)).toMatchObject({
+      imageUrls: [
+        'https://assets.example/reference-1.png',
+        'https://assets.example/reference-2.png',
+      ],
+    });
+    expect(toResolvedVideoCompatibilityValues(result)).not.toHaveProperty('firstImageUrl');
+    expect(toResolvedVideoCompatibilityValues(result)).not.toHaveProperty('lastImageUrl');
+  });
+
   it('uses exact dimensions declared as a resolution preset without treating them as a ratio', () => {
     const result = resolveCanonicalVideoRequest(params({ seedanceResolution: '1280x720' }), {
       capability: {

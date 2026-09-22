@@ -24,7 +24,7 @@ function setup(next: RunningHubMediaKind = 'image') {
     nodes: [{ id: 'n1', type: `ai-${kind}`, position: { x: 0, y: 0 }, data: { type: `ai-${kind}`, label: '模型测试', provider: 'runninghub', model: ids[kind], status: 'loading' } }],
   });
 }
-const generate = (count = 1) => executeRunningHubModel({ provider: 'runninghub', model: ids[kind], prompt: '测试模型生成内容', nodeId: 'n1' }, kind, '测试模型生成内容', kind === 'video' ? { image: ['https://input.test/first.png'] } : {}, count);
+const generate = (count = 1) => executeRunningHubModel({ provider: 'runninghub', model: ids[kind], prompt: '测试模型生成内容', nodeId: 'n1' }, kind, '测试模型生成内容', kind === 'video' ? { image: ['https://input.test/first.png'], imageRoles: ['first_frame'] } : {}, count);
 beforeEach(() => {
   vi.useFakeTimers(); localStorage.clear(); useAppStore.setState(useAppStore.getInitialState(), true); setup(); state = 'SUCCESS'; serial = 0;
   mocks.persist.mockReset().mockImplementation(async (url: string) => ({ filePath: `project/${url.split('/').pop()}`, mediaUrl: `asset://localhost/${url.split('/').pop()}`, sourceUrl: url }));
@@ -70,12 +70,31 @@ describe('RunningHub 标准媒体执行', () => {
   });
   it('H3 首尾帧、显式覆盖和本地上传按合同执行，数量错误先于上传', async () => {
     const model = getRunningHubModel(ids.video)!;
-    await expect(buildRunningHubModelRequest(connection, model, 'test', {}, { image: ['blob:first', 'blob:last', 'blob:extra'] })).rejects.toThrow('全部');
+    await expect(buildRunningHubModelRequest(connection, model, 'test', {}, {
+      image: ['blob:first', 'blob:last', 'blob:extra'],
+      imageRoles: ['first_frame', 'last_frame', 'reference'],
+    })).rejects.toThrow('全部');
     expect(mocks.fetch).not.toHaveBeenCalled();
     vi.stubGlobal('fetch', vi.fn().mockImplementation(async () => new Response('image', { headers: { 'Content-Type': 'image/png' } })));
-    const body = await buildRunningHubModelRequest(connection, model, 'test', { duration: '15', firstFrameUrl: 'blob:override' }, { image: ['blob:first', 'blob:override'] });
+    const body = await buildRunningHubModelRequest(connection, model, 'test', { duration: '15', firstFrameUrl: 'blob:override' }, {
+      image: ['blob:first', 'blob:override'],
+      imageRoles: ['first_frame', 'last_frame'],
+    });
     expect(body).toMatchObject({ firstFrameUrl: 'https://cdn.test/upload.png', lastFrameUrl: 'https://cdn.test/upload.png', duration: '15' });
     expect(mocks.fetch).toHaveBeenCalledTimes(1);
+  });
+  it('RunningHub 首尾帧字段只接受显式角色，普通参考图不会按顺序代填', async () => {
+    const model = getRunningHubModel(ids.video)!;
+    await expect(buildRunningHubModelRequest(connection, model, 'test', {}, {
+      image: ['https://input.test/reference.png'],
+      imageRoles: ['reference'],
+    })).rejects.toThrow('首帧');
+    const referenceModel = getRunningHubModel('vidu/image-to-video-q2-pro')!;
+    await expect(buildRunningHubModelRequest(connection, referenceModel, 'test', {}, {
+      image: ['https://input.test/reference.png'],
+      imageRoles: ['reference'],
+    })).resolves.toMatchObject({ imageUrl: 'https://input.test/reference.png' });
+    expect(mocks.fetch).not.toHaveBeenCalled();
   });
   it('拒绝未知字段、非法 URL、流式和不支持的 Base64 结果模式', async () => {
     await expect(buildRunningHubModelRequest(connection, getRunningHubModel(ids.video)!, 'test', { token: 'secret' })).rejects.toThrow('参数');

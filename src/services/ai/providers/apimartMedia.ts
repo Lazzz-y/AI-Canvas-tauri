@@ -189,10 +189,8 @@ async function generateFlowMusic(
 
 /**
  * 用户/调用方是否显式指定了首/尾帧角色。
- * 未显式指定时（例如只上传多张普通参考图），assignVideoReferenceRoles 会按图片顺序
- * 自动推断首/尾帧；但 APIMart Seedance 的 image_with_roles 与 image_urls 互斥，
- * 自动推断会误报「首尾帧与参考素材不能同时使用」。因此只有显式角色才拆分首尾帧，
- * 其余情况全部图片按普通参考图提交（与火山方舟行为保持一致）。
+ * APIMart Seedance 的 image_with_roles 与 image_urls 互斥，因此只有显式角色才拆分
+ * 首尾帧；连线图片和普通 @ 图片全部按普通参考图提交（与其他 Seedance 路径一致）。
  */
 function hasExplicitFrameRoles(params: AIVideoGenParams): boolean {
   if ((params.referenceMedia ?? []).some((ref) => ref.role === 'first_frame' || ref.role === 'last_frame')) {
