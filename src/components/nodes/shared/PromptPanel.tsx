@@ -825,6 +825,7 @@ export default function PromptPanel({
           value={prompt}
           onChange={onChange}
           onSubmit={handleSingleSubmit}
+          submitOnShiftEnter
           placeholder={effectivePlaceholder}
           nodeId={nodeId}
           selectedWorkflowId={selectedWorkflowId}

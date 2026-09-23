@@ -64,6 +64,7 @@ export interface MentionEditorProps {
   nodeId?: string;
   selectedWorkflowId?: string;
   canSubmit?: boolean;
+  submitOnShiftEnter?: boolean;
   onFocus?: () => void;
   onBlur?: () => void;
   onSlashTrigger?: () => void;
@@ -87,6 +88,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
   nodeId,
   selectedWorkflowId,
   canSubmit = true,
+  submitOnShiftEnter = false,
   onFocus,
   onBlur,
   onSlashTrigger,
@@ -143,7 +145,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
     if (serializeDOM(el) === prompt) {
       // 删空后浏览器常残留 <br>，而 serializeDOM 会剥掉尾部换行使其「看起来为空」，
       // 于是 DOM 不会被清理、光标停在残留空行（第 2/3 行）。这里把真正的空状态归一化。
-      // 仅在 prompt 由非空变空时触发（此 effect 才会重跑），不影响用户主动按 Shift+Enter 换行。
+      // 仅在 prompt 由非空变空时触发（此 effect 才会重跑），不影响用户主动换行。
       if (prompt === '' && el.innerHTML !== '') {
         const hadFocus = document.activeElement === el;
         el.innerHTML = '';
@@ -782,15 +784,15 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
         setShowMention(false);
         return;
       }
-      // Submit on Enter (no shift)
-      if (e.key === 'Enter' && !e.shiftKey) {
+      // Submit with the shortcut chosen by the parent; mention selection keeps plain Enter.
+      if (e.key === 'Enter' && e.shiftKey === submitOnShiftEnter) {
         e.preventDefault();
         const text = editorRef.current ? serializeDOM(editorRef.current) : '';
         if (canSubmit && text.trim() && onSubmit) onSubmit();
         return;
       }
-      // Newline on Shift+Enter —— 手动插入单个 <br>，避免浏览器在芯片旁默认插入两个 <br>（换两行）
-      if (e.key === 'Enter' && e.shiftKey) {
+      // 换行时手动插入单个 <br>，避免浏览器在芯片旁默认插入两个 <br>（换两行）
+      if (e.key === 'Enter' && e.shiftKey !== submitOnShiftEnter) {
         e.preventDefault();
         const sel = window.getSelection();
         if (!sel || !sel.rangeCount) return;
@@ -914,6 +916,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
       showMention,
       canSubmit,
       onSubmit,
+      submitOnShiftEnter,
       emitDOM,
     ],
   );
