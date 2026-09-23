@@ -596,6 +596,8 @@ export interface AppConfig {
   theme: 'dark' | 'light';
   language?: Locale; // 界面语言，未设置时跟随系统
   canvasBackground?: CanvasBackground; // 画布背景主题
+  defaultDarkBackgroundShade?: number; // 默认暗色背景灰度，0-58；未设置时为 20
+  offWhiteBackgroundColor?: string; // 米白浅色背景颜色；未设置时沿用原有 #F4F6FB
   interactionMode?: InteractionMode; // 画布交互模式，默认 'default'
   nodeToolbarMode?: NodeToolbarMode; // 节点顶部工具栏显示方式，默认 'icons'
   nodeLabelVisible?: boolean; // 是否显示节点顶部标题标签，默认 true

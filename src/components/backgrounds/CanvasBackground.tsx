@@ -11,6 +11,8 @@ const FrostedGlassBackground = lazy(() => import('./FrostedGlassBackground'));
 
 export default function CanvasBackground() {
   const canvasBackground = useAppStore((s) => s.config.canvasBackground);
+  const defaultDarkBackgroundShade = useAppStore((s) => s.config.defaultDarkBackgroundShade);
+  const offWhiteBackgroundColor = useAppStore((s) => s.config.offWhiteBackgroundColor);
   const customBgUrl = useAppStore((s) => s.config.customBackgroundUrl);
   const customBgOpacity = useAppStore((s) => s.config.customBackgroundOpacity);
   const performanceMode = useAppStore((s) => s.config.performanceMode === true);
@@ -29,7 +31,14 @@ export default function CanvasBackground() {
     case 'nebula':
       return <Suspense fallback={null}><NebulaBackground /></Suspense>;
     case 'off-white':
-      return <div className="canvas-bg-off-white" />;
+      return (
+        <div
+          className="canvas-bg-off-white"
+          style={offWhiteBackgroundColor && offWhiteBackgroundColor !== '#F4F6FB'
+            ? { backgroundColor: offWhiteBackgroundColor }
+            : undefined}
+        />
+      );
     case 'frosted-glass':
       return <Suspense fallback={null}><FrostedGlassBackground /></Suspense>;
     case 'minimal':
@@ -48,7 +57,14 @@ export default function CanvasBackground() {
           }}
         />
       );
-    default:
-      return null; // 默认暗色由 app-box 自身的 bg-canvas-bg 提供
+    default: {
+      const shade = Math.min(58, Math.max(0, defaultDarkBackgroundShade ?? 20));
+      return (
+        <div
+          className="absolute inset-0 z-0 pointer-events-none"
+          style={{ backgroundColor: `rgb(${shade} ${shade} ${shade})` }}
+        />
+      );
+    }
   }
 }

@@ -43,6 +43,9 @@ const WINDOW_ASPECT_OPTIONS: {
   { id: '4:3',   presets: [{ w: 1024, h: 768, label: '紧凑' }, { w: 1280, h: 960, label: '标准' }, { w: 1440, h: 1080, label: '大屏' }] },
 ];
 
+const DARK_SHADE_PRESETS = [0, 15, 20, 33, 58] as const;
+const OFF_WHITE_PRESETS = ['#FFFFFF', '#FAFBFD', '#F4F6FB', '#ECEFF5', '#E4E9F2'] as const;
+
 /** 把主窗口设成指定逻辑尺寸；超出当前显示器可视范围时等比缩小，避免窗口大到没法操作 */
 async function applyWindowSize(width: number, height: number): Promise<void> {
   try {
@@ -225,6 +228,21 @@ export default function SettingsPanel() {
   const [bgUploading, setBgUploading] = useState(false);
   const [bgDetection, setBgDetection] = useState<BackgroundDetection | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const darkShade = Math.min(58, Math.max(0, config.defaultDarkBackgroundShade ?? 20));
+  const darkDotColor = `rgb(${darkShade + 68} ${darkShade + 68} ${darkShade + 84})`;
+  const offWhiteColor = config.offWhiteBackgroundColor ?? '#F4F6FB';
+  const applyDarkShade = (shade: number) => {
+    if (shade === darkShade && (config.canvasBackground ?? 'default') === 'default') return;
+    updateConfig({ canvasBackground: 'default', theme: 'dark', defaultDarkBackgroundShade: shade });
+    setBgDetection(null);
+    void persist();
+  };
+  const applyOffWhiteColor = (color: string) => {
+    if (color === offWhiteColor && config.canvasBackground === 'off-white') return;
+    updateConfig({ canvasBackground: 'off-white', theme: 'light', offWhiteBackgroundColor: color });
+    setBgDetection(null);
+    void persist();
+  };
 
   // 外部（如 Agent 保存厂商配置后）请求的标签页在渲染期直接生效，不用 effect 回写 state；
   // 用户手动切换即视为消费掉该请求（关闭面板时 store 也会清空它）
@@ -527,8 +545,8 @@ export default function SettingsPanel() {
                     {BACKGROUND_OPTIONS.map(({ value, label, theme }) => {
                       const isActive = (config.canvasBackground || 'default') === value;
                       return (
+                        <div key={value} className="relative rounded-lg focus-within:ring-2 focus-within:ring-indigo-400">
                         <AnimatedButton
-                          key={value}
                           onClick={async () => {
                             if (value === 'custom') {
                               if (config.customBackgroundUrl) {
@@ -546,22 +564,22 @@ export default function SettingsPanel() {
                             setBgDetection(null);
                             if (!await persist()) return;
                           }}
-                          className={`flex flex-col items-center gap-1.5 p-1 rounded-lg border transition-colors ${
+                          className={`flex h-full w-full flex-col items-center gap-1.5 p-1 rounded-lg border transition-colors ${
                             isActive
                               ? 'border-indigo-500 bg-indigo-500/10 text-indigo-400'
                               : 'border-canvas-border bg-canvas-card text-canvas-text-secondary hover:border-canvas-hover'
                           }`}
                         >
                           {/* 预览缩略图 */}
-                          <div className={`w-full h-12 rounded overflow-hidden border border-canvas-border flex items-center justify-center ${
+                          <div className={`relative w-full h-12 rounded overflow-hidden border border-canvas-border flex items-center justify-center ${
                             value === 'default'
-                              ? 'bg-[#0a0a1a]'
+                              ? ''
                               : value === 'solar-system'
                               ? 'bg-gradient-to-br from-[#0a0a1a] via-[#1a1030] to-[#0a1020]'
                               : value === 'nebula'
                               ? 'bg-gradient-to-b from-[#0a0514] via-[#14081e] to-[#0a0514]'
                               : value === 'off-white'
-                              ? 'bg-[#F4F6FB]'
+                              ? ''
                               : value === 'frosted-glass'
                               ? 'canvas-bg-frosted-preview'
                               : value === 'custom'
@@ -571,13 +589,17 @@ export default function SettingsPanel() {
                               : 'bg-black'
                           }`}
                           style={
-                            value === 'custom' && config.customBackgroundUrl
-                              ? { backgroundImage: `url(${config.customBackgroundUrl})`, backgroundSize: 'cover', backgroundPosition: 'center' }
-                              : undefined
+                            value === 'default'
+                              ? { backgroundColor: `rgb(${darkShade} ${darkShade} ${darkShade})` }
+                              : value === 'off-white'
+                                ? { backgroundColor: offWhiteColor }
+                              : value === 'custom' && config.customBackgroundUrl
+                                ? { backgroundImage: `url(${config.customBackgroundUrl})`, backgroundSize: 'cover', backgroundPosition: 'center' }
+                                : undefined
                           }>
                             {value === 'default' && (
                               <div className="w-full h-full" style={{
-                                backgroundImage: 'radial-gradient(circle, rgba(255,255,255,0.08) 1px, transparent 1px)',
+                                backgroundImage: `radial-gradient(circle, ${darkDotColor} 1px, transparent 1px)`,
                                 backgroundSize: '8px 8px',
                               }} />
                             )}
@@ -604,7 +626,7 @@ export default function SettingsPanel() {
                             )}
                             {value === 'off-white' && (
                               <div className="w-full h-full" style={{
-                                backgroundImage: 'radial-gradient(circle, rgba(0,0,0,0.06) 1px, transparent 1px)',
+                                backgroundImage: 'radial-gradient(circle, rgba(51,54,77,0.22) 1px, transparent 1px)',
                                 backgroundSize: '8px 8px',
                               }} />
                             )}
@@ -620,6 +642,46 @@ export default function SettingsPanel() {
                           </div>
                           <span className="text-[11px] font-medium">{t(label)}</span>
                         </AnimatedButton>
+                        {value === 'default' && (
+                          <div className="absolute inset-x-2 top-7 flex justify-between gap-1">
+                            {DARK_SHADE_PRESETS.map((shade) => {
+                              const hex = `#${shade.toString(16).padStart(2, '0').repeat(3).toUpperCase()}`;
+                              return (
+                                <button
+                                  key={shade}
+                                  type="button"
+                                  title={hex}
+                                  aria-label={hex}
+                                  aria-pressed={isActive && darkShade === shade}
+                                  onClick={() => applyDarkShade(shade)}
+                                  className={`h-5 w-5 shrink-0 rounded border border-white/50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-400 ${
+                                    isActive && darkShade === shade ? 'ring-2 ring-indigo-400' : ''
+                                  }`}
+                                  style={{ backgroundColor: hex }}
+                                />
+                              );
+                            })}
+                          </div>
+                        )}
+                        {value === 'off-white' && (
+                          <div className="absolute inset-x-2 top-7 flex justify-between gap-1">
+                            {OFF_WHITE_PRESETS.map((color) => (
+                              <button
+                                key={color}
+                                type="button"
+                                title={color}
+                                aria-label={color}
+                                aria-pressed={isActive && offWhiteColor === color}
+                                onClick={() => applyOffWhiteColor(color)}
+                                className={`h-5 w-5 shrink-0 rounded border border-canvas-text-muted focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-400 ${
+                                  isActive && offWhiteColor === color ? 'ring-2 ring-indigo-400' : ''
+                                }`}
+                                style={{ backgroundColor: color }}
+                              />
+                            ))}
+                          </div>
+                        )}
+                        </div>
                       );
                     })}
                   </div>

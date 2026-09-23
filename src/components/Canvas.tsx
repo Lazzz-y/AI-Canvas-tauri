@@ -367,6 +367,13 @@ function SnapLinesOverlay({ lines }: { lines: SnapLine[] }) {
   );
 }
 
+function CanvasGrid({ color }: { color: string }) {
+  const { zoom } = useViewport();
+  // 以常用的约 50% 视图为基准，避免固定画布间距缩小后在屏幕上过密。
+  const gap = zoom < 0.38 ? 80 : zoom < 0.62 ? 40 : zoom < 0.85 ? 30 : 20;
+  return <Background variant={BackgroundVariant.Dots} gap={gap} size={1} color={color} />;
+}
+
 function CanvasInner() {
   const nodes = useAppStore((s) => s.nodes);
   const edges = useAppStore((s) => s.edges);
@@ -382,6 +389,9 @@ function CanvasInner() {
   const minimapVisible = useAppStore((s) => s.minimapVisible);
   const closeNodeDialog = useAppStore((s) => s.closeNodeDialog);
   const interactionMode = useAppStore((s) => s.config.interactionMode ?? 'default');
+  const canvasBackground = useAppStore((s) => s.config.canvasBackground ?? 'default');
+  const defaultDarkBackgroundShade = useAppStore((s) => s.config.defaultDarkBackgroundShade ?? 20);
+  const offWhiteBackgroundColor = useAppStore((s) => s.config.offWhiteBackgroundColor ?? '#F4F6FB');
   const currentProjectId = useAppStore((s) => s.currentProjectId);
   const canvasNoteToolbarVisible = useAppStore((s) => s.config.canvasNoteToolbarVisible !== false);
   const [nodeProjectionCache] = useState(createCanvasNodeProjectionCache);
@@ -729,6 +739,14 @@ function CanvasInner() {
 
   // ── UI toggles (persisted to localStorage) ──
   const [showGrid, setShowGrid] = useState(() => localStorage.getItem('canvas-showGrid') !== 'false');
+  const darkShade = Math.min(58, Math.max(0, defaultDarkBackgroundShade));
+  const lightColor = /^#[0-9a-f]{6}$/i.test(offWhiteBackgroundColor) ? offWhiteBackgroundColor : '#F4F6FB';
+  const lightDotColor = `rgb(${[1, 3, 5].map((start) => (
+    Math.max(0, parseInt(lightColor.slice(start, start + 2), 16) - 72)
+  )).join(' ')})`;
+  const gridDotColor = canvasBackground === 'default'
+    ? `rgb(${darkShade + 68} ${darkShade + 68} ${darkShade + 84})`
+    : canvasBackground === 'off-white' ? lightDotColor : 'var(--theme-hover)';
   const [smoothLine, setSmoothLine] = useState(() => localStorage.getItem('canvas-smoothLine') !== 'false');
 
   useEffect(() => { localStorage.setItem('canvas-showGrid', String(showGrid)); }, [showGrid]);
@@ -1473,14 +1491,7 @@ function CanvasInner() {
         {snapLines.length > 0 && <SnapLinesOverlay lines={snapLines} />}
 
         {/* Grid background */}
-        {showGrid && (
-          <Background
-            variant={BackgroundVariant.Dots}
-            gap={20}
-            size={1}
-            color="var(--theme-hover)"
-          />
-        )}
+        {showGrid && <CanvasGrid color={gridDotColor} />}
 
 
         {/* Mini Map — interactive navigator, toggle with M key */}
