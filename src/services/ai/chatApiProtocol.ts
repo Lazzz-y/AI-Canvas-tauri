@@ -5,6 +5,7 @@
  * Anthropic Messages 或 Gemini generateContent，避免 Agent Runtime 和画布业务分叉。
  */
 import type { ChatApiProtocol } from '../../types';
+import type { ModelExecutionProfile, ModelProtocolPresetId } from '../../types/aiTypes';
 
 export const DEFAULT_CHAT_API_PROTOCOL: ChatApiProtocol = 'openai-compatible';
 
@@ -22,6 +23,21 @@ export function isChatApiProtocol(value: unknown): value is ChatApiProtocol {
 
 export function resolveChatApiProtocol(value: unknown): ChatApiProtocol {
   return isChatApiProtocol(value) ? value : DEFAULT_CHAT_API_PROTOCOL;
+}
+
+/** 模型级原生对话预设沿用已实现的消息、工具与流式适配器。 */
+export function isNativeTextProtocolPreset(
+  preset: string,
+): preset is Extract<ModelProtocolPresetId, 'anthropic-chat' | 'gemini-chat'> {
+  return preset === 'anthropic-chat' || preset === 'gemini-chat';
+}
+
+export function resolveNativeTextChatProtocol(
+  profile: ModelExecutionProfile | undefined,
+): ChatApiProtocol | undefined {
+  if (profile?.preset === 'anthropic-chat') return 'anthropic-compatible';
+  if (profile?.preset === 'gemini-chat') return 'gemini-native';
+  return undefined;
 }
 
 export type ChatApiContent = string | Array<{

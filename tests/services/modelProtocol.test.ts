@@ -1749,6 +1749,36 @@ describe('reference media coverage in custom protocols', () => {
     expect(findUnusedReferenceVariables(textOnly, { imageUrls: [] })).toEqual([]);
   });
 
+  it('renders the GPT-Image gateway JSON preset with only supplied reference images', () => {
+    const protocol = getModelProtocolPreset('gpt-image-gateway-json');
+    expect(validateModelExecutionProtocol(protocol)).toEqual([]);
+    const built = buildModelProtocolRequest({
+      apiKey: 'fixture-key', baseUrl: 'https://gateway.example/v1', protocol,
+      variables: { model: 'gpt-image-2', prompt: '画一只猫', size: '1024x1024', n: 1,
+        imageUrls: ['https://assets.example/first.png', 'https://assets.example/second.png'] },
+    });
+    expect(JSON.parse(String(built.init.body))).toMatchObject({
+      model: 'gpt-image-2', n: 1, response_format: 'url',
+      images: ['https://assets.example/first.png', 'https://assets.example/second.png'],
+    });
+    expect(built.init.headers).toMatchObject({ Authorization: 'Bearer fixture-key' });
+  });
+
+  it('keeps the official, Google and xAI image choices as valid distinct requests', () => {
+    const official = getModelProtocolPreset('openai-gpt-image');
+    const google = getModelProtocolPreset('google-image-native');
+    const xai = getModelProtocolPreset('xai-image-native');
+    for (const protocol of [official, google, xai]) {
+      expect(validateModelExecutionProtocol(protocol)).toEqual([]);
+    }
+    expect(official.submit.path).toBe('/images/generations');
+    expect(official.response.result?.base64Path).toBe('data.*.b64_json');
+    expect(google.submit.path).toBe('/v1beta/interactions');
+    expect(google.auth).toMatchObject({ type: 'header', name: 'x-goog-api-key' });
+    expect(xai.submit.path).toBe('/images/generations');
+    expect(xai.auth).toMatchObject({ type: 'bearer' });
+  });
+
   it('treats Seedance content text as prompt data and its typed media as delivered references', () => {
     const protocol = JSON.stringify({ submit: { body: { content: '{{seedanceContent}}' } } });
     expect(findUnusedReferenceVariables(protocol, {

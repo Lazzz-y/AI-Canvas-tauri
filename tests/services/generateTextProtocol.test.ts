@@ -133,4 +133,46 @@ describe('custom text model protocol', () => {
     expect(fetchMock.mock.calls[0]?.[1]?.headers).toMatchObject({ [expectedHeader[0]]: expectedHeader[1] });
     expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject(expectedBody);
   });
+
+  it.each([
+    {
+      preset: 'anthropic-chat' as const,
+      expectedUrl: 'https://gateway.example/v1/messages',
+      response: { content: [{ type: 'text', text: 'Claude 回复' }] },
+      expectedHeader: 'x-api-key',
+    },
+    {
+      preset: 'gemini-chat' as const,
+      expectedUrl: 'https://gateway.example/v1/models/vendor-chat:generateContent',
+      response: { candidates: [{ content: { parts: [{ text: 'Gemini 回复' }] } }] },
+      expectedHeader: 'x-goog-api-key',
+    },
+  ])('lets a $preset model override the connection chat protocol', async ({
+    preset, expectedUrl, response, expectedHeader,
+  }) => {
+    useAppStore.setState((state) => ({
+      config: {
+        ...state.config,
+        providers: {
+          ...state.config.providers,
+          'mixed-text-provider': {
+            name: '混合文本连接', apiKey: 'secret', baseUrl: 'https://gateway.example/v1',
+            catalogId: 'custom-openai', chatApiProtocol: 'openai-compatible',
+          },
+        },
+        generalModels: [{
+          id: 'mixed-text', name: '混合文本', modelId: 'vendor-chat',
+          category: 'text', providerConfigId: 'mixed-text-provider',
+          executionProfile: { preset },
+        }],
+      },
+    }));
+    const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse(response));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(generateText({ provider: 'general', model: 'general/mixed-text', prompt: '你好' }))
+      .resolves.toBe(preset === 'anthropic-chat' ? 'Claude 回复' : 'Gemini 回复');
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(expectedUrl);
+    expect(fetchMock.mock.calls[0]?.[1]?.headers).toMatchObject({ [expectedHeader]: 'secret' });
+  });
 });

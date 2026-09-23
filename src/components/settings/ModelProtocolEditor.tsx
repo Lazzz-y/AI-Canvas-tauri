@@ -44,6 +44,14 @@ import PopupCloseButton from '../shared/PopupCloseButton';
 import { describeProtocolTestRunBlocker, type ProtocolChoice } from './modelProtocolTestRun';
 import { useT } from '../../i18n';
 import { copyText } from '../../services/clipboardService';
+import {
+  buildChatApiRequest,
+  isNativeTextProtocolPreset,
+  parseChatApiResponse,
+  resolveNativeTextChatProtocol,
+} from '../../services/ai/chatApiProtocol';
+import { corsSafeFetch } from '../../services/ai/httpTransport';
+import { parseResponseError } from '../../services/ai/httpUtils';
 
 type EditorView = 'form' | 'json';
 type JsonFieldKind = 'object' | 'value';
@@ -52,11 +60,12 @@ interface ModelProtocolEditorProps {
   workflowMode?: boolean;
   initialPreviewVariables?: ModelProtocolVariables;
   model: ProviderModelSelection;
+  inheritanceLabel?: string;
   /** 试跑用的真实凭据与网关地址；缺任意一个就只能做本地预览。 */
   apiKey: string;
   baseUrl: string;
   onChange: (profile: ModelExecutionProfile | undefined) => void;
-  onImageReferenceRequestModeChange: (mode: ImageReferenceRequestMode) => void;
+  onImageReferenceRequestModeChange: (mode: ImageReferenceRequestMode | undefined) => void;
   onValidityChange: (valid: boolean) => void;
   onClose: () => void;
 }
@@ -91,9 +100,15 @@ interface ProtocolResponsePreviewState {
 const PRESET_LABELS: Record<ProtocolChoice, string> = {
   legacy: '自动兼容（旧方式）',
   'openai-chat': 'OpenAI Chat',
-  'openai-image': 'OpenAI 同步图片',
+  'anthropic-chat': 'Anthropic Messages',
+  'gemini-chat': 'Google Gemini generateContent',
+  'openai-image': 'OpenAI 同步图片（旧预设）',
+  'openai-gpt-image': 'OpenAI GPT-Image 官方 Images',
+  'gpt-image-gateway-json': 'GPT-Image 中转站 JSON（images 参考图）',
+  'google-image-native': 'Google Gemini 原生图片（文生图）',
+  'xai-image-native': 'xAI Images 原生图片（文生图）',
   'agnes-video': 'Agnes 异步视频',
-  custom: '高级自定义',
+  custom: '高级自定义 JSON',
 };
 
 // 可用变量列表由 modelProtocolVariables 总表派生，避免与运行时实际提供的变量脱节
@@ -209,9 +224,10 @@ function createResponseSample(): ProtocolJsonValue {
   };
 }
 
-function getAvailableChoices(category: GeneralModelCategory): ProtocolChoice[] {
-  if (category === 'text') return ['legacy', 'openai-chat', 'custom'];
-  if (category === 'image') return ['legacy', 'openai-image', 'custom'];
+function getAvailableChoices(category: GeneralModelCategory, current: ProtocolChoice): ProtocolChoice[] {
+  if (category === 'text') return ['legacy', 'openai-chat', 'anthropic-chat', 'gemini-chat', 'custom'];
+  if (category === 'image') return ['legacy', 'gpt-image-gateway-json', 'openai-gpt-image',
+    'google-image-native', 'xai-image-native', ...(current === 'openai-image' ? ['openai-image' as const] : []), 'custom'];
   if (category === 'video') return ['legacy', 'agnes-video', 'custom'];
   return ['legacy', 'custom'];
 }
@@ -301,6 +317,7 @@ export default function ModelProtocolEditor({
   workflowMode = false,
   initialPreviewVariables,
   model,
+  inheritanceLabel,
   apiKey,
   baseUrl,
   onChange,
@@ -309,13 +326,14 @@ export default function ModelProtocolEditor({
   onClose,
 }: ModelProtocolEditorProps) {
   const t = useT();
+  const simpleEditor = !workflowMode && (model.category === 'image' || model.category === 'text');
   const initialPreset: ProtocolChoice = model.executionProfile?.preset ?? 'legacy';
   const initialProtocol = model.executionProfile?.preset === 'custom' && model.executionProfile.protocol
     ? parseModelExecutionProtocol(model.executionProfile.protocol)
     : getDefaultCustomProtocol(model.category);
   const [preset, setPreset] = useState<ProtocolChoice>(initialPreset);
   const [protocol, setProtocol] = useState<NormalizedModelExecutionProtocol>(initialProtocol);
-  const [view, setView] = useState<EditorView>('form');
+  const [view, setView] = useState<EditorView>(simpleEditor ? 'json' : 'form');
   const [protocolJson, setProtocolJson] = useState(() => serializeJson(initialProtocol));
   const [copyStatus, setCopyStatus] = useState<'idle' | 'copying' | 'success' | 'error'>('idle');
   const protocolHelpRef = useRef<HTMLElement>(null);
@@ -393,16 +411,29 @@ export default function ModelProtocolEditor({
       return;
     }
     if (nextPreset === 'custom') {
+      if (simpleEditor) setView('json');
       const nextProtocol = preset !== 'legacy' && preset !== 'custom'
+        && !isNativeTextProtocolPreset(preset)
         ? getModelProtocolPreset(preset)
         : protocol;
       publishProtocol(nextProtocol);
+      return;
+    }
+    if (isNativeTextProtocolPreset(nextPreset)) {
+      onValidityChange(true);
+      onChange({ preset: nextPreset });
       return;
     }
     const nextProtocol = getModelProtocolPreset(nextPreset);
     setProtocol(nextProtocol);
     setProtocolJson(serializeJson(nextProtocol));
     onValidityChange(true);
+    if (model.category === 'image' && nextPreset === 'openai-gpt-image') {
+      onImageReferenceRequestModeChange('edits-multipart');
+    } else if (model.category === 'image' && (nextPreset === 'gpt-image-gateway-json'
+      || nextPreset === 'google-image-native' || nextPreset === 'xai-image-native')) {
+      onImageReferenceRequestModeChange(undefined);
+    }
     onChange({ preset: nextPreset });
   };
 
@@ -664,7 +695,30 @@ export default function ModelProtocolEditor({
     testAbortRef.current = controller;
     setTestRun({ status: 'running' });
     try {
-      const result = await executeModelProtocol({ apiKey, baseUrl, protocol, variables, signal: controller.signal });
+      const nativeChatProtocol = isNativeTextProtocolPreset(preset)
+        ? resolveNativeTextChatProtocol({ preset })
+        : undefined;
+      let result: { urls?: string[]; text?: string; taskId?: string };
+      if (nativeChatProtocol) {
+        const request = buildChatApiRequest({
+          protocol: nativeChatProtocol,
+          apiKey,
+          baseUrl,
+          model: model.id,
+          messages: [{
+            role: 'user',
+            content: typeof variables.prompt === 'string' ? variables.prompt : '介绍这个模型',
+          }],
+          stream: false,
+          signal: controller.signal,
+        });
+        const response = await corsSafeFetch(request.url, request.init);
+        if (!response.ok) await parseResponseError(response, `API 请求失败 (${response.status})`);
+        const payload: unknown = await response.json();
+        result = { text: parseChatApiResponse(payload, nativeChatProtocol).text };
+      } else {
+        result = await executeModelProtocol({ apiKey, baseUrl, protocol, variables, signal: controller.signal });
+      }
       if (controller.signal.aborted) return;
       const parts = [
         result.urls?.length ? t('返回 {count} 个结果地址', { count: result.urls.length }) : '',
@@ -699,6 +753,8 @@ export default function ModelProtocolEditor({
       : testRunBlocker === 'missing-api-key'
         ? t('先填写 API Key')
         : '';
+  const showReferenceRequest = model.category === 'image' && !workflowMode
+    && (preset === 'openai-image' || preset === 'legacy');
 
   return (
     <section className="provider-protocol-editor is-small"       aria-label={t('{name} 调用协议', { name: model.name })}>
@@ -710,16 +766,17 @@ export default function ModelProtocolEditor({
         <PopupCloseButton ariaLabel={t('关闭协议设置')} onClick={onClose} />
       </div>
 
-      <div className={`provider-protocol-topbar ${model.category === 'image' ? 'has-reference-mode' : ''}`}>
+      <div className={`provider-protocol-topbar ${showReferenceRequest ? 'has-reference-mode' : ''}`}>
         <label className="provider-protocol-field">
           <span>{t('协议预设')}</span>
           <Select fixedMenu value={preset} onChange={(selectedOptionValue) => changePreset(selectedOptionValue as ProtocolChoice)}>
-            {(workflowMode ? ['custom' as const] : getAvailableChoices(model.category)).map((choice) => (
-              <option key={choice} value={choice}>{t(PRESET_LABELS[choice])}</option>
+            {(workflowMode ? ['custom' as const] : getAvailableChoices(model.category, preset)).map((choice) => (
+              <option key={choice} value={choice}>{choice === 'legacy' && inheritanceLabel
+                ? t(inheritanceLabel) : t(PRESET_LABELS[choice])}</option>
             ))}
           </Select>
         </label>
-        {model.category === 'image' && !workflowMode ? (
+        {showReferenceRequest ? (
           <label className="provider-protocol-field">
             <span>{t('参考图请求')}</span>
             <Select fixedMenu
@@ -734,7 +791,7 @@ export default function ModelProtocolEditor({
             </Select>
           </label>
         ) : null}
-        {preset === 'custom' ? (
+        {preset === 'custom' && !simpleEditor ? (
           <div className="provider-protocol-view-tabs" role="tablist" aria-label={t('协议编辑方式')}>
             <button type="button" role="tab" aria-selected={view === 'form'} className={view === 'form' ? 'is-active' : ''} onClick={() => changeView('form')}>
               {t('表单')}
@@ -788,7 +845,7 @@ export default function ModelProtocolEditor({
         ) : null}
       </div>
 
-      {preset === 'custom' && view === 'form' ? (
+      {preset === 'custom' && !simpleEditor && view === 'form' ? (
         <div className="provider-protocol-form">
           <section className="provider-protocol-form-section">
             <div className="provider-protocol-section-title">
@@ -1399,9 +1456,11 @@ export default function ModelProtocolEditor({
         </div>
       ) : null}
 
-      {preset === 'custom' && view === 'json' ? (
+      {preset === 'custom' && (simpleEditor || view === 'json') ? (
         <div className="provider-protocol-field provider-protocol-full-json">
-          <div className="provider-protocol-json-variables" aria-label={t('当前模型可用变量')}>
+          <details className="text-xs text-canvas-text-secondary" aria-label={t('当前模型可用变量')}>
+            <summary className="cursor-pointer text-xs text-canvas-text-secondary">{t('可用变量与说明')}</summary>
+            <div className="provider-protocol-json-variables">
             <div className="provider-protocol-json-guide-title">
               <Icon icon="mdi:code-braces" width="13" />
               <strong>{t('可用变量')}</strong>
@@ -1418,7 +1477,8 @@ export default function ModelProtocolEditor({
                 <code data-tooltip={t(SUBMIT_TASK_ID_DESCRIPTION)}>{'{{submit.task_id}}'}</code>
               ) : null}
             </div>
-          </div>
+            </div>
+          </details>
 
           <div className="flex flex-wrap items-center justify-between gap-2">
             <label htmlFor={protocolJsonId}>{t('声明式协议 JSON')}</label>
@@ -1476,11 +1536,15 @@ export default function ModelProtocolEditor({
             onChange={(event) => updateCustomJson(event.target.value)}
           />
 
+          <details className="text-xs text-canvas-text-secondary">
+            <summary className="cursor-pointer">{t('JSON 字段说明')}</summary>
           <aside ref={protocolHelpRef} id={protocolJsonHelpId} className="provider-protocol-json-help">
             <div className="provider-protocol-json-guide-title">
               <Icon icon="mdi:information-outline" width="13" />
               <strong>{t('配置说明')}</strong>
-              <span>{t('不确定如何填写时，可先在“表单”模式配置，再切回 JSON 查看结果')}</span>
+              <span>{simpleEditor
+                ? t('选择预设即可使用；接口不兼容时按文档编辑 JSON。')
+                : t('不确定如何填写时，可先在“表单”模式配置，再切回 JSON 查看结果')}</span>
             </div>
             <dl>
               <div>
@@ -1514,6 +1578,7 @@ export default function ModelProtocolEditor({
               </p>
             ) : null}
           </aside>
+          </details>
         </div>
       ) : null}
 

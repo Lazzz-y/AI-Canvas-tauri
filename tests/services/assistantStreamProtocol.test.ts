@@ -45,6 +45,38 @@ beforeEach(() => {
 });
 
 describe('assistant custom protocol boundary', () => {
+  it.each([
+    {
+      preset: 'anthropic-chat' as const,
+      expectedUrl: 'https://gateway.example/v1/messages',
+      expectedHeader: 'x-api-key',
+      body: 'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Claude 回复"}}\n\n',
+      expectedText: 'Claude 回复',
+    },
+    {
+      preset: 'gemini-chat' as const,
+      expectedUrl: 'https://gateway.example/v1/models/vendor-chat:streamGenerateContent?alt=sse',
+      expectedHeader: 'x-goog-api-key',
+      body: 'data: {"candidates":[{"content":{"parts":[{"text":"Gemini 回复"}]},"finishReason":"STOP"}]}\n\n',
+      expectedText: 'Gemini 回复',
+    },
+  ])('streams a $preset model through its native adapter despite an OpenAI connection default', async ({
+    preset, expectedUrl, expectedHeader, body, expectedText,
+  }) => {
+    configureAssistant({ preset }, 'openai-compatible');
+    const fetchMock = vi.fn().mockResolvedValueOnce(new Response(body, {
+      status: 200, headers: { 'Content-Type': 'text/event-stream' },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    const onEvent = vi.fn();
+
+    await expect(streamAssistantReply({ systemPrompt: '', userMessage: '你好', onEvent }))
+      .resolves.toBe(expectedText);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(expectedUrl);
+    expect(fetchMock.mock.calls[0]?.[1]?.headers).toMatchObject({ [expectedHeader]: 'secret' });
+    expect(onEvent).toHaveBeenCalledWith({ type: 'text.delta', delta: expectedText });
+  });
+
   it.each([' ', ''])('preserves SSE text when data uses %j after the colon', async (space) => {
     configureAssistant();
     const body = `data:${space}${JSON.stringify({ choices: [{ delta: { content: '完整回复' }, finish_reason: 'stop' }] })}\n\n`;

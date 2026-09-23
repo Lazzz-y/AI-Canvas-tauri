@@ -72,7 +72,7 @@ interface ProviderModelSectionProps {
     executionProfile: ProviderModelSelection['executionProfile'],
   ) => void;
   onUpdateVideoCapability: (modelId: string, capability: VideoModelCapability | undefined) => void;
-  onUpdateImageReferenceRequestMode: (modelId: string, mode: ImageReferenceRequestMode) => void;
+  onUpdateImageReferenceRequestMode: (modelId: string, mode: ImageReferenceRequestMode | undefined) => void;
   onCloseProtocolEditor: () => void;
   onApplyProtocolImport: (result: ModelProtocolImportResult) => void;
   onUndoProtocolImport: () => void;
@@ -430,6 +430,9 @@ export default function ProviderModelSection({
               <ModelProtocolEditor
                 key={protocolModel.id}
                 model={protocolModel}
+                inheritanceLabel={protocolModel.category === 'text'
+                  ? '跟随连接对话协议'
+                  : undefined}
                 apiKey={apiKey.trim()}
                 baseUrl={normalizeBaseUrl(baseUrl) || definition.defaultBaseUrl || ''}
                 onChange={(profile) => onUpdateModelProtocol(protocolModel.id, profile)}

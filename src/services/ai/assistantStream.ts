@@ -30,7 +30,7 @@ import {
 } from './modelProtocol';
 import { getAssistantTextModelCandidates } from '../projectSettingsService';
 import { prepareAssistantVisualMessages } from '../chat/assistantVisualContext';
-import { buildChatApiRequest, resolveChatApiProtocol } from './chatApiProtocol';
+import { buildChatApiRequest, resolveChatApiProtocol, resolveNativeTextChatProtocol } from './chatApiProtocol';
 
 // ============================================
 // Config resolution
@@ -43,7 +43,7 @@ interface ResolvedModelConfig {
   modelName: string;
   protocol: ModelExecutionProtocol;
   chatApiProtocol: ChatApiProtocol;
-  usesConnectionProtocol: boolean;
+  usesChatApiProtocol: boolean;
   supportsVision: boolean;
 }
 
@@ -78,9 +78,10 @@ function resolveAssistantModelById(assistantModelId: string): ResolvedModelConfi
     const baseUrl = provider?.baseUrl?.trim() || '';
     if (!provider || !baseUrl || !gm.modelId) return null;
 
+    const nativeTextProtocol = resolveNativeTextChatProtocol(gm.executionProfile);
     let protocol: ModelExecutionProtocol;
     try {
-      protocol = gm.executionProfile
+      protocol = gm.executionProfile && !nativeTextProtocol
         ? resolveModelExecutionProfile(gm.executionProfile) ?? getModelProtocolPreset('openai-chat')
         : getModelProtocolPreset('openai-chat');
     } catch {
@@ -93,8 +94,8 @@ function resolveAssistantModelById(assistantModelId: string): ResolvedModelConfi
       apiKey: provider.apiKey || '',
       modelName: gm.modelId,
       protocol,
-      chatApiProtocol: resolveChatApiProtocol(provider.chatApiProtocol),
-      usesConnectionProtocol: !gm.executionProfile,
+      chatApiProtocol: nativeTextProtocol ?? resolveChatApiProtocol(provider.chatApiProtocol),
+      usesChatApiProtocol: !gm.executionProfile || !!nativeTextProtocol,
       supportsVision: hasVisionInputCapability(gm),
     };
   }
@@ -115,7 +116,7 @@ function resolveAssistantModelById(assistantModelId: string): ResolvedModelConfi
     modelName,
     protocol: getModelProtocolPreset('openai-chat'),
     chatApiProtocol: resolveChatApiProtocol(provider.chatApiProtocol),
-    usesConnectionProtocol: true,
+    usesChatApiProtocol: true,
     supportsVision: provider.selectedModels?.find((model) => (
       `${builtInModel.provider}/${model.id}` === assistantModelId || model.id === modelName
     ))?.inputModalities?.includes('image') ?? isVisionCapableTextModel(assistantModelId),
@@ -242,7 +243,7 @@ export async function streamAssistantReply(options: StreamingCallOptions): Promi
   if (!modelConfig) {
     throw new Error('未配置助手模型，请在「设置 → API Key」中添加');
   }
-  if (!modelConfig.usesConnectionProtocol && modelConfig.protocol.streamFormat !== 'openai-sse') {
+  if (!modelConfig.usesChatApiProtocol && modelConfig.protocol.streamFormat !== 'openai-sse') {
     throw new Error('当前助手模型协议未声明 OpenAI SSE 兼容能力，不能用于对话助手或 Agent 工具调用');
   }
 
@@ -289,7 +290,7 @@ export async function streamAssistantReply(options: StreamingCallOptions): Promi
       supportsVision: modelConfig.supportsVision,
       signal: controller.signal,
     });
-    const builtRequest = modelConfig.usesConnectionProtocol
+    const builtRequest = modelConfig.usesChatApiProtocol
       ? buildChatApiRequest({
           protocol: modelConfig.chatApiProtocol,
           apiKey: modelConfig.apiKey,
@@ -315,7 +316,7 @@ export async function streamAssistantReply(options: StreamingCallOptions): Promi
           },
         });
     const response = await corsSafeFetch(builtRequest.url, builtRequest.init);
-    const responseProtocol = modelConfig.usesConnectionProtocol
+    const responseProtocol = modelConfig.usesChatApiProtocol
       ? modelConfig.chatApiProtocol
       : 'openai-compatible';
 
