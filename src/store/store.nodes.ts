@@ -24,6 +24,7 @@ import type {
 } from '../types';
 import { createCanvasNoteData, STORYBOARD_CELL_SOURCE_TYPES } from '../types';
 import type { MediaGenerationIntent, MediaGenerationResult } from '../types/media';
+import { resolveShotVideoDuration } from '../types/shotlist';
 import { generateId, getNextDisplayId } from './store.utils';
 import { BATCH_NODE_LIMIT } from './store.chat';
 import * as fileService from '../services/fileService';
@@ -222,6 +223,10 @@ export function collectKeepPaths(
 
 function mergeNodeData(previous: BaseNodeData, patch: Partial<BaseNodeData>): BaseNodeData {
   const next = { ...previous, ...patch } as BaseNodeData;
+  if (previous.type === 'ai-video' && previous.shotlistProductionSource?.kind === 'video'
+    && 'seedanceDuration' in patch && patch.seedanceDuration !== previous.seedanceDuration) {
+    next.shotlistProductionSource = { ...previous.shotlistProductionSource, durationSync: 'manual' };
+  }
   // 节点换了底层文件（重新生成、裁切、重命名…）就必须一并作废旧的资产身份：
   // 加载时 relativePath 的优先级高于 filePath，留着上一次的身份会把节点解析回上一张图。
   // 调用方自己带了 assetId / relativePath（移动到分组目录之类）说明身份仍然有效，按它的来。
@@ -233,6 +238,32 @@ function mergeNodeData(previous: BaseNodeData, patch: Partial<BaseNodeData>): Ba
     next.relativePath = undefined;
   }
   return next;
+}
+
+/** 在同一次 Store 更新中同步稳定关联的镜头时长，沿用调用方的历史快照。 */
+function mergeNodeDataWithShotDurations(nodes: Node<BaseNodeData>[], targetIds: Set<string>, patch: Partial<BaseNodeData>) {
+  const next = nodes.map((node) => targetIds.has(node.id)
+    ? { ...node, data: mergeNodeData(node.data, patch) } : node);
+  if (!Array.isArray(patch.shotlistRows)) return next;
+  const sheets = new Map(nodes.filter((node) => targetIds.has(node.id) && node.data.type === 'ai-shotlist')
+    .map((node) => [node.id, node.data.shotlistRows ?? []]));
+  return next.map((node) => {
+    const source = node.data.shotlistProductionSource;
+    if (node.data.type !== 'ai-video' || source?.kind !== 'video' || source.durationSync === 'manual'
+      || targetIds.has(node.id)) return node;
+    const previousRows = sheets.get(source.nodeId);
+    if (!previousRows) return node;
+    const previous = previousRows.find((row) => row.id === source.rowId);
+    const row = patch.shotlistRows!.find((item) => item.id === source.rowId);
+    if (!previous || !row || previous.duration === row.duration) return node;
+    const duration = resolveShotVideoDuration(row.duration);
+    if (duration === undefined) return node;
+    // 旧关联没有同步标记时，仅接管尚未填写或仍与旧分镜相同的时长。
+    if (source.durationSync !== 'auto' && node.data.seedanceDuration !== undefined
+      && node.data.seedanceDuration !== resolveShotVideoDuration(previous.duration)) return node;
+    return { ...node, data: { ...node.data, seedanceDuration: duration,
+      shotlistProductionSource: { ...source, durationSync: 'auto' as const } } };
+  });
 }
 
 function mergeCanvasNotePatch(note: CanvasNoteData, patch: CanvasNotePatch): CanvasNoteData {
@@ -653,17 +684,13 @@ export const createNodeSlice: StateCreator<AppState, [], [], NodeSlice> = (set, 
   updateNodeData: (nodeId, data) => {
     get().commitToHistory();
     set((state) => ({
-      nodes: state.nodes.map((n) =>
-        n.id === nodeId ? { ...n, data: mergeNodeData(n.data, data) } : n
-      ),
+      nodes: mergeNodeDataWithShotDurations(state.nodes, new Set([nodeId]), data),
     }));
   },
 
   updateNodeDataTransient: (nodeId, data) => {
     set((state) => ({
-      nodes: state.nodes.map((node) =>
-        node.id === nodeId ? { ...node, data: mergeNodeData(node.data, data) } : node
-      ),
+      nodes: mergeNodeDataWithShotDurations(state.nodes, new Set([nodeId]), data),
     }));
   },
 
@@ -680,9 +707,7 @@ export const createNodeSlice: StateCreator<AppState, [], [], NodeSlice> = (set, 
     const targetIds = new Set(nodeIds);
     get().commitToHistory();
     set((state) => ({
-      nodes: state.nodes.map((node) => targetIds.has(node.id)
-        ? { ...node, data: mergeNodeData(node.data, data) }
-        : node),
+      nodes: mergeNodeDataWithShotDurations(state.nodes, targetIds, data),
     }));
   },
 

@@ -2,7 +2,7 @@
 import type { Edge, Node } from '@xyflow/react';
 import type { BaseNodeData, NodeType } from '../types';
 import type { ShotlistProductionKind } from '../types/shotlist';
-import { buildShotFramePrompt, formatShotRowBrief } from '../types/shotlist';
+import { buildShotFramePrompt, formatShotRowBrief, resolveShotVideoDuration } from '../types/shotlist';
 import { generateId } from '../store/store.utils';
 import { getShotlist, type ShotlistScope } from './shotlistService';
 
@@ -48,6 +48,8 @@ export function prepareShotlistProduction(scope: ShotlistScope, nodeId: string, 
       data.audioPurpose = 'speech';
     } else if (kind === 'video') {
       data.prompt = buildShotFramePrompt(row);
+      data.seedanceDuration = resolveShotVideoDuration(row.duration);
+      data.shotlistProductionSource = { nodeId, rowId: row.id, kind, durationSync: 'auto' };
       const frame = state.nodes.find((item) => item.id === row.frame?.nodeId
         && ['ai-image', 'source-image', 'ai-video', 'source-video'].includes(item.type ?? ''));
       if (frame) {

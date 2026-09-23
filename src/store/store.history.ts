@@ -89,6 +89,9 @@ function isDeepEqual(
 
 function getStructuralNodeData(data: BaseNodeData): Partial<BaseNodeData> {
   const structuralData: Partial<BaseNodeData> = {};
+  if (data.type === 'ai-video' && data.shotlistProductionSource?.kind === 'video') {
+    structuralData.seedanceDuration = data.seedanceDuration;
+  }
   for (const key of STRUCTURAL_NODE_DATA_KEYS) {
     if (Object.prototype.hasOwnProperty.call(data, key)) {
       structuralData[key] = data[key] as never;
@@ -196,6 +199,13 @@ function restoreStructuralNode(
   }
 
   const data = { ...current.data };
+  if (target.data.type === 'ai-video' && target.data.shotlistProductionSource?.kind === 'video') {
+    if (Object.prototype.hasOwnProperty.call(target.data, 'seedanceDuration')) {
+      data.seedanceDuration = target.data.seedanceDuration;
+    } else {
+      delete data.seedanceDuration;
+    }
+  }
   for (const key of STRUCTURAL_NODE_DATA_KEYS) {
     if (Object.prototype.hasOwnProperty.call(target.data, key)) {
       data[key] = target.data[key] as never;

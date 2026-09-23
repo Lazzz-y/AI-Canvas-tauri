@@ -25,6 +25,8 @@
 
 `canvas_create_nodes` 与 `canvas_update_nodes` 为视频节点设置 `aspectRatio` 时同步实际视频参数 `seedanceRatio`；`canvas_query(detail=true)` 只报告已显式设置的实际视频比例，旧节点未设时不把画框比例误报为生成比例。多图视频提示词应按 Picture 顺序写入图片节点的 `@{nodeId:label}` 引用；只有连线无法指定参考图顺序。
 
+媒体参数随 MCP 节点创建一起写入：图片支持 `aspectRatio`、`imageSize`、`batchCount`；视频支持 `aspectRatio`、`videoLongSide`（本地工作流长边像素，如 832）、`videoResolution`（API 画质档位，如 720p）、`videoDuration`（分镜小数秒向上取整）；旧调用传数字字符串 `videoResolution: "832"` 时兼容写入长边像素，而不再错误写成 API 档位。音频支持 `audioPurpose`、音色/格式/语速、描述式语音的声音类型/节奏/秒数，以及音乐标题、歌词、BPM、时长与自动歌词开关。三类均可传已配置的 `model` ID；未传的字段才使用项目/模型默认值。`canvas_update_nodes` 对同类字段可更新，`canvas_query(detail=true)` 返回安全的参数摘要；字段传给错误的节点类型或模型 ID 未配置时，在整批写入前拒绝。参考音频通过节点引用/工作流 IO 传入，Qwen 等工作流专属参数仍由工作流配置控制。ComfyUI H3 的帧率由工作流内部 24fps 公式固定，不把通用 `videoFps` 伪装成可独立生效的 MCP 控件。
+
 `canvas_update_nodes` 的 `label` 同步已有 `fileName` 显示别名，修复媒体标题仍显示上传临时文件名的问题；只改变显示名称，不重命名磁盘文件、不改变媒体路径。混合节点批量改名只提交一次历史快照；现有历史系统只撤销结构变化，不撤销名称或提示词，回退名称需再次更新。`canvas_query(detail=true)` 的 `displayLabel` 返回文件名别名优先的标题，供客户端核对可见名称；`label` 保持内部名称字段。
 
 MCP 设置中的「工具发现方式」默认按需加载，对应可选配置 `mcpToolExposure: "compact"`；旧配置缺少该字段时同样使用按需模式。`"full"` 返回全部当前可用业务工具，供已有工具延迟加载能力的客户端使用。两种传输共用此设置。切换后需要在客户端刷新工具列表或重新连接，已有对话的上下文不会自动清除。
