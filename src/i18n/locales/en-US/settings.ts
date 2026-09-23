@@ -467,6 +467,16 @@ const settings = {
   '创建或打开导演台节点时可下载': 'Downloadable when creating or opening a director desk node',
   '正在删除...': 'Deleting…',
   '删除资源': 'Delete resources',
+  '本地 ONNX 模型': 'Local ONNX models',
+  '按需下载的模型由相关节点共用；删除后下次使用需要重新下载。': 'Models are shared by related nodes. Deleted models will be downloaded again when needed.',
+  '图片超分 · Real-ESRGAN': 'Image upscaling · Real-ESRGAN',
+  '主体识别 · RMBG-1.4': 'Subject detection · RMBG-1.4',
+  '语音转文本 · SenseVoice': 'Speech to text · SenseVoice',
+  '语音转文本词表 · SenseVoice': 'Speech vocabulary · SenseVoice',
+  '共 {count} 个文件，占用 {size}': '{count} files, using {size}',
+  '暂无已下载的 ONNX 模型': 'No ONNX models downloaded',
+  '仅桌面版可查看本地模型': 'Local models are available in the desktop app',
+  '已删除 ONNX 模型文件': 'Deleted ONNX model file',
 
   // ── ProtocolImportPanel ──
   '接口文档解析失败': 'Failed to parse the API documentation',

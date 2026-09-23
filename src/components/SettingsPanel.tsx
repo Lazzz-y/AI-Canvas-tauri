@@ -12,6 +12,7 @@ import PopupCloseButton from './shared/PopupCloseButton';
 import ApiKeySettings from './settings/ApiKeySettings';
 import StorageHealthCenter from './settings/StorageHealthCenter';
 import DirectorDeskStorageManager from './settings/DirectorDeskStorageManager';
+import OnnxModelStorageManager from './settings/OnnxModelStorageManager';
 import McpControlSettings from './settings/McpControlSettings';
 import SettingsNavigation from './settings/SettingsNavigation';
 import ShortcutSettings from './settings/ShortcutSettings';
@@ -1142,6 +1143,7 @@ export default function SettingsPanel() {
               <>
                 <StorageHealthCenter />
                 <DirectorDeskStorageManager />
+                <OnnxModelStorageManager />
               </>
             )}
 

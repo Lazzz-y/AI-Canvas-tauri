@@ -117,6 +117,12 @@ fn is_dir_writable(dir: &Path) -> bool {
 /// 语音识别除了权重还需要词表才能把 token id 还原成文字，这里按文件名逐个登记，
 /// 不开放任意扩展名，避免把模型目录变成任意文件落盘点。
 const AUX_MODEL_ASSETS: [&str; 1] = ["sensevoice-vocab.txt"];
+const MANAGED_MODEL_FILES: [&str; 4] = [
+    "realesrgan-x4.onnx",
+    "rmbg-1.4.onnx",
+    "sensevoice-small-int8.onnx",
+    "sensevoice-vocab.txt",
+];
 
 fn validate_model_name(model_name: &str) -> Result<(), String> {
     let mut components = Path::new(model_name).components();
@@ -177,6 +183,46 @@ pub fn check_model_exists(model_name: String) -> Result<bool, String> {
 pub fn get_models_dir() -> Result<String, String> {
     let dir = models_dir()?;
     Ok(dir.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+pub fn list_onnx_models(webview: tauri::Webview) -> Result<String, String> {
+    crate::path_policy::ensure_trusted_caller(&webview)?;
+    let models = models_dir()?;
+    let mut entries = Vec::new();
+    for name in MANAGED_MODEL_FILES {
+        let path = models.join(name);
+        match std::fs::symlink_metadata(&path) {
+            Ok(metadata) if metadata.file_type().is_file() => {
+                entries.push(json!({ "name": name, "size_bytes": metadata.len() }));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("读取 ONNX 模型信息失败: {error}")),
+        }
+    }
+    Ok(json!(entries).to_string())
+}
+
+#[tauri::command]
+pub fn remove_onnx_model(webview: tauri::Webview, model_name: String) -> Result<(), String> {
+    crate::path_policy::ensure_trusted_caller(&webview)?;
+    remove_managed_model(&models_dir()?, &model_name)
+}
+
+fn remove_managed_model(models: &Path, model_name: &str) -> Result<(), String> {
+    if !MANAGED_MODEL_FILES.contains(&model_name) {
+        return Err("只能删除已登记的 ONNX 模型文件".to_string());
+    }
+    let path = models.join(model_name);
+    match std::fs::symlink_metadata(&path) {
+        Ok(metadata) if metadata.file_type().is_file() => {
+            std::fs::remove_file(path).map_err(|error| format!("删除 ONNX 模型失败: {error}"))
+        }
+        Ok(_) => Err("目标不是普通模型文件".to_string()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("读取 ONNX 模型信息失败: {error}")),
+    }
 }
 
 #[tauri::command]
@@ -1425,6 +1471,27 @@ mod direction_grid_tests {
         assert!(validate_onnx_file(&model_path, None)
             .expect_err("HTML 内容应被拒绝")
             .contains("HTML"));
+        std::fs::remove_dir_all(directory).expect("应清理测试目录");
+    }
+
+    #[test]
+    fn managed_model_removal_rejects_unknown_names_and_directories() {
+        let directory = test_directory("managed-removal");
+        let model = directory.join("rmbg-1.4.onnx");
+        let unrelated = directory.join("private.txt");
+        std::fs::write(&model, b"model").expect("应写入模型文件");
+        std::fs::write(&unrelated, b"private").expect("应写入无关文件");
+
+        assert!(remove_managed_model(&directory, "../private.txt").is_err());
+        assert!(remove_managed_model(&directory, "private.txt").is_err());
+        assert!(unrelated.is_file());
+        remove_managed_model(&directory, "rmbg-1.4.onnx").expect("应删除已登记模型");
+        assert!(!model.exists());
+        remove_managed_model(&directory, "rmbg-1.4.onnx").expect("重复删除应成功");
+
+        std::fs::create_dir(&model).expect("应创建同名目录");
+        assert!(remove_managed_model(&directory, "rmbg-1.4.onnx").is_err());
+        assert!(model.is_dir());
         std::fs::remove_dir_all(directory).expect("应清理测试目录");
     }
 

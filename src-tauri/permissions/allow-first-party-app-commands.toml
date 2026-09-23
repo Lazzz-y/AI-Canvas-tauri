@@ -58,6 +58,8 @@ commands.allow = [
   "complete_comfyui_workflow_save",
   "get_models_dir",
   "check_model_exists",
+  "list_onnx_models",
+  "remove_onnx_model",
   "image_upscale",
   "subject_matting",
   "speech_to_text",

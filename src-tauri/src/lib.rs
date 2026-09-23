@@ -68,6 +68,16 @@ pub mod onnx {
     }
 
     #[tauri::command]
+    pub fn list_onnx_models(_webview: tauri::Webview) -> Result<String, String> {
+        unsupported()
+    }
+
+    #[tauri::command]
+    pub fn remove_onnx_model(_webview: tauri::Webview, _model_name: String) -> Result<(), String> {
+        unsupported()
+    }
+
+    #[tauri::command]
     pub async fn download_onnx_model(
         _app: tauri::AppHandle,
         _model_name: String,
@@ -1204,6 +1214,8 @@ pub fn run() {
             comfyui::complete_comfyui_workflow_save,
             onnx::get_models_dir,
             onnx::check_model_exists,
+            onnx::list_onnx_models,
+            onnx::remove_onnx_model,
             onnx::image_upscale,
             onnx::subject_matting,
             onnx::speech_to_text,

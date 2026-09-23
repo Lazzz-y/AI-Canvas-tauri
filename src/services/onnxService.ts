@@ -19,6 +19,22 @@ export interface DownloadResult {
   cached: boolean;
 }
 
+export interface StoredOnnxModel {
+  name: string;
+  size_bytes: number;
+}
+
+/** 存储健康只列出原生端登记过的本地模型文件。 */
+export async function listStoredOnnxModels(): Promise<StoredOnnxModel[]> {
+  const json: string = await invoke('list_onnx_models');
+  return JSON.parse(json) as StoredOnnxModel[];
+}
+
+/** 删除原生端登记过的单个模型文件。 */
+export async function removeStoredOnnxModel(modelName: string): Promise<void> {
+  await invoke('remove_onnx_model', { modelName });
+}
+
 /** 主体识别结果 */
 export interface MattingResult {
   subject_path: string;
