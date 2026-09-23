@@ -6,18 +6,21 @@
  */
 import { useAppStore } from '../../../store/useAppStore';
 import type { CharacterLibraryScope } from '../../../store/store.dramaAssets';
+import { isEligibleCharacterReferenceNode, isEligibleCharacterVoiceNode } from '../../../store/store.dramaAssets';
 import type {
+  CharacterReferenceKind,
   CharacterVoiceKind,
   DramaAsset,
   DramaAssetImportance,
   DramaAssetKind,
   DramaCharacter,
 } from '../../../types/dramaAssets';
-import { formatDramaMention, normalizeDramaCharacter } from '../../../types/dramaAssets';
+import { buildDramaMentionId, buildDramaVoiceMentionId, formatDramaMention, normalizeDramaCharacter } from '../../../types/dramaAssets';
 import { findDramaAsset, formatDramaAssetTextBrief, listDramaAssetsFlat } from '../../dramaAssetPrompt';
 import {
   registerAgentTool,
   type AgentToolExecutionResult,
+  type AgentToolContext,
 } from '../toolRegistry';
 import type { AgentToolSchema } from '../agentToolSchemas';
 
@@ -98,6 +101,95 @@ const getInputSchema: AgentToolSchema = {
 };
 
 const textField = { type: 'string' as const, maxLength: 2000 };
+
+interface BindCharacterMediaInput {
+  assetId: string;
+  nodeId: string;
+  scope?: CharacterLibraryScope;
+  kind?: CharacterReferenceKind | CharacterVoiceKind;
+  makePrimary?: boolean;
+  label?: string;
+  transcript?: string;
+  prompt?: string;
+}
+
+function characterMediaSchema(audio: boolean): AgentToolSchema {
+  return {
+    type: 'object', required: ['assetId', 'nodeId'], additionalProperties: false,
+    properties: {
+      assetId: { type: 'string', minLength: 1, maxLength: 160 },
+      nodeId: { type: 'string', minLength: 1, maxLength: 160 },
+      scope: scopeProperty,
+      makePrimary: { type: 'boolean' },
+      kind: { type: 'string', enum: audio
+        ? ['timbre', 'line', 'emotion', 'other']
+        : ['primary', 'avatar', 'full_body', 'expression', 'turnaround', 'outfit', 'other'] },
+      ...(audio ? {
+        label: { type: 'string' as const, maxLength: 120 },
+        transcript: { type: 'string' as const, maxLength: 4000 },
+      } : { prompt: { type: 'string' as const, maxLength: 4000 } }),
+    },
+  };
+}
+
+async function bindCharacterMedia(
+  context: AgentToolContext, input: BindCharacterMediaInput, audio: boolean,
+): Promise<AgentToolExecutionResult> {
+  const fail = (message: string): AgentToolExecutionResult => ({ status: 'error', summary: message, modelContent: message });
+  const store = useAppStore.getState();
+  // 即使目标为全局角色，源节点也必须来自本次调用的当前画布。
+  if (store.currentProjectId !== context.projectId) return fail('目标项目当前未加载');
+  if (context.baseRevision !== undefined && context.baseRevision !== store.getCurrentRevision()) {
+    return fail('画布已变更，请重新查询源节点后绑定');
+  }
+  if (context.signal?.aborted) return fail('操作已取消');
+  const scope = input.scope ?? 'project';
+  const character = findScopedAsset(scope, input.assetId);
+  if (character?.kind !== 'character') return fail('目标角色不存在，请先查询角色库');
+  const node = store.nodes.find((item) => item.id === input.nodeId);
+  if (!node || !(audio ? isEligibleCharacterVoiceNode(node) : isEligibleCharacterReferenceNode(node))) {
+    return fail(audio ? '源节点没有可用音频，请先导入音频到画布' : '源节点没有可用图片，请先导入图片到画布');
+  }
+  const mediaUrl = audio ? node.data.audioUrl : node.data.imageUrl ?? node.data.thumbnailUrl;
+  if (!mediaUrl?.trim()) return fail('源节点没有可用媒体');
+  // 全局库不保留项目 sourceNodeId；稳定 ID 仍保证同源节点重复绑定不增殖。
+  const stableId = `mcp-${audio ? 'voice' : 'image'}-${encodeURIComponent(context.projectId)}-${encodeURIComponent(node.id)}`;
+  const entries = audio ? character.voiceClips : character.referenceImages;
+  const existing = entries?.find((item) => item.id === stableId
+    || (scope === 'project' && item.sourceNodeId === node.id)
+    || Boolean(node.data.assetId && item.assetId === node.data.assetId));
+  const now = Date.now();
+  const media = {
+    id: existing?.id ?? stableId,
+    assetId: node.data.assetId, relativePath: node.data.relativePath, filePath: node.data.filePath,
+    sourceNodeId: scope === 'project' ? node.id : undefined,
+    createdAt: existing?.createdAt ?? now, updatedAt: now,
+  };
+  try {
+    const saved = audio
+      ? await store.addCharacterVoiceClip(scope, character.id, {
+        ...existing, ...media, audioUrl: mediaUrl,
+        kind: (input.kind ?? existing?.kind ?? 'timbre') as CharacterVoiceKind,
+        label: input.label?.trim() || character.voiceClips?.find((item) => item.id === media.id)?.label || node.data.label,
+        transcript: input.transcript ?? character.voiceClips?.find((item) => item.id === media.id)?.transcript ?? '',
+      }, { makePrimary: input.makePrimary })
+      : await store.addCharacterReferenceImage(scope, character.id, {
+        ...existing, ...media, imageUrl: mediaUrl,
+        kind: (input.kind ?? existing?.kind ?? 'other') as CharacterReferenceKind,
+        prompt: input.prompt ?? character.referenceImages?.find((item) => item.id === media.id)?.prompt ?? '',
+      }, { makePrimary: input.makePrimary === true || input.kind === 'primary' });
+    if (!saved) return fail('角色素材保存失败');
+    const mentionId = audio ? buildDramaVoiceMentionId(character.id, media.id) : buildDramaMentionId(character.id, media.id);
+    return {
+      status: 'success', summary: audio ? '已添加角色参考音频' : '已添加角色参考图',
+      modelContent: JSON.stringify({ assetId: character.id, scope, nodeId: node.id,
+        ...(audio ? { clipId: media.id } : { referenceImageId: media.id }),
+        reused: Boolean(existing), mention: formatDramaMention(mentionId, character.name) }),
+    };
+  } catch {
+    return fail('角色素材保存失败，请查询角色详情核对，勿自动重试');
+  }
+}
 
 const upsertInputSchema: AgentToolSchema = {
   type: 'object',
@@ -228,6 +320,11 @@ export function registerDramaAssetAgentTools(): Array<() => void> {
             mention: formatDramaMention(asset.id, asset.name),
             brief: formatDramaAssetTextBrief(asset),
             referenceImageCount: character?.referenceImages?.length ?? (asset.imageUrl ? 1 : 0),
+            referenceImages: character?.referenceImages?.map((reference) => ({
+              id: reference.id, kind: reference.kind,
+              isPrimary: reference.id === character.primaryReferenceImageId,
+              mention: formatDramaMention(buildDramaMentionId(asset.id, reference.id), asset.name),
+            })) ?? [],
             voiceClips: character?.voiceClips?.map((clip) => ({
               id: clip.id,
               kind: clip.kind,
@@ -247,7 +344,7 @@ export function registerDramaAssetAgentTools(): Array<() => void> {
         'scope=project（默认）写当前项目资产库；scope=global 写跨项目角色库，只能是 character。',
         '专属字段按类型区分：人物 identity/personality/wardrobeDefault/voiceNotes，',
         '场景 placeType/timeOfDay/atmosphere/spatialNotes，道具 ownerName/category/significance。',
-        '参考图和音色片段不在这里维护，需要用户在界面上绑定。每次写入都要用户确认。',
+        '参考图和音色片段通过 drama_reference_image_add / drama_voice_add 从画布节点绑定，写入遵循当前模式权限。',
       ].join(''),
       inputSchema: upsertInputSchema,
       effect: 'asset_write',
@@ -363,6 +460,18 @@ export function registerDramaAssetAgentTools(): Array<() => void> {
         };
       },
     }),
+    ...([false, true] as const).map((audio) => registerAgentTool<BindCharacterMediaInput>({
+      id: audio ? 'drama_voice_add' : 'drama_reference_image_add',
+      title: audio ? '添加角色参考音频' : '添加角色参考图',
+      description: `把当前画布中已有${audio ? '音频' : '图片'}产物绑定到指定角色。`
+        + '本机文件先用 file_import_media_to_canvas 导入，再传 nodeId；不接受路径或 URL。'
+        + 'scope 支持 project/global；重复绑定复用素材 ID，makePrimary 可设为主素材。'
+        + '不生成媒体，不隐藏或修改源节点。返回素材 ID 和可用于提示词的角色引用。',
+      inputSchema: characterMediaSchema(audio), effect: 'asset_write',
+      authorize: authorizeCurrentProject,
+      summarizeInput: (input) => `为角色 ${input.assetId} 绑定${audio ? '声音' : '图片'}节点 ${input.nodeId}`,
+      execute: (context, input) => bindCharacterMedia(context, input, audio),
+    })),
     registerAgentTool<{ assetId: string; clipId: string; scope?: CharacterLibraryScope; kind?: CharacterVoiceKind; label?: string; transcript?: string }>({
       id: 'drama_voice_update',
       title: '更新角色声音',

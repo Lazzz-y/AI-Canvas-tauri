@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useAppStore } from '../../../src/store/useAppStore';
 import { registerDramaAssetAgentTools } from '../../../src/services/chat/tools/dramaAssetTools';
 import {
@@ -52,6 +52,107 @@ beforeEach(() => {
 });
 
 describe('drama asset agent tools', () => {
+  function mediaNodes() {
+    useAppStore.setState({ nodes: [
+      { id: 'audio-1', type: 'source-audio', position: { x: 0, y: 0 }, data: {
+        label: '参考声音', type: 'source-audio', audioUrl: 'asset:///private/voice.flac', assetId: 'audio-asset',
+      } },
+      { id: 'image-1', type: 'source-image', position: { x: 100, y: 0 }, data: {
+        label: '全身图', type: 'source-image', imageUrl: 'asset:///private/image.png', assetId: 'image-asset',
+      } },
+    ] });
+  }
+
+  it('binds audio and image references to the requested character without changing the canvas', async () => {
+    registerDramaAssetAgentTools();
+    mediaNodes();
+    const before = useAppStore.getState().nodes;
+    const audio = getAgentTool('drama_voice_add')!;
+    const image = getAgentTool('drama_reference_image_add')!;
+    expect(audio.effect).toBe('asset_write');
+    expect(image.effect).toBe('asset_write');
+    const voiceResult = await audio.execute(context(), {
+      assetId: 'char_1', nodeId: 'audio-1', label: '小满音色', transcript: '试听台词', makePrimary: true,
+    });
+    const imageResult = await image.execute(context(), { assetId: 'char_1', nodeId: 'image-1', kind: 'full_body', makePrimary: true });
+    const voice = JSON.parse(voiceResult.modelContent);
+    const reference = JSON.parse(imageResult.modelContent);
+    expect(voiceResult.status).toBe('success');
+    expect(imageResult.status).toBe('success');
+    const card = useAppStore.getState().dramaAssets.characters[0];
+    expect(card.voiceClips).toHaveLength(2);
+    expect(card.primaryVoiceClipId).toBe(voice.clipId);
+    expect(card.voiceClips?.find((clip) => clip.id === voice.clipId)).toMatchObject({
+      sourceNodeId: 'audio-1', label: '小满音色', kind: 'timbre', transcript: '试听台词',
+    });
+    expect(card.primaryReferenceImageId).toBe(reference.referenceImageId);
+    expect(voice.mention).toContain('#voice/');
+    expect(reference.mention).toContain(`#${reference.referenceImageId}`);
+    expect(voiceResult.modelContent + imageResult.modelContent).not.toContain('asset:///');
+    expect(useAppStore.getState().nodes).toBe(before);
+    const read = await getAgentTool('drama_asset_get')!.execute(context(), { assetId: 'char_1' });
+    expect(JSON.parse(read.modelContent).referenceImages[0]).toMatchObject({ id: reference.referenceImageId, isPrimary: true });
+  });
+
+  it.each(['drama_voice_add', 'drama_reference_image_add'])('reuses %s media and rejects wrong types, missing roles and stale projects', async (id) => {
+    registerDramaAssetAgentTools();
+    mediaNodes();
+    const tool = getAgentTool(id)!;
+    const nodeId = id === 'drama_voice_add' ? 'audio-1' : 'image-1';
+    const input = { assetId: 'char_1', nodeId };
+    const first = JSON.parse((await tool.execute(context(), input)).modelContent);
+    const second = JSON.parse((await tool.execute(context(), input)).modelContent);
+    expect(second).toEqual({ ...first, reused: true });
+    const card = useAppStore.getState().dramaAssets.characters[0];
+    expect(id === 'drama_voice_add' ? card.voiceClips : card.referenceImages).toHaveLength(id === 'drama_voice_add' ? 2 : 1);
+    expect((await tool.execute(context(), { ...input, nodeId: nodeId === 'audio-1' ? 'image-1' : 'audio-1' })).status).toBe('error');
+    expect((await tool.execute(context(), { ...input, nodeId: 'absent' })).status).toBe('error');
+    expect((await tool.execute(context(), { ...input, assetId: 'absent' })).status).toBe('error');
+    expect((await tool.execute({ ...context(), projectId: 'other' }, input)).status).toBe('error');
+    expect((await tool.execute({ ...context(), baseRevision: -1 }, input)).status).toBe('error');
+    const abort = new AbortController();
+    abort.abort();
+    expect((await tool.execute({ ...context(), signal: abort.signal }, input)).status).toBe('error');
+    useAppStore.setState({ nodes: useAppStore.getState().nodes.map((node) => ({
+      ...node, data: { ...node.data, audioUrl: undefined, imageUrl: undefined, thumbnailUrl: undefined },
+    })) });
+    expect((await tool.execute(context(), input)).status).toBe('error');
+    expect(tool.authorize?.({ ...context(), projectId: 'other' }, { ...input, scope: 'global' })).toMatchObject({ allowed: false });
+    expect(tool.inputSchema.additionalProperties).toBe(false);
+    expect(tool.inputSchema.properties).not.toHaveProperty('path');
+    expect(tool.inputSchema.properties).not.toHaveProperty('audioUrl');
+  });
+
+  it.each(['drama_voice_add', 'drama_reference_image_add'])('supports global %s without project node IDs and reports save failure', async (id) => {
+    registerDramaAssetAgentTools();
+    mediaNodes();
+    // 没有素材索引 ID 的节点也必须幂等，不能只依赖 assetId 去重。
+    useAppStore.setState({ nodes: useAppStore.getState().nodes.map((node) => ({
+      ...node, data: { ...node.data, assetId: undefined },
+    })) });
+    useAppStore.setState({ globalCharacters: [character({ id: 'global-1', voiceClips: [] })] });
+    const save = vi.fn(async (_scope, card: DramaCharacter) => {
+      useAppStore.setState({ globalCharacters: [card] });
+      return true;
+    });
+    useAppStore.setState({ saveCharacterCard: save });
+    const tool = getAgentTool(id)!;
+    const input = { scope: 'global', assetId: 'global-1', nodeId: id === 'drama_voice_add' ? 'audio-1' : 'image-1' };
+    expect((await tool.execute(context(), input)).status).toBe('success');
+    expect(JSON.parse((await tool.execute(context(), input)).modelContent).reused).toBe(true);
+    const card = useAppStore.getState().globalCharacters[0];
+    const media = id === 'drama_voice_add' ? card.voiceClips : card.referenceImages;
+    expect(media).toHaveLength(1);
+    expect(media?.[0].sourceNodeId).toBeUndefined();
+    expect(useAppStore.getState().dramaAssets.characters[0].referenceImages).toBeUndefined();
+    save.mockResolvedValueOnce(false);
+    expect((await tool.execute(context(), input)).status).toBe('error');
+    save.mockRejectedValueOnce(new Error('private-path-that-must-not-leak'));
+    const failed = await tool.execute(context(), input);
+    expect(failed.status).toBe('error');
+    expect(failed.modelContent).not.toContain('private-path');
+  });
+
   it('lists assets as read-only with mention strings and voice availability', async () => {
     const unregisters = registerDramaAssetAgentTools();
     const definition = getAgentTool('drama_asset_list');
