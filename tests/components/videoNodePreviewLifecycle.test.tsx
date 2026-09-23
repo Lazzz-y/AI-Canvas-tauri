@@ -160,25 +160,32 @@ afterEach(() => {
 });
 
 describe('video node demand loading', () => {
-  it.each(['poster', 'player'])('preserves a resize made before the %s metadata arrives', async (path) => {
+  it.each([
+    { path: 'poster', videoWidth: 832, videoHeight: 1472, nodeWidth: 540, nodeHeight: 955 },
+    { path: 'player', videoWidth: 1920, videoHeight: 800, nodeWidth: 730, nodeHeight: 304 },
+  ])('fits the $path result to the enlarged short side without empty bands', async (
+    { path, videoWidth, videoHeight, nodeWidth, nodeHeight },
+  ) => {
     const pending = deferred<unknown>();
     driver.acquire.mockReturnValue(pending.promise);
     selected = path === 'player';
     render();
     // 拖拽已更新 Store，但媒体回调仍来自上一轮渲染。
-    (named('ResizeHandle').props.onResize as (width: number, height: number) => void)(540, 960);
+    (named('ResizeHandle').props.onResize as (width: number, height: number) => void)(540, 304);
     store.nodes[0].data = { ...store.nodes[0].data, ...store.updateNodeDataTransient.mock.calls[0][1] };
     store.updateNodeDataTransient.mockClear();
     if (path === 'poster') {
       pending.resolve({ src: 'blob:cover', release: vi.fn(), width: 360, height: 640,
-        videoWidth: 832, videoHeight: 1472, duration: 5 });
+        videoWidth, videoHeight, duration: 5 });
       await pending.promise;
     } else {
-      compact!.videoWidth = 832;
-      compact!.videoHeight = 1472;
+      compact!.videoWidth = videoWidth;
+      compact!.videoHeight = videoHeight;
       (find((element) => element.type === 'video').props.onLoadedMetadata as (event: unknown) => void)({ currentTarget: compact });
     }
-    expect(store.updateNodeDataTransient).toHaveBeenCalledExactlyOnceWith('video', { videoWidth: 832, videoHeight: 1472 });
+    expect(store.updateNodeDataTransient).toHaveBeenCalledExactlyOnceWith('video', {
+      videoWidth, videoHeight, nodeWidth, nodeHeight,
+    });
   });
 
   it.each(['poster', 'player'])('initializes missing node dimensions from %s metadata', async (path) => {
@@ -196,6 +203,25 @@ describe('video node demand loading', () => {
     expect(store.updateNodeDataTransient).toHaveBeenCalledExactlyOnceWith('video', {
       videoWidth: 1920, videoHeight: 1080, nodeWidth: 320, nodeHeight: 180,
     });
+  });
+
+  it('corrects an existing portrait frame even when video metadata was already stored', () => {
+    selected = true;
+    store.nodes[0].data = {
+      ...store.nodes[0].data, videoWidth: 832, videoHeight: 1472, nodeWidth: 400, nodeHeight: 225,
+    };
+    render();
+    compact!.videoWidth = 832;
+    compact!.videoHeight = 1472;
+    const onLoadedMetadata = find((element) => element.type === 'video').props.onLoadedMetadata as (event: unknown) => void;
+    onLoadedMetadata({ currentTarget: compact });
+    expect(store.updateNodeDataTransient).toHaveBeenCalledExactlyOnceWith('video', {
+      videoWidth: 832, videoHeight: 1472, nodeWidth: 400, nodeHeight: 708,
+    });
+    store.nodes[0].data = { ...store.nodes[0].data, ...store.updateNodeDataTransient.mock.calls[0][1] };
+    store.updateNodeDataTransient.mockClear();
+    onLoadedMetadata({ currentTarget: compact });
+    expect(store.updateNodeDataTransient).not.toHaveBeenCalled();
   });
 
   it('keeps idle nodes free of video players and ignores thumbnailUrl values that actually point at the video', () => {
@@ -313,7 +339,7 @@ describe('video node demand loading', () => {
     expect(named('VideoNodeControls').props.active).toBe(false);
   });
 
-  it('cancels an obsolete poster result and never overwrites a newer manual canvas revision', async () => {
+  it('cancels an obsolete poster and fits the latest resize made while the new poster loads', async () => {
     const first = deferred<unknown>();
     const second = deferred<unknown>();
     driver.acquire.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
@@ -326,12 +352,15 @@ describe('video node demand loading', () => {
     first.resolve(stale);
     await first.promise;
     expect(stale.release).toHaveBeenCalled();
+    store.nodes[0].data = { ...store.nodes[0].data, nodeWidth: 540, nodeHeight: 304 };
     revision++;
-    second.resolve({ src: 'blob:new', release: vi.fn(), width: 640, height: 360, videoWidth: 1920, videoHeight: 1080, duration: 10 });
+    second.resolve({ src: 'blob:new', release: vi.fn(), width: 360, height: 640, videoWidth: 832, videoHeight: 1472, duration: 10 });
     await second.promise;
     render();
     expect(find((element) => element.type === 'img').props.src).toBe('blob:new');
-    expect(store.updateNodeDataTransient).not.toHaveBeenCalled();
+    expect(store.updateNodeDataTransient).toHaveBeenCalledExactlyOnceWith('video', {
+      videoWidth: 832, videoHeight: 1472, nodeWidth: 540, nodeHeight: 955,
+    });
   });
 
   it('waits for a newly selected video before capturing and rejects a project switch during that wait', async () => {
