@@ -9,11 +9,13 @@ import {
 import { filterHiddenCanvasElements } from '../../src/store/store.nodes';
 import type { CharacterActionMedia, DramaCharacter } from '../../src/types/dramaAssets';
 import { emptyDramaAssetLibrary } from '../../src/types/dramaAssets';
+import { sortCharactersForLibrary } from '../../src/services/characterOrder';
 import type { BaseNodeData } from '../../src/types';
 
 const characterLibraryMocks = vi.hoisted(() => ({
   loadGlobalCharacterCards: vi.fn(async () => [] as DramaCharacter[]),
   saveGlobalCharacterCard: vi.fn(async (character: DramaCharacter) => character),
+  saveGlobalCharacterOrder: vi.fn(async (_ids: string[]) => undefined),
   deleteGlobalCharacterCard: vi.fn(async () => undefined),
   clearGlobalCharacterCards: vi.fn(async () => undefined),
 }));
@@ -24,6 +26,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   characterLibraryMocks.loadGlobalCharacterCards.mockResolvedValue([]);
   characterLibraryMocks.saveGlobalCharacterCard.mockImplementation(async (character) => character);
+  characterLibraryMocks.saveGlobalCharacterOrder.mockResolvedValue(undefined);
   useAppStore.setState(useAppStore.getInitialState(), true);
   useAppStore.setState({
     saveCurrentProjectSilent: vi.fn(async () => 'p1'),
@@ -56,6 +59,77 @@ function deferred<T>() {
   const promise = new Promise<T>((next) => { resolve = next; });
   return { promise, resolve };
 }
+
+describe('角色库排序保存', () => {
+  function setup() {
+    const characters = [sampleCharacter({ id: 'a', updatedAt: 3 }),
+      sampleCharacter({ id: 'b', updatedAt: 2 }), sampleCharacter({ id: 'c', updatedAt: 1 })];
+    useAppStore.setState({ dramaAssets: { ...emptyDramaAssetLibrary(), characters }, globalCharacters: characters });
+    return characters;
+  }
+  const projectIds = () => sortCharactersForLibrary(useAppStore.getState().dramaAssets.characters).map((item) => item.id);
+
+  it('搜索子集排序只保存一次，场景道具和全局角色不受影响', async () => {
+    const characters = setup();
+    expect(await useAppStore.getState().reorderCharacters('project', ['c', 'a'], 'p1')).toBe(true);
+    expect(projectIds()).toEqual(['c', 'b', 'a']);
+    expect(useAppStore.getState().globalCharacters).toBe(characters);
+    expect(useAppStore.getState().saveCurrentProjectSilent).toHaveBeenCalledTimes(1);
+    expect(useAppStore.getState().dramaAssets.characters[0].updatedAt).toBe(3);
+  });
+  it('旧编辑对象保存后仍保持最新顺序', async () => {
+    const characters = setup();
+    await useAppStore.getState().reorderCharacters('project', ['b', 'a', 'c'], 'p1');
+    await useAppStore.getState().saveCharacterCard('project', { ...characters[0], name: '编辑后', updatedAt: 99 });
+    expect(projectIds()).toEqual(['b', 'a', 'c']);
+  });
+  it('全局排序走独立批量保存，不重写媒体', async () => {
+    setup();
+    expect(await useAppStore.getState().reorderCharacters('global', ['c', 'b', 'a'], 'p1')).toBe(true);
+    expect(characterLibraryMocks.saveGlobalCharacterOrder).toHaveBeenCalledWith(['c', 'b', 'a']);
+    expect(characterLibraryMocks.saveGlobalCharacterCard).not.toHaveBeenCalled();
+    expect(useAppStore.getState().saveCurrentProjectSilent).not.toHaveBeenCalled();
+    expect(projectIds()).toEqual(['a', 'b', 'c']);
+  });
+  it('全局保存失败恢复顺序，保留同时修改的正文', async () => {
+    setup();
+    characterLibraryMocks.saveGlobalCharacterOrder.mockImplementationOnce(async () => {
+      useAppStore.setState((state) => ({ globalCharacters: state.globalCharacters.map((item) => ({ ...item, name: '并发编辑' })) }));
+      throw new Error('disk full');
+    });
+    expect(await useAppStore.getState().reorderCharacters('global', ['c', 'b', 'a'], 'p1')).toBe(false);
+    expect(sortCharactersForLibrary(useAppStore.getState().globalCharacters).map((item) => item.id)).toEqual(['a', 'b', 'c']);
+    expect(useAppStore.getState().globalCharacters.every((item) => item.name === '并发编辑')).toBe(true);
+  });
+  it('保存失败回退排序字段；项目切换后不污染新项目', async () => {
+    setup();
+    useAppStore.setState({ saveCurrentProjectSilent: vi.fn(async () => undefined) });
+    expect(await useAppStore.getState().reorderCharacters('project', ['c', 'b', 'a'], 'p1')).toBe(false);
+    expect(projectIds()).toEqual(['a', 'b', 'c']);
+    const pending = deferred<string | undefined>();
+    useAppStore.setState({ saveCurrentProjectSilent: vi.fn(() => pending.promise) });
+    const result = useAppStore.getState().reorderCharacters('project', ['c', 'b', 'a'], 'p1');
+    const other = { ...emptyDramaAssetLibrary(), characters: [sampleCharacter({ id: 'other' })] };
+    useAppStore.setState({ currentProjectId: 'p2', dramaAssets: other });
+    pending.resolve(undefined);
+    expect(await result).toBe(false);
+    expect(useAppStore.getState().dramaAssets).toBe(other);
+  });
+  it('拒绝过期项目、重复 ID 和并发保存，无变化时不写入', async () => {
+    setup();
+    const store = useAppStore.getState();
+    expect(await store.reorderCharacters('project', ['b', 'a'], 'old')).toBe(false);
+    expect(await store.reorderCharacters('project', ['a', 'a'], 'p1')).toBe(false);
+    expect(await store.reorderCharacters('project', ['a', 'b', 'c'], 'p1')).toBe(true);
+    expect(store.saveCurrentProjectSilent).not.toHaveBeenCalled();
+    const pending = deferred<string | undefined>();
+    useAppStore.setState({ saveCurrentProjectSilent: vi.fn(() => pending.promise) });
+    const result = store.reorderCharacters('project', ['c', 'b', 'a'], 'p1');
+    expect(await store.reorderCharacters('project', ['b', 'a', 'c'], 'p1')).toBe(false);
+    pending.resolve('p1');
+    expect(await result).toBe(true);
+  });
+});
 
 describe('角色声音移除与画布来源', () => {
   function setupVoice(sourceNodeId?: string) {

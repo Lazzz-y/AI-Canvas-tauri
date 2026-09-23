@@ -20,6 +20,14 @@ export interface ShotlistProductionSource {
   nodeId: string;
   rowId: string;
   kind: ShotlistProductionKind;
+  /** 自动跟随分镜；在视频节点单独修改时长后切换为 manual。 */
+  durationSync?: 'auto' | 'manual';
+}
+
+/** 生成素材使用完整整数秒，保留原分镜的小数剪辑时长。 */
+export function resolveShotVideoDuration(duration: number | undefined): number | undefined {
+  return typeof duration === 'number' && Number.isFinite(duration) && duration > 0 && duration <= 3600
+    ? Math.ceil(duration) : undefined;
 }
 
 /** 分镜表的全部列 */

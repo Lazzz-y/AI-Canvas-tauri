@@ -77,7 +77,14 @@ export async function putGlobalCharacter(character: DramaCharacter): Promise<voi
   const db = await openDB();
   return new Promise((resolve, reject) => {
     const tx = db.transaction([STORE_GLOBAL_CHARACTERS, STORE_METADATA], 'readwrite');
-    withRelocatedMedia(tx, character, (next) => tx.objectStore(STORE_GLOBAL_CHARACTERS).put(next));
+    const store = tx.objectStore(STORE_GLOBAL_CHARACTERS);
+    const current = store.get(character.id);
+    current.onsuccess = () => {
+      // 编辑器可能早于一次排序打开，正文保存不能覆盖最新手动顺序。
+      const existing = current.result as DramaCharacter | undefined;
+      const next = existing ? { ...character, libraryOrder: existing.libraryOrder } : character;
+      withRelocatedMedia(tx, next, (relocated) => store.put(relocated));
+    };
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
     tx.onabort = () => reject(tx.error ?? new Error(`全局角色 ${character.id} 保存失败`));
@@ -92,6 +99,26 @@ export async function getAllGlobalCharacters(): Promise<DramaCharacter[]> {
       .getAll();
     request.onsuccess = () => resolve(request.result as DramaCharacter[]);
     request.onerror = () => reject(request.error);
+  });
+}
+
+/** 单事务只更新排序字段；失败整体回滚，不重存媒体或覆盖并发编辑。 */
+export async function putGlobalCharacterOrder(ids: string[]): Promise<void> {
+  if (new Set(ids).size !== ids.length) throw new Error('角色顺序含重复项');
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_GLOBAL_CHARACTERS, 'readwrite');
+    const store = tx.objectStore(STORE_GLOBAL_CHARACTERS);
+    ids.forEach((id, libraryOrder) => {
+      const request = store.get(id);
+      request.onsuccess = () => {
+        if (!request.result) { tx.abort(); return; }
+        store.put({ ...request.result, libraryOrder });
+      };
+    });
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error ?? new Error('角色列表已变化，请重试排序'));
   });
 }
 

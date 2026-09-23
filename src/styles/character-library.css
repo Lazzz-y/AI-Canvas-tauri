@@ -583,6 +583,7 @@
 }
 
 .character-library-strip-list {
+  position: relative;
   display: flex;
   min-width: 0;
   flex: 1;
@@ -592,7 +593,8 @@
   padding: 10px 12px;
 }
 
-.character-library-strip-list > button {
+.character-library-strip-list > button,
+.character-dock-floating {
   display: flex;
   width: 68px;
   flex: 0 0 auto;
@@ -604,7 +606,38 @@
   background: transparent;
   border: 1px solid transparent;
   border-radius: 7px;
-  cursor: var(--cursor-pointer, pointer);
+  cursor: var(--cursor-grab, grab);
+  user-select: none;
+  touch-action: pan-y;
+}
+
+.character-library-strip-list.is-reordering,
+.character-library-strip-list.is-reordering > button {
+  cursor: var(--cursor-grabbing, grabbing);
+}
+
+.character-library-strip-list > button.is-drag-placeholder {
+  opacity: 0.22;
+  border-style: dashed;
+  border-color: var(--theme-border);
+}
+
+.character-library-strip-list > button:focus-visible {
+  outline: 2px solid var(--node-text-light);
+  outline-offset: 2px;
+}
+
+.character-dock-floating {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 270;
+  pointer-events: none;
+  color: var(--theme-text);
+  background: var(--theme-card);
+  border-color: var(--theme-border);
+  box-shadow: var(--glass-shadow-floating);
+  will-change: transform;
 }
 
 .character-library-strip-list > button:hover,
@@ -618,7 +651,8 @@
   border-color: color-mix(in srgb, var(--node-text-light) 68%, var(--theme-border));
 }
 
-.character-library-strip-list > button > span:last-child {
+.character-library-strip-list > button > span:last-child,
+.character-dock-floating > span:last-child {
   width: 100%;
   overflow: hidden;
   font-size: 10px;

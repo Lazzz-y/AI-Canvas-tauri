@@ -265,7 +265,7 @@ export function applyProjectDefaultsToNodeData(
     if (!directGeneralProtocol && settings.generation?.videoResolution && (!hasPrompt || !data.seedanceResolution)) {
       next.seedanceResolution = settings.generation.videoResolution;
     }
-    if (!directGeneralProtocol && settings.generation?.videoDuration && (!hasPrompt || !data.seedanceDuration)) {
+    if (!directGeneralProtocol && settings.generation?.videoDuration && !data.seedanceDuration) {
       next.seedanceDuration = settings.generation.videoDuration;
     }
   }

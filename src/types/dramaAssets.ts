@@ -146,6 +146,8 @@ export interface DramaAssetBase {
 }
 
 export interface DramaCharacter extends DramaAssetBase {
+  /** 角色库中的手动顺序；缺省时沿用最近修改排序。 */
+  libraryOrder?: number;
   kind: 'character';
   aliases?: string[];
   identity: string;

@@ -56,6 +56,126 @@ beforeEach(() => {
 });
 
 describe('canvas agent tools', () => {
+  it('creates image, video and audio nodes with explicit generation settings and reads them back', async () => {
+    const result = await getAgentTool('canvas_create_nodes')!.execute(context(), { nodes: [
+      { type: 'ai-image', label: '竖屏分镜', prompt: '小满在酒馆门口', aspectRatio: '9:16', imageSize: '2K', batchCount: 2 },
+      { type: 'ai-video', label: '镜头', prompt: '小满回头', aspectRatio: '9:16', videoLongSide: 832, videoDuration: 8.1 },
+      { type: 'ai-audio', label: '旁白', prompt: '请进来', audioPurpose: 'speech', audioFormat: 'flac',
+        audioSpeechSettings: { voiceStyle: 'girl', pace: 2, duration: 9 } },
+    ] });
+    expect(result.status).toBe('success');
+    const created = useAppStore.getState().nodes.slice(2);
+    expect(created[0].data).toMatchObject({ aspectRatio: '9:16', imageSize: '2K', batchCount: 2 });
+    expect(created[1].data).toMatchObject({ seedanceRatio: '9:16', videoResolution: 832, seedanceDuration: 9 });
+    expect(created[2].data).toMatchObject({ audioPurpose: 'speech', audioFormat: 'flac',
+      audioSpeechSettings: { voiceStyle: 'girl', pace: 2, duration: 9 } });
+    const read = await getAgentTool('canvas_query')!.execute(context(), {
+      nodeIds: created.map((item) => item.id), detail: true,
+    });
+    expect(JSON.parse(read.modelContent).nodes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ imageSize: '2K', batchCount: 2 }),
+      expect.objectContaining({ videoResolution: '832', videoLongSide: 832, videoDuration: 9 }),
+      expect.objectContaining({ audioPurpose: 'speech', audioFormat: 'flac',
+        audioSpeechSettings: { voiceStyle: 'girl', pace: 2, duration: 9 } }),
+    ]));
+    expect(executeGeneration).not.toHaveBeenCalled();
+  });
+
+  it('maps legacy numeric resolution to the local long side and keeps API quality presets separate', async () => {
+    const result = await getAgentTool('canvas_create_nodes')!.execute(context(), { nodes: [
+      { type: 'ai-video', label: '旧客户端长边', videoResolution: '832' },
+      { type: 'ai-video', label: 'API 档位', videoResolution: '720p' },
+    ] });
+    expect(result.status).toBe('success');
+    const [local, api] = useAppStore.getState().nodes.slice(2);
+    expect(local.data).toMatchObject({ videoResolution: 832 });
+    expect(local.data.seedanceResolution).not.toBe('832');
+    expect(api.data).toMatchObject({ seedanceResolution: '720p' });
+    const update = await getAgentTool('canvas_update_nodes')!.execute(context(), {
+      nodeIds: [api.id], videoLongSide: 640,
+    });
+    expect(update.status).toBe('success');
+    expect(useAppStore.getState().nodes.find((node) => node.id === api.id)?.data.videoResolution).toBe(640);
+  });
+
+  it('rejects a mixed invalid media batch without creating any nodes', async () => {
+    const before = useAppStore.getState().nodes;
+    const result = await getAgentTool('canvas_create_nodes')!.execute(context(), { nodes: [
+      { type: 'ai-image', label: '有效图片', imageSize: '2K' },
+      { type: 'ai-audio', label: '错误音频', videoResolution: '832' },
+    ] });
+    expect(result.status).toBe('error');
+    expect(result.summary).toContain('只能用于视频节点');
+    expect(useAppStore.getState().nodes).toBe(before);
+  });
+
+  it('keeps explicit image controls on an empty-prompt node despite project defaults', async () => {
+    useAppStore.setState({ projects: [{ id: 'p1', name: '项目', createdAt: 1, updatedAt: 1,
+      settings: { generation: { imageAspectRatio: '16:9', imageSize: '1K' } } }] });
+    const result = await getAgentTool('canvas_create_nodes')!.execute(context(), { nodes: [
+      { type: 'ai-image', label: '待写提示词的竖屏图', aspectRatio: '9:16', imageSize: '2K' },
+    ] });
+    expect(result.status).toBe('success');
+    expect(useAppStore.getState().nodes.at(-1)?.data).toMatchObject({ aspectRatio: '9:16', imageSize: '2K' });
+  });
+
+  it('rejects an unconfigured model before creating any nodes', async () => {
+    const before = useAppStore.getState().nodes;
+    const result = await getAgentTool('canvas_create_nodes')!.execute(context(), { nodes: [
+      { type: 'ai-image', label: '有效图片' },
+      { type: 'ai-video', label: '无效模型', model: 'unknown/workflow' },
+    ] });
+    expect(result.status).toBe('error');
+    expect(result.summary).toContain('未配置');
+    expect(useAppStore.getState().nodes).toBe(before);
+  });
+
+  it('updates audio settings but rejects applying them to images', async () => {
+    useAppStore.setState({ nodes: [...useAppStore.getState().nodes,
+      node('audio1', { type: 'ai-audio' }, { x: 800, y: 100 })] });
+    const update = getAgentTool('canvas_update_nodes')!;
+    const result = await update.execute(context(), { nodeIds: ['audio1'], audioPurpose: 'music',
+      musicDuration: 90, musicBpm: 120, autoGenerateLyrics: false });
+    expect(result.status).toBe('success');
+    expect(useAppStore.getState().nodes.find((item) => item.id === 'audio1')?.data).toMatchObject({
+      audioPurpose: 'music', musicDuration: 90, musicBpm: 120, autoGenerateLyrics: false,
+    });
+    const beforeImage = useAppStore.getState().nodes[0].data;
+    const invalid = await update.execute(context(), { nodeIds: ['n1'], musicDuration: 90 });
+    expect(invalid.status).toBe('error');
+    expect(useAppStore.getState().nodes[0].data).toBe(beforeImage);
+  });
+
+  it('导入分镜小数秒写入实际视频时长，并优先于项目默认值', async () => {
+    useAppStore.setState({ projects: [{ id: 'p1', name: '项目', createdAt: 1, updatedAt: 1,
+      settings: { generation: { videoDuration: 5 } } }] });
+    const result = await getAgentTool('canvas_create_nodes')!.execute(context(), { nodes: [
+      { type: 'ai-video', label: '镜1', videoDuration: 8.1 },
+      { type: 'ai-video', label: '镜2', videoDuration: 4 },
+      { type: 'ai-video', label: '镜3' },
+    ] });
+    expect(result.status).toBe('success');
+    expect(useAppStore.getState().nodes.slice(2).map((n) => n.data.seedanceDuration)).toEqual([9, 4, 5]);
+    const read = await getAgentTool('canvas_query')!.execute(context(), { nodeType: 'ai-video', detail: true });
+    expect(JSON.parse(read.modelContent).nodes.map((n: { videoDuration: number }) => n.videoDuration)).toEqual([9, 4, 5]);
+    expect(executeGeneration).not.toHaveBeenCalled();
+  });
+
+  it('无效分镜秒数或非视频字段拒绝整个导入批次', async () => {
+    const before = useAppStore.getState().nodes;
+    for (const invalid of [0, -1, NaN, Infinity, 3600.1]) {
+      const result = await getAgentTool('canvas_create_nodes')!.execute(context(), { nodes: [
+        { type: 'ai-video', label: '有效', videoDuration: 8.1 },
+        { type: 'ai-video', label: '无效', videoDuration: invalid },
+      ] });
+      expect(result.status).toBe('error');
+      expect(useAppStore.getState().nodes).toBe(before);
+    }
+    expect((await getAgentTool('canvas_create_nodes')!.execute(context(), {
+      nodes: [{ type: 'ai-image', label: '图片', videoDuration: 5 }],
+    })).status).toBe('error');
+    expect(useAppStore.getState().nodes).toBe(before);
+  });
   it('renames visible media titles and text labels with one history snapshot', async () => {
     const media = node('n1', {
       type: 'source-image', fileName: 'mcp-upload-original.png',

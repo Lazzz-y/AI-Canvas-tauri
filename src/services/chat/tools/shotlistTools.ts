@@ -57,7 +57,7 @@ export function registerShotlistAgentTools(): Array<() => void> {
     }),
     registerAgentTool<{ nodeId: string; rowIds: string[]; kind: ShotlistProductionKind }>({
       id: 'shotlist_prepare_production', title: '准备镜头制作节点', effect: 'canvas_write',
-      description: '为指定镜头创建 voiceover 配音、video 视频或 director 导演台节点，不调用模型、不启动程序。配音只放对白并标记语音用途，视频继承画面引用；导演台附带可读镜头说明。每镜同类已有节点则复用且不覆盖人工修改。返回真实节点 ID；之后仍须按生成规则选择模型和音色。',
+      description: '为指定镜头创建 voiceover 配音、video 视频或 director 导演台节点，不调用模型、不启动程序。配音只放对白并标记语音用途，视频继承画面引用和向上取整的分镜时长，并自动跟随之后的分镜时长修改；单独修改视频时长后保留手动值。导演台附带可读镜头说明。每镜同类已有节点则复用且不覆盖人工修改。返回真实节点 ID；之后仍须按生成规则选择模型和音色。',
       inputSchema: { type: 'object', required: ['nodeId', 'rowIds', 'kind'], additionalProperties: false, properties: {
         nodeId: idSchema, rowIds: { type: 'array', minItems: 1, maxItems: MAX_SHOTLIST_PRODUCTION_BATCH, items: idSchema },
         kind: { type: 'string', enum: ['voiceover', 'video', 'director'] },
@@ -129,7 +129,7 @@ export function registerShotlistAgentTools(): Array<() => void> {
     }),
     registerAgentTool<{ nodeId: string; mode: 'append' | 'update'; rows: ShotRowEdit[] }>({
       id: 'shotlist_update_rows', title: '追加或修改镜头', effect: 'canvas_write',
-      description: 'append 追加镜头，不传 id；update 必须使用 shotlist_read 返回的镜头 id，仅修改指定文字和时长，保留未指定字段、镜头顺序与画面绑定。不能把媒体 URL 或路径写进镜头绑定。',
+      description: 'append 追加镜头，不传 id；update 必须使用 shotlist_read 返回的镜头 id，仅修改指定文字和时长，保留未指定字段、镜头顺序与画面绑定。时长修改同步到自动跟随的关联视频节点，向上取整；保留视频手动时长和已生成媒体，不触发生成。不能把媒体 URL 或路径写进镜头绑定。',
       inputSchema: { type: 'object', required: ['nodeId', 'mode', 'rows'], additionalProperties: false, properties: {
         nodeId: idSchema, mode: { type: 'string', enum: ['append', 'update'] },
         rows: { type: 'array', minItems: 1, maxItems: MAX_SHOTLIST_ROWS, items: rowSchema },

@@ -2,6 +2,7 @@
  * batchExecute — 批量执行节点工具函数
  *
  * 策略：
+ * - 工作流节点 → 按展示编号串行，等待生成及结果保存后再执行下一项
  * - 有连线关系的节点 → 按拓扑序依次执行（保证依赖顺序）
  * - 没有连线的独立节点 → 并发执行（Promise.all）
  * - 两组之间也并发执行
@@ -453,14 +454,28 @@ export async function batchExecuteNodes(
   edges: Edge[],
   ctx: BatchContext,
 ): Promise<{ ok: number; fail: number }> {
-  const toRun = filterExecutable(nodeIds, nodes);
+  const executable = filterExecutable(nodeIds, nodes);
+  // 使用用户看到的 #编号，而非随机内部 ID。未编号节点稳定地排在最后。
+  const workflows = executable.filter((node) => node.data.workflowId).sort((a, b) => (
+    (a.data.displayId ?? Number.MAX_SAFE_INTEGER) - (b.data.displayId ?? Number.MAX_SAFE_INTEGER)
+  ));
+  let workflowIndex = 0;
+  // 只重排工作流所占的位置，保留普通节点原顺序；环内也按此顺序执行。
+  const toRun = executable.map((node) => node.data.workflowId ? workflows[workflowIndex++] : node);
   if (toRun.length === 0) return { ok: 0, fail: 0 };
   ctx.commitToHistory();
+
+  // 仅在调度图添加串行约束，不修改画布连线。复用现有依赖排序，避免
+  // 将工作流拆出独立队列后，与其普通上游/下游节点同时执行。
+  const schedulingEdges: { source: string; target: string }[] = [...edges];
+  for (let index = 1; index < workflows.length; index++) {
+    schedulingEdges.push({ source: workflows[index - 1].id, target: workflows[index].id });
+  }
 
   // Identify which nodes have edges between them
   const executableIds = new Set(toRun.map((node) => node.id));
   const connectedIds = new Set<string>();
-  for (const e of edges) {
+  for (const e of schedulingEdges) {
     if (executableIds.has(e.source) && executableIds.has(e.target)) {
       connectedIds.add(e.source);
       connectedIds.add(e.target);
@@ -474,7 +489,7 @@ export async function batchExecuteNodes(
   // Topological sort for connected nodes
   const order = topologicalSort(
     connectedNodes.map((n) => n.id),
-    edges,
+    schedulingEdges,
   );
   const orderedConnected = order
     .map((id) => connectedNodes.find((n) => n.id === id))

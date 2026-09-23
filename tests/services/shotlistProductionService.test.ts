@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useAppStore } from '../../src/store/useAppStore';
 import { prepareShotlistProduction } from '../../src/services/shotlistProductionService';
+import { updateShotlistRows } from '../../src/services/shotlistService';
 import { clearAgentToolRegistryForTests, getAgentTool, getAvailableAgentTools, prepareAgentToolCall, type AgentToolContext } from '../../src/services/chat/toolRegistry';
 import { registerShotlistAgentTools } from '../../src/services/chat/tools/shotlistTools';
 import { searchMcpToolCatalog } from '../../src/services/mcp/mcpToolCatalog';
@@ -22,6 +23,55 @@ beforeEach(() => {
 });
 
 describe('镜头制作准备', () => {
+  it('分镜时长向上取整，新节点自动跟随；MCP 修改和撤销同时恢复分镜与视频', async () => {
+    updateShotlistRows(scope(), 'sheet', 'update', [{ id: 'r1', duration: 4.3 }]);
+    const [result] = prepareShotlistProduction(scope(), 'sheet', ['r1'], 'video');
+    const video = () => useAppStore.getState().nodes.find((n) => n.id === result.nodeId)!;
+    expect(video().data.seedanceDuration).toBe(5);
+    useAppStore.getState().updateNodeDataTransient(result.nodeId, { videoUrl: 'keep.mp4', status: 'success' });
+    updateShotlistRows(scope(), 'sheet', 'update', [{ id: 'r1', duration: 8.1 }]);
+    expect(video().data).toMatchObject({ seedanceDuration: 9, videoUrl: 'keep.mp4', status: 'success' });
+    await useAppStore.getState().undo();
+    expect(video().data.seedanceDuration).toBe(5);
+    expect(useAppStore.getState().nodes.find((n) => n.id === 'sheet')!.data.shotlistRows![0].duration).toBe(4.3);
+    await useAppStore.getState().redo();
+    expect(video().data.seedanceDuration).toBe(9);
+  });
+
+  it('界面瞬时编辑同步，但视频手动时长永久保留，其他镜头不变', () => {
+    const results = prepareShotlistProduction(scope(), 'sheet', ['r1', 'r2'], 'video');
+    const video = (i: number) => useAppStore.getState().nodes.find((n) => n.id === results[i].nodeId)!;
+    const edit = (duration: number | undefined) => {
+      const rows = useAppStore.getState().nodes.find((n) => n.id === 'sheet')!.data.shotlistRows!;
+      useAppStore.getState().updateNodeDataTransient('sheet', { shotlistRows: rows.map((r) => r.id === 'r1' ? { ...r, duration } : r) });
+    };
+    expect(video(1).data.seedanceDuration).toBeUndefined();
+    edit(6.2);
+    expect(video(0).data.seedanceDuration).toBe(7);
+    edit(undefined);
+    edit(0);
+    expect(video(0).data.seedanceDuration).toBe(7);
+    useAppStore.getState().updateNodesDataBatch([results[0].nodeId], { seedanceDuration: 12 });
+    edit(12);
+    edit(8.1);
+    expect(video(0).data.seedanceDuration).toBe(12);
+    expect(video(0).data.shotlistProductionSource?.durationSync).toBe('manual');
+    expect(video(1).data.seedanceDuration).toBeUndefined();
+    expect(prepareShotlistProduction(scope(), 'sheet', ['r1'], 'video')[0].status).toBe('reused');
+    expect(video(0).data.seedanceDuration).toBe(12);
+  });
+
+  it('旧节点仅在仍匹配旧分镜时同步；无来源节点不按名称猜测', () => {
+    const [result] = prepareShotlistProduction(scope(), 'sheet', ['r1'], 'video');
+    useAppStore.getState().updateNodeDataTransient(result.nodeId, {
+      shotlistProductionSource: { nodeId: 'sheet', rowId: 'r1', kind: 'video' },
+    });
+    updateShotlistRows(scope(), 'sheet', 'update', [{ id: 'r1', duration: 9.3 }]);
+    expect(useAppStore.getState().nodes.find((n) => n.id === result.nodeId)!.data.seedanceDuration).toBe(10);
+    useAppStore.getState().updateNodeDataTransient(result.nodeId, { shotlistProductionSource: undefined });
+    updateShotlistRows(scope(), 'sheet', 'update', [{ id: 'r1', duration: 6 }]);
+    expect(useAppStore.getState().nodes.find((n) => n.id === result.nodeId)!.data.seedanceDuration).toBe(10);
+  });
   it('配音只放对白和语音用途，一次历史，重复定位保留人工修改', () => {
     const commit = vi.fn(useAppStore.getState().commitToHistory);
     useAppStore.setState({ commitToHistory: commit });

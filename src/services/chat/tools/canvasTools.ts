@@ -7,6 +7,9 @@ import { workflowExecution } from '../../workflowExecutionService';
 import { useAppStore } from '../../../store/useAppStore';
 import { generateId } from '../../../store/store.utils';
 import type { BaseNodeData, NodeType } from '../../../types';
+import { resolveShotVideoDuration } from '../../../types/shotlist';
+import type { AudioOutputFormat, AudioSpeechSettings, AudioTtsVoice } from '../../../types/aiTypes';
+import type { AudioGenerationPurpose } from '../../../types/media';
 import type {
   AgentToolDisplayChange,
   AgentToolDisplaySnapshot,
@@ -88,6 +91,76 @@ const TEXT_OUTPUT_NODE_TYPES = new Set<NodeType>([
   'source-text',
   'comment',
 ]);
+const AUDIO_VOICES: AudioTtsVoice[] = ['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer'];
+const AUDIO_FORMATS: AudioOutputFormat[] = ['wav', 'opus', 'aac', 'flac', 'pcm'];
+const SPEECH_STYLES: NonNullable<AudioSpeechSettings['voiceStyle']>[] = [
+  'male', 'female', 'shota', 'loli', 'girl', 'boy',
+];
+
+/** 数字是本地工作流长边像素；480p/720p 等是接口画质档位。 */
+function videoResolutionPatch(input: { videoResolution?: string; videoLongSide?: number }): Partial<BaseNodeData> {
+  if (input.videoLongSide !== undefined) return { videoResolution: input.videoLongSide };
+  const resolution = input.videoResolution?.trim();
+  if (!resolution) return {};
+  return /^\d+$/.test(resolution)
+    ? { videoResolution: Number(resolution) }
+    : { seedanceResolution: resolution };
+}
+
+function visibleVideoResolution(data: BaseNodeData): string | undefined {
+  return data.videoResolution !== undefined
+    ? String(data.videoResolution)
+    : data.seedanceResolution;
+}
+
+/** 创建和更新共用校验；错误必须在任何 Store 写入前返回，避免半批节点。 */
+function mediaSettingsIssue(type: NodeType, input: CreateNodeInput | UpdateNodesInput): string | undefined {
+  if (input.aspectRatio !== undefined && !VISUAL_NODE_TYPES.has(type)) return 'aspectRatio 只能用于图片或视频节点';
+  if (input.imageSize !== undefined || input.batchCount !== undefined) {
+    if (type !== 'ai-image') return 'imageSize / batchCount 只能用于生图节点';
+    if (input.imageSize !== undefined && !PROJECT_IMAGE_SIZES.includes(input.imageSize as typeof PROJECT_IMAGE_SIZES[number]))
+      return 'imageSize 不在支持的图片尺寸档位中';
+    if (input.batchCount !== undefined && (!Number.isInteger(input.batchCount)
+      || input.batchCount < 1 || input.batchCount > MAX_IMAGE_BATCH_COUNT)) return 'batchCount 超出图片批量范围';
+  }
+  if (input.videoResolution !== undefined || input.videoLongSide !== undefined || input.videoDuration !== undefined) {
+    if (type !== 'ai-video') return '视频分辨率 / 时长只能用于视频节点';
+    if (input.videoResolution !== undefined && !input.videoResolution.trim()) return 'videoResolution 不能为空';
+    if (input.videoResolution !== undefined && /^\d+$/.test(input.videoResolution.trim())
+      && (Number(input.videoResolution) < 128 || Number(input.videoResolution) > 4096))
+      return '视频长边必须在 128–4096 像素之间';
+    if (input.videoLongSide !== undefined && (!Number.isInteger(input.videoLongSide)
+      || input.videoLongSide < 128 || input.videoLongSide > 4096))
+      return 'videoLongSide 必须是 128–4096 的整数像素';
+    if (input.videoLongSide !== undefined && input.videoResolution !== undefined)
+      return 'videoLongSide 与 videoResolution 只能传一个';
+    if (input.videoDuration !== undefined && resolveShotVideoDuration(input.videoDuration) === undefined)
+      return 'videoDuration 必须是大于 0 且不超过 3600 的秒数';
+  }
+  const audioInput = input.audioPurpose !== undefined || input.audioVoice !== undefined
+    || input.audioFormat !== undefined || input.audioSpeed !== undefined
+    || input.audioSpeechSettings !== undefined || input.musicDuration !== undefined
+    || input.musicBpm !== undefined || input.musicTitle !== undefined
+    || input.musicLyrics !== undefined || input.autoGenerateLyrics !== undefined;
+  if (audioInput && type !== 'ai-audio') return '音频生成参数只能用于音频节点';
+  if (input.audioPurpose !== undefined && !['music', 'speech'].includes(input.audioPurpose)) return 'audioPurpose 必须是 music 或 speech';
+  if (input.audioVoice !== undefined && !AUDIO_VOICES.includes(input.audioVoice)) return 'audioVoice 不在支持的音色中';
+  if (input.audioFormat !== undefined && !AUDIO_FORMATS.includes(input.audioFormat)) return 'audioFormat 不在支持的格式中';
+  if (input.audioSpeed !== undefined && (!Number.isFinite(input.audioSpeed)
+    || input.audioSpeed < 0.25 || input.audioSpeed > 4)) return 'audioSpeed 必须在 0.25–4 之间';
+  if (input.musicDuration !== undefined && (!Number.isInteger(input.musicDuration)
+    || input.musicDuration < 1 || input.musicDuration > 240)) return 'musicDuration 必须是 1–240 秒的整数';
+  if (input.musicBpm !== undefined && (!Number.isInteger(input.musicBpm) || input.musicBpm < 1))
+    return 'musicBpm 必须是正整数';
+  const speech = input.audioSpeechSettings;
+  if (speech && (typeof speech !== 'object' || Array.isArray(speech)
+    || Object.keys(speech).some((key) => !['voiceStyle', 'pace', 'duration'].includes(key))
+    || (speech.voiceStyle !== undefined && !SPEECH_STYLES.includes(speech.voiceStyle))
+    || (speech.pace !== undefined && (!Number.isInteger(speech.pace) || speech.pace < 0 || speech.pace > 4))
+    || (speech.duration !== undefined && (!Number.isInteger(speech.duration)
+      || speech.duration < 1 || speech.duration > 3600)))) return 'audioSpeechSettings 的音色、语速或时长无效';
+  return undefined;
+}
 const DETAIL_TEXT_LIMIT = 400;
 const DETAIL_NODE_LIMIT = 50;
 const MAX_RUN_NODES = 5;
@@ -109,7 +182,23 @@ interface CreateNodesInput {
     label: string;
     prompt?: string;
     content?: string;
+    model?: string;
     aspectRatio?: string;
+    imageSize?: string;
+    batchCount?: number;
+    videoResolution?: string;
+    videoLongSide?: number;
+    videoDuration?: number;
+    audioPurpose?: AudioGenerationPurpose;
+    audioVoice?: AudioTtsVoice;
+    audioFormat?: AudioOutputFormat;
+    audioSpeed?: number;
+    audioSpeechSettings?: AudioSpeechSettings;
+    musicDuration?: number;
+    musicBpm?: number;
+    musicTitle?: string;
+    musicLyrics?: string;
+    autoGenerateLyrics?: boolean;
     x?: number;
     y?: number;
   }>;
@@ -157,8 +246,19 @@ interface UpdateNodesInput extends NodeTargetInput {
   batchCount?: number;
   /** 统一视频参数名；节点内部继续兼容 seedanceResolution。 */
   videoResolution?: string;
+  videoLongSide?: number;
   /** 统一视频参数名；节点内部继续兼容 seedanceDuration。 */
   videoDuration?: number;
+  audioPurpose?: AudioGenerationPurpose;
+  audioVoice?: AudioTtsVoice;
+  audioFormat?: AudioOutputFormat;
+  audioSpeed?: number;
+  audioSpeechSettings?: AudioSpeechSettings;
+  musicDuration?: number;
+  musicBpm?: number;
+  musicTitle?: string;
+  musicLyrics?: string;
+  autoGenerateLyrics?: boolean;
 }
 
 interface ConnectNodesInput {
@@ -185,6 +285,17 @@ interface NodeAuditSnapshot {
   batchCount?: number;
   videoResolution?: string;
   videoDuration?: number;
+  audioPurpose?: AudioGenerationPurpose;
+  audioVoice?: AudioTtsVoice;
+  audioFormat?: AudioOutputFormat;
+  audioSpeed?: number;
+  speechVoiceStyle?: AudioSpeechSettings['voiceStyle'];
+  speechPace?: number;
+  speechDuration?: number;
+  musicDuration?: number;
+  musicBpm?: number;
+  musicTitle?: string;
+  autoGenerateLyrics?: boolean;
 }
 
 function displayPreview(value: string | undefined): string | undefined {
@@ -199,6 +310,8 @@ function createNodesInputDisplay(input: CreateNodesInput): AgentToolDisplaySnaps
       title: nodeInput.label.trim(),
       fields: [
         { label: '类型', value: nodeInput.type },
+        ...(nodeInput.videoDuration !== undefined
+          ? [{ label: '生成时长（秒）', value: Math.ceil(nodeInput.videoDuration) }] : []),
         ...(nodeInput.aspectRatio
           ? [{ label: '比例', value: nodeInput.aspectRatio }]
           : []),
@@ -232,8 +345,19 @@ function captureNodeAudit(node: Node<BaseNodeData>): NodeAuditSnapshot {
     aspectRatio: typeof aspectRatio === 'string' ? aspectRatio : undefined,
     imageSize: typeof data.imageSize === 'string' ? data.imageSize : undefined,
     batchCount: typeof data.batchCount === 'number' ? data.batchCount : undefined,
-    videoResolution: typeof data.seedanceResolution === 'string' ? data.seedanceResolution : undefined,
+    videoResolution: visibleVideoResolution(data),
     videoDuration: typeof data.seedanceDuration === 'number' ? data.seedanceDuration : undefined,
+    audioPurpose: data.audioPurpose,
+    audioVoice: data.audioVoice,
+    audioFormat: data.audioFormat,
+    audioSpeed: data.audioSpeed,
+    speechVoiceStyle: data.audioSpeechSettings?.voiceStyle,
+    speechPace: data.audioSpeechSettings?.pace,
+    speechDuration: data.audioSpeechSettings?.duration,
+    musicDuration: data.musicDuration,
+    musicBpm: data.musicBpm,
+    musicTitle: data.musicTitle,
+    autoGenerateLyrics: data.autoGenerateLyrics,
   };
 }
 
@@ -257,6 +381,14 @@ const UPDATE_DISPLAY_FIELDS: Array<{
   { inputKey: 'batchCount', auditKey: 'batchCount', label: '批量数量' },
   { inputKey: 'videoResolution', auditKey: 'videoResolution', label: '视频分辨率' },
   { inputKey: 'videoDuration', auditKey: 'videoDuration', label: '视频时长' },
+  { inputKey: 'audioPurpose', auditKey: 'audioPurpose', label: '音频用途' },
+  { inputKey: 'audioVoice', auditKey: 'audioVoice', label: '音色' },
+  { inputKey: 'audioFormat', auditKey: 'audioFormat', label: '音频格式' },
+  { inputKey: 'audioSpeed', auditKey: 'audioSpeed', label: '语速倍率' },
+  { inputKey: 'musicDuration', auditKey: 'musicDuration', label: '音乐时长' },
+  { inputKey: 'musicBpm', auditKey: 'musicBpm', label: '音乐 BPM' },
+  { inputKey: 'musicTitle', auditKey: 'musicTitle', label: '音乐标题' },
+  { inputKey: 'autoGenerateLyrics', auditKey: 'autoGenerateLyrics', label: '自动生成歌词' },
 ];
 
 function buildUpdateChanges(
@@ -405,8 +537,24 @@ function describeNode(node: Node<BaseNodeData>): Record<string, unknown> {
     aspectRatio: data.type === 'ai-video' ? data.seedanceRatio : data.aspectRatio,
     imageSize: data.imageSize,
     batchCount: data.batchCount,
-    videoResolution: data.seedanceResolution,
+    videoResolution: visibleVideoResolution(data),
+    videoLongSide: data.videoResolution,
+    videoResolutionPreset: data.seedanceResolution,
     videoDuration: data.seedanceDuration,
+    audioPurpose: data.audioPurpose,
+    audioVoice: data.audioVoice,
+    audioFormat: data.audioFormat,
+    audioSpeed: data.audioSpeed,
+    audioSpeechSettings: data.audioSpeechSettings && {
+      voiceStyle: data.audioSpeechSettings.voiceStyle,
+      pace: data.audioSpeechSettings.pace,
+      duration: data.audioSpeechSettings.duration,
+    },
+    musicDuration: data.musicDuration,
+    musicBpm: data.musicBpm,
+    musicTitle: data.musicTitle,
+    musicLyrics: truncateText(data.musicLyrics),
+    autoGenerateLyrics: data.autoGenerateLyrics,
     workflowId: data.workflowId,
     prompt: truncateText(data.prompt),
     outputKind,
@@ -720,6 +868,23 @@ function createCanvasNode(
       role: isSource ? 'source' : 'generator',
       ...(body ? { output: body } : {}),
       ...(prompt ? { prompt } : {}),
+      ...(input.imageSize !== undefined ? { imageSize: input.imageSize } : {}),
+      ...(input.batchCount !== undefined ? { batchCount: input.batchCount } : {}),
+      ...(type === 'ai-video' ? videoResolutionPatch(input) : {}),
+      ...(type === 'ai-video' && input.videoDuration !== undefined
+        ? { seedanceDuration: resolveShotVideoDuration(input.videoDuration) } : {}),
+      ...(type === 'ai-audio' ? {
+        ...(input.audioPurpose !== undefined ? { audioPurpose: input.audioPurpose } : {}),
+        ...(input.audioVoice !== undefined ? { audioVoice: input.audioVoice } : {}),
+        ...(input.audioFormat !== undefined ? { audioFormat: input.audioFormat } : {}),
+        ...(input.audioSpeed !== undefined ? { audioSpeed: input.audioSpeed } : {}),
+        ...(input.audioSpeechSettings !== undefined ? { audioSpeechSettings: input.audioSpeechSettings } : {}),
+        ...(input.musicDuration !== undefined ? { musicDuration: input.musicDuration } : {}),
+        ...(input.musicBpm !== undefined ? { musicBpm: input.musicBpm } : {}),
+        ...(input.musicTitle !== undefined ? { musicTitle: input.musicTitle } : {}),
+        ...(input.musicLyrics !== undefined ? { musicLyrics: input.musicLyrics } : {}),
+        ...(input.autoGenerateLyrics !== undefined ? { autoGenerateLyrics: input.autoGenerateLyrics } : {}),
+      } : {}),
       ...(input.aspectRatio && VISUAL_NODE_TYPES.has(type)
         ? { aspectRatio: input.aspectRatio, ...(type === 'ai-video' ? { seedanceRatio: input.aspectRatio } : {}) }
         : {}),
@@ -868,6 +1033,8 @@ export function registerCanvasAgentTools(): Array<() => void> {
         'type 按这个节点最终要产出什么来选，不要因为内容是文字描述就一律建文本节点：',
         '产物是画面的（角色设定图、场景图、道具图、关键帧、单张分镜）用 ai-image，把画面描述写进 prompt；',
         '产物是镜头的用 ai-video，配乐旁白用 ai-audio，多宫格图片也用 ai-image，镜头表用 ai-shotlist。',
+        '按剧本或分镜导入视频时，必须把来源中明确的每镜秒数传入 videoDuration，不能只写在 prompt 中；小数秒向上取整到实际生成时长。未提供时保留项目默认值，不猜测提示词中的数字。软件内分镜优先用 shotlist_prepare_production，保留自动时长关联。',
+        '已确定的模型、图片尺寸/批量、视频长边、语音或音乐参数请在创建时一并传入；本地工作流长边像素用 videoLongSide（如 832），API 画质档位用 videoResolution（如 720p）。未提供的字段沿用项目或模型默认值。音频参考素材用 @ 引用，工作流特有参数仍在工作流配置中设置。',
         'ai-storyboard 是把已有图片进行宫格裁切后产生的素材节点，本工具不能直接创建，也不能给它提示词或运行生成。',
         '产物本身就是文字的用 ai-text（markdown 排版用 ai-markdown）。',
         '文本节点分 prompt 和 content 两个口，别混：',
@@ -899,7 +1066,31 @@ export function registerCanvasAgentTools(): Array<() => void> {
                 label: { type: 'string', minLength: 1, maxLength: 120 },
                 prompt: { type: 'string', maxLength: 8000 },
                 content: { type: 'string', maxLength: 40000 },
+                model: { type: 'string', minLength: 1, maxLength: 240,
+                  description: '可用模型 ID；先用 app_get_state 查询，工作流 ID 会正确绑定到节点。' },
                 aspectRatio: { type: 'string', enum: ASPECT_RATIOS },
+                imageSize: { type: 'string', enum: [...PROJECT_IMAGE_SIZES] },
+                batchCount: { type: 'integer', minimum: 1, maximum: MAX_IMAGE_BATCH_COUNT },
+                videoResolution: { type: 'string', minLength: 1, maxLength: 40,
+                  description: 'API 画质档位，如 720p；兼容旧客户端传入数字字符串 832 并映射为长边像素。' },
+                videoLongSide: { type: 'integer', minimum: 128, maximum: 4096,
+                  description: '本地 ComfyUI / RunningHub 视频长边像素，如 832。' },
+                videoDuration: { type: 'number', minimum: 0.01, maximum: 3600,
+                  description: '仅 ai-video：来源分镜的秒数，支持小数并向上取整，写入实际生成时长控件。' },
+                audioPurpose: { type: 'string', enum: ['music', 'speech'] },
+                audioVoice: { type: 'string', enum: AUDIO_VOICES },
+                audioFormat: { type: 'string', enum: AUDIO_FORMATS },
+                audioSpeed: { type: 'number', minimum: 0.25, maximum: 4 },
+                audioSpeechSettings: { type: 'object', additionalProperties: false, properties: {
+                  voiceStyle: { type: 'string', enum: SPEECH_STYLES },
+                  pace: { type: 'integer', minimum: 0, maximum: 4 },
+                  duration: { type: 'integer', minimum: 1, maximum: 3600 },
+                } },
+                musicDuration: { type: 'integer', minimum: 1, maximum: 240 },
+                musicBpm: { type: 'integer', minimum: 1 },
+                musicTitle: { type: 'string', maxLength: 120 },
+                musicLyrics: { type: 'string', maxLength: 8000 },
+                autoGenerateLyrics: { type: 'boolean' },
                 x: { type: 'number', minimum: -100000, maximum: 100000 },
                 y: { type: 'number', minimum: -100000, maximum: 100000 },
               },
@@ -918,6 +1109,12 @@ export function registerCanvasAgentTools(): Array<() => void> {
           const message = `宫格分镜只能由已有图片裁切产生，不能直接创建（${storyboardCount} 个无效节点）`;
           return { status: 'error', summary: message, modelContent: message };
         }
+        const invalidMedia = input.nodes.map((node, index) => ({ index, issue: mediaSettingsIssue(node.type, node) }))
+          .find((entry) => entry.issue);
+        if (invalidMedia) {
+          const message = `第 ${invalidMedia.index + 1} 个节点：${invalidMedia.issue}`;
+          return { status: 'error', summary: message, modelContent: message };
+        }
         // 媒体节点的 output 存的是本地路径或 URL，写正文进去会直接建出一个坏节点
         const nonText = input.nodes.filter(
           (node) => node.content?.trim() && !TEXT_OUTPUT_NODE_TYPES.has(node.type),
@@ -932,11 +1129,38 @@ export function registerCanvasAgentTools(): Array<() => void> {
           index,
           positions[index],
         ));
+        for (let index = 0; index < input.nodes.length; index++) {
+          const modelRef = input.nodes[index].model;
+          if (!modelRef) continue;
+          const resolved = resolveModelPatch(modelRef, [nodes[index]]);
+          if ('error' in resolved) {
+            return { status: 'error', summary: resolved.error, modelContent: resolved.error };
+          }
+          Object.assign(nodes[index].data, resolved.patch);
+          // 工作流默认值不能覆盖同一次创建明确给出的参数。
+          if (input.nodes[index].batchCount !== undefined) nodes[index].data.batchCount = input.nodes[index].batchCount;
+          if (input.nodes[index].audioPurpose !== undefined) nodes[index].data.audioPurpose = input.nodes[index].audioPurpose;
+        }
         const edgePlan = buildPromptReferenceEdges(nodes, useAppStore.getState().nodes);
         if (edgePlan.error) {
           return { status: 'error', summary: edgePlan.error, modelContent: edgePlan.error };
         }
-        useAppStore.getState().addNodesWithEdges(nodes, edgePlan.edges);
+        const store = useAppStore.getState();
+        store.addNodesWithEdges(nodes, edgePlan.edges);
+        // 项目默认值用于填空；MCP 同一次创建中明确给出的参数必须保留，
+        // 即使该节点暂时没有提示词。沿用创建的同一条撤销历史。
+        const explicitKeys = [
+          'model', 'provider', 'workflowId', 'workflowInputs', 'aspectRatio', 'imageSize',
+          'batchCount', 'seedanceRatio', 'seedanceResolution', 'videoResolution', 'seedanceDuration',
+          'audioPurpose', 'audioVoice', 'audioFormat', 'audioSpeed', 'audioSpeechSettings',
+          'musicDuration', 'musicBpm', 'musicTitle', 'musicLyrics', 'autoGenerateLyrics',
+        ] as const;
+        for (const node of nodes) {
+          const explicit = Object.fromEntries(explicitKeys
+            .filter((key) => node.data[key] !== undefined)
+            .map((key) => [key, node.data[key]])) as Partial<BaseNodeData>;
+          if (Object.keys(explicit).length) store.updateNodeDataTransient(node.id, explicit);
+        }
         useAppStore.getState().incrementRevision();
         if (typeof window !== 'undefined') {
           window.dispatchEvent(new CustomEvent('canvas-focus-nodes', {
@@ -986,7 +1210,8 @@ export function registerCanvasAgentTools(): Array<() => void> {
       description: [
         '批量更新匹配节点：名称、提示词、正文内容、位置、尺寸、生成模型和生成参数。',
         'label 同步已有文件名显示别名，但不重命名磁盘文件或改变媒体路径。',
-        '视频节点使用统一字段 videoResolution / videoDuration；内部会映射到对应厂商协议字段。',
+        '视频节点的 videoLongSide 是本地工作流长边像素，videoResolution 是 API 档位（旧版数字字符串会转长边像素）；videoDuration 是实际生成秒数。',
+        '音频节点可设置语音音色/格式/速度、描述式语音参数及音乐时长/BPM；工作流专属参数继续由工作流配置管理。',
         'content 改写节点正文，只能用于文本类节点（ai-text / ai-markdown / source-text / comment）。',
         'prompt 里可写 @{nodeId:label} 引用其他节点输出、@drama{assetId:name} 引用资产库设定，生成时自动展开；ID 必须真实存在。多图视频须按 Picture 顺序逐条写入图片节点 @ 引用，仅有连线不能指定 Picture 顺序。',
         'x/y 是绝对坐标，一次只能移动一个节点；dx/dy 是相对位移，可批量。',
@@ -1011,7 +1236,22 @@ export function registerCanvasAgentTools(): Array<() => void> {
           imageSize: { type: 'string', enum: [...PROJECT_IMAGE_SIZES] },
           batchCount: { type: 'integer', minimum: 1, maximum: MAX_IMAGE_BATCH_COUNT },
           videoResolution: { type: 'string', minLength: 1, maxLength: 40 },
+          videoLongSide: { type: 'integer', minimum: 128, maximum: 4096 },
           videoDuration: { type: 'integer', minimum: 1, maximum: 3600 },
+          audioPurpose: { type: 'string', enum: ['music', 'speech'] },
+          audioVoice: { type: 'string', enum: AUDIO_VOICES },
+          audioFormat: { type: 'string', enum: AUDIO_FORMATS },
+          audioSpeed: { type: 'number', minimum: 0.25, maximum: 4 },
+          audioSpeechSettings: { type: 'object', additionalProperties: false, properties: {
+            voiceStyle: { type: 'string', enum: SPEECH_STYLES },
+            pace: { type: 'integer', minimum: 0, maximum: 4 },
+            duration: { type: 'integer', minimum: 1, maximum: 3600 },
+          } },
+          musicDuration: { type: 'integer', minimum: 1, maximum: 240 },
+          musicBpm: { type: 'integer', minimum: 1 },
+          musicTitle: { type: 'string', maxLength: 120 },
+          musicLyrics: { type: 'string', maxLength: 8000 },
+          autoGenerateLyrics: { type: 'boolean' },
         },
         additionalProperties: false,
       },
@@ -1039,8 +1279,18 @@ export function registerCanvasAgentTools(): Array<() => void> {
           ...(input.aspectRatio !== undefined ? { aspectRatio: input.aspectRatio } : {}),
           ...(input.imageSize !== undefined ? { imageSize: input.imageSize } : {}),
           ...(input.batchCount !== undefined ? { batchCount: input.batchCount } : {}),
-          ...(input.videoResolution !== undefined ? { seedanceResolution: input.videoResolution.trim() } : {}),
+          ...videoResolutionPatch(input),
           ...(input.videoDuration !== undefined ? { seedanceDuration: input.videoDuration } : {}),
+          ...(input.audioPurpose !== undefined ? { audioPurpose: input.audioPurpose } : {}),
+          ...(input.audioVoice !== undefined ? { audioVoice: input.audioVoice } : {}),
+          ...(input.audioFormat !== undefined ? { audioFormat: input.audioFormat } : {}),
+          ...(input.audioSpeed !== undefined ? { audioSpeed: input.audioSpeed } : {}),
+          ...(input.audioSpeechSettings !== undefined ? { audioSpeechSettings: input.audioSpeechSettings } : {}),
+          ...(input.musicDuration !== undefined ? { musicDuration: input.musicDuration } : {}),
+          ...(input.musicBpm !== undefined ? { musicBpm: input.musicBpm } : {}),
+          ...(input.musicTitle !== undefined ? { musicTitle: input.musicTitle } : {}),
+          ...(input.musicLyrics !== undefined ? { musicLyrics: input.musicLyrics } : {}),
+          ...(input.autoGenerateLyrics !== undefined ? { autoGenerateLyrics: input.autoGenerateLyrics } : {}),
         };
         const targets = useAppStore.getState().nodes
           .filter((node) => targetIds.includes(node.id));
@@ -1051,12 +1301,11 @@ export function registerCanvasAgentTools(): Array<() => void> {
         const beforeAudit = new Map(
           targets.map((node) => [node.id, captureNodeAudit(node)]),
         );
-        if (input.videoResolution !== undefined || input.videoDuration !== undefined) {
-          const nonVideo = targets.filter((node) => node.data.type !== 'ai-video');
-          if (nonVideo.length > 0) {
-            const message = `videoResolution / videoDuration 只能用于视频节点，${nonVideo.length} 个目标节点不是视频节点`;
-            return { status: 'error', summary: message, modelContent: message };
-          }
+        const invalidMedia = targets.map((node) => ({ label: node.data.label,
+          issue: mediaSettingsIssue(node.data.type, input) })).find((entry) => entry.issue);
+        if (invalidMedia) {
+          const message = `${invalidMedia.label}：${invalidMedia.issue}`;
+          return { status: 'error', summary: message, modelContent: message };
         }
         if (input.content !== undefined) {
           // 媒体节点的 output 存的是本地路径或 URL，改写会直接破坏节点
@@ -1073,6 +1322,8 @@ export function registerCanvasAgentTools(): Array<() => void> {
             return { status: 'error', summary: resolved.error, modelContent: resolved.error };
           }
           Object.assign(patch, resolved.patch);
+          if (input.batchCount !== undefined) patch.batchCount = input.batchCount;
+          if (input.audioPurpose !== undefined) patch.audioPurpose = input.audioPurpose;
         }
         if (Object.keys(patch).length === 0 && !moveAbsolute && !moveRelative) {
           return { status: 'error', summary: '没有提供需要更新的字段', modelContent: '没有提供需要更新的字段' };
