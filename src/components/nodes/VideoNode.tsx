@@ -86,6 +86,24 @@ function computeVideoNodeDimensions(videoWidth: number, videoHeight: number): { 
   };
 }
 
+function fitVideoNodeToShortSide(
+  videoWidth: number,
+  videoHeight: number,
+  nodeWidth?: number,
+  nodeHeight?: number,
+): { nodeWidth: number; nodeHeight: number } {
+  const fallback = computeVideoNodeDimensions(videoWidth, videoHeight);
+  if (videoWidth <= 0 || videoHeight <= 0) return fallback;
+  if (videoWidth <= videoHeight) {
+    const width = Math.max(VIDEO_NODE_MIN_WIDTH,
+      nodeWidth && Number.isFinite(nodeWidth) && nodeWidth > 0 ? nodeWidth : fallback.nodeWidth);
+    return { nodeWidth: width, nodeHeight: Math.round(width * videoHeight / videoWidth) };
+  }
+  const height = Math.max(VIDEO_NODE_MIN_HEIGHT, Math.ceil(VIDEO_NODE_MIN_WIDTH * videoHeight / videoWidth),
+    nodeHeight && Number.isFinite(nodeHeight) && nodeHeight > 0 ? nodeHeight : fallback.nodeHeight);
+  return { nodeWidth: Math.round(height * videoWidth / videoHeight), nodeHeight: height };
+}
+
 async function captureVideoFrame(
   video: HTMLVideoElement,
 ): Promise<{ dataUrl: string; width: number; height: number }> {
@@ -274,15 +292,23 @@ function AIVideoNode({ id, data, selected }: { id: string; data: BaseNodeData; s
         setGeneratedCover({ ...poster, source, projectId });
         const state = useAppStore.getState();
         const liveData = getCanvasNodeById(state.nodes, id)?.data;
-        if (derivation && isCanvasDerivationFresh(derivation, state) && liveData?.videoUrl === source
+        // 封面读取期间可能又缩放了节点；按最新尺寸重建派生守卫，而不是丢掉这次比例校正。
+        const writeDerivation = derivation && isCanvasDerivationFresh(derivation, state)
+          ? derivation : state.currentProjectId === projectId && liveData?.videoUrl === source
+            ? registerCanvasDerivation(state, id) : null;
+        const fittedDimensions = liveData && fitVideoNodeToShortSide(
+          poster.videoWidth, poster.videoHeight, liveData.nodeWidth, liveData.nodeHeight,
+        );
+        if (writeDerivation && isCanvasDerivationFresh(writeDerivation, state) && liveData?.videoUrl === source
           && (liveData.videoWidth !== poster.videoWidth || liveData.videoHeight !== poster.videoHeight
-            || liveData.nodeWidth == null || liveData.nodeHeight == null)) {
+            || liveData.nodeWidth !== fittedDimensions?.nodeWidth
+            || liveData.nodeHeight !== fittedDimensions?.nodeHeight)) {
           state.updateNodeDataTransient(id, {
             videoWidth: poster.videoWidth, videoHeight: poster.videoHeight,
-            ...(liveData.nodeWidth == null || liveData.nodeHeight == null
-              ? computeVideoNodeDimensions(poster.videoWidth, poster.videoHeight) : {}),
+            ...fittedDimensions,
           });
         }
+        if (writeDerivation && writeDerivation !== derivation) completeCanvasDerivation(writeDerivation);
       }
       if (derivation) completeCanvasDerivation(derivation);
     });
@@ -362,13 +388,17 @@ function AIVideoNode({ id, data, selected }: { id: string; data: BaseNodeData; s
     const liveData = getCanvasNodeById(state.nodes, id)?.data;
     if (state.currentProjectId !== projectId || !liveData || liveData.videoUrl !== data.videoUrl) return;
     if (videoWidth > 0 && videoHeight > 0) {
+      const fittedDimensions = fitVideoNodeToShortSide(
+        videoWidth, videoHeight, liveData.nodeWidth, liveData.nodeHeight,
+      );
       const mediaDimensionsChanged = liveData.videoWidth !== videoWidth || liveData.videoHeight !== videoHeight;
-      const nodeDimensionsMissing = liveData.nodeWidth == null || liveData.nodeHeight == null;
-      if (mediaDimensionsChanged || nodeDimensionsMissing) {
+      const nodeDimensionsChanged = liveData.nodeWidth !== fittedDimensions.nodeWidth
+        || liveData.nodeHeight !== fittedDimensions.nodeHeight;
+      if (mediaDimensionsChanged || nodeDimensionsChanged) {
         updateNodeDataTransient(id, {
           videoWidth,
           videoHeight,
-          ...(nodeDimensionsMissing ? computeVideoNodeDimensions(videoWidth, videoHeight) : {}),
+          ...fittedDimensions,
         });
       }
     }
