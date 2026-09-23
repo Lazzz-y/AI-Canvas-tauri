@@ -5,7 +5,10 @@ import type { Socket } from 'node:net';
 import { createServer as createViteServer } from 'vite';
 import viteConfig from '../../vite.config';
 import { createComfyProgressSession, parseComfyProgressEvent } from '../../src/services/comfyProgress';
+import { comfyFetch } from '../../src/services/comfyPolling';
 import { useAppStore } from '../../src/store/useAppStore';
+
+vi.mock('../../src/services/comfyPolling', () => ({ comfyFetch: vi.fn() }));
 
 class MockWebSocket {
   static CLOSING = 2;
@@ -31,6 +34,7 @@ class MockWebSocket {
 
 beforeEach(() => {
   MockWebSocket.instances = [];
+  vi.mocked(comfyFetch).mockReset();
   useAppStore.setState(useAppStore.getInitialState(), true);
 });
 
@@ -108,7 +112,6 @@ describe('createComfyProgressSession', () => {
     { dev: true, baseUrl: 'http://localhost:8188', page: 'https://localhost:1420', expected: 'wss://localhost:1420/api/comfyui/ws' },
     { dev: true, baseUrl: 'https://comfy.test/prefix', page: 'http://localhost:1420', expected: 'wss://comfy.test/prefix/ws' },
     { dev: true, baseUrl: 'http://127.0.0.1:8288', page: 'http://localhost:1420', expected: 'ws://127.0.0.1:8288/ws' },
-    { dev: false, baseUrl: 'http://127.0.0.1:8188', page: 'http://tauri.localhost', expected: 'ws://127.0.0.1:8188/ws' },
   ])('进度连接选路 $baseUrl / dev=$dev', ({ dev, baseUrl, page, expected }) => {
     vi.stubEnv('DEV', dev);
     vi.stubGlobal('window', { location: new URL(page), __TAURI__: {} });
@@ -119,6 +122,30 @@ describe('createComfyProgressSession', () => {
     } finally {
       session.close();
     }
+  });
+
+  it('desktop local ComfyUI polls the queue without a cross-origin WebSocket', async () => {
+    vi.useFakeTimers();
+    vi.stubEnv('DEV', false);
+    vi.stubGlobal('window', { location: new URL('http://tauri.localhost'), __TAURI__: {} });
+    vi.stubGlobal('WebSocket', MockWebSocket);
+    vi.mocked(comfyFetch).mockResolvedValueOnce({
+      ok: true, json: async () => ({ queue_running: [[0, 'prompt-1']], queue_pending: [] }),
+    } as Response).mockResolvedValueOnce({
+      ok: true, json: async () => ({ queue_running: [], queue_pending: [[0, 'prompt-1']] }),
+    } as Response);
+    const session = createComfyProgressSession({ baseUrl: 'http://127.0.0.1:8188', projectId: 'p1', nodeId: 'n1' });
+    await session.waitUntilReady();
+    expect(MockWebSocket.instances).toHaveLength(0);
+    session.bindPrompt('prompt-1');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(useAppStore.getState().comfyNodeProgress.n1.stage).toBe('running');
+    expect(comfyFetch).toHaveBeenCalledWith('http://127.0.0.1:8188/queue', expect.objectContaining({ signal: expect.any(AbortSignal) }));
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(useAppStore.getState().comfyNodeProgress.n1.stage).toBe('queued');
+    session.close();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(comfyFetch).toHaveBeenCalledTimes(2);
   });
 
   it('新节点开始和整个任务收尾时清除上一节点的百分比', () => {
