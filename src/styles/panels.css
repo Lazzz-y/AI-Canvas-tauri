@@ -178,10 +178,11 @@
 
 /* 节点放大编辑器的润色工作区；仅打开时装载模型调用与金属动效。 */
 .prompt-polish-entry {
+  position: absolute;
+  right: 28px;
+  bottom: 20px;
+  z-index: 2;
   display: flex;
-  justify-content: flex-end;
-  flex: 0 0 auto;
-  padding: 4px 20px 12px;
 }
 .prompt-polish-button {
   height: 28px;

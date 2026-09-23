@@ -836,12 +836,12 @@ export default function PromptPanel({
           }}
           onSlashTrigger={handleEditorSlash}
         />
-      </div>
       {polishButton && (
         <div className="prompt-polish-entry">
           {performanceMode || reduceMotion ? polishButton : <Suspense fallback={polishButton}><MetalFx className="prompt-polish-metal" variant="button" preset={theme === 'light' ? 'silver' : 'chromatic'} theme={theme} strength={theme === 'light' ? 0.55 : 0.8} shaderScale={1.6} mask={paintPolishBadge} glowMode="ring" normalizeHostStyles={false} innerShadow>{polishButton}</MetalFx></Suspense>}
         </div>
       )}
+      </div>
       {runninghubModel && onRunninghubModelParametersChange && <details className="ui-card m-2 p-2">
         <summary className="cursor-pointer text-xs">模型参数 · {runninghubModel.parameters.filter((field) => field.required && !field.binding && field.defaultValue === undefined).length} 项需填写</summary>
         <div className="mt-2 max-h-80 overflow-y-auto"><RunningHubModelParameterFields model={runninghubModel} values={runninghubModelParameters} onChange={onRunninghubModelParametersChange} disabled={isGenerating} /></div>
