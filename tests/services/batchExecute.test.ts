@@ -94,7 +94,7 @@ beforeEach(() => {
   mocks.buildAnimationSpritePrompt.mockReset().mockImplementation((prompt: string) => `animation:${prompt}`);
   mocks.resolveAnimationSheetAspectRatio.mockReset().mockReturnValue('2:1');
   mocks.persistAudioGenerationResult.mockReset();
-  mocks.persistMediaUrlToProjectData.mockImplementation(async (url: string) => ({
+  mocks.persistMediaUrlToProjectData.mockReset().mockImplementation(async (url: string) => ({
     mediaUrl: url,
     sourceUrl: url,
   }));
@@ -102,6 +102,83 @@ beforeEach(() => {
 });
 
 describe('batchExecuteNodes', () => {
+  it('queues workflows by display number and waits for generation and saving before starting the next', async () => {
+    const generated = deferred<{ url: string }>();
+    const saved = deferred<{ mediaUrl: string; sourceUrl: string }>();
+    mocks.generateVideo.mockImplementation(async ({ nodeId }: { nodeId: string }) => (
+      nodeId === 'random-z' ? generated.promise : { url: `${nodeId}.mp4` }
+    ));
+    mocks.persistMediaUrlToProjectData.mockImplementation(async (url: string) => (
+      url === 'first.mp4' ? saved.promise : { mediaUrl: url, sourceUrl: url }
+    ));
+    const nodes = [
+      createNode('random-a', 'ai-video', { provider: 'comfyui', workflowId: 'wf', displayId: 10 }),
+      createNode('ordinary', 'ai-video'),
+      createNode('random-z', 'ai-video', { provider: 'comfyui', workflowId: 'wf', displayId: 2 }),
+    ];
+    const ctx = createContext();
+    ctx.currentProjectId = 'project';
+    const execution = batchExecuteNodes(nodes.map((node) => node.id), nodes, [], ctx);
+    expect(mocks.generateVideo.mock.calls.map(([request]) => request.nodeId)).toEqual(['random-z', 'ordinary']);
+    generated.resolve({ url: 'first.mp4' });
+    await vi.waitFor(() => expect(mocks.persistMediaUrlToProjectData).toHaveBeenCalledWith(
+      'first.mp4', 'project', 'ai-video', 'random-z',
+    ));
+    expect(mocks.generateVideo).toHaveBeenCalledTimes(2);
+    saved.resolve({ mediaUrl: 'saved.mp4', sourceUrl: 'first.mp4' });
+    await expect(execution).resolves.toEqual({ ok: 3, fail: 0 });
+    expect(mocks.generateVideo.mock.calls.map(([request]) => request.nodeId)).toEqual(['random-z', 'ordinary', 'random-a']);
+  });
+
+  it('preserves dependencies through ordinary nodes while serializing all workflow types', async () => {
+    mocks.generateVideo.mockResolvedValue({ url: 'result.mp4' });
+    const nodes = [
+      createNode('last', 'ai-video', { workflowId: 'cloud', provider: 'runninghubwf', displayId: 9 }),
+      createNode('middle', 'ai-video'),
+      createNode('first', 'ai-video', { workflowId: 'local', provider: 'comfyui', displayId: 1 }),
+      createNode('before', 'ai-video'),
+      createNode('after', 'ai-video'),
+    ];
+    const edges = [
+      { id: 'a', source: 'before', target: 'first' },
+      { id: 'b', source: 'first', target: 'middle' },
+      { id: 'c', source: 'middle', target: 'last' },
+      { id: 'd', source: 'last', target: 'after' },
+    ];
+    const originalEdges = structuredClone(edges);
+    await expect(batchExecuteNodes(nodes.map((node) => node.id), nodes, edges, createContext()))
+      .resolves.toEqual({ ok: 5, fail: 0 });
+    expect(mocks.generateVideo.mock.calls.map(([request]) => request.nodeId))
+      .toEqual(['before', 'first', 'middle', 'last', 'after']);
+    expect(edges).toEqual(originalEdges);
+    expect(nodes.map((node) => node.id)).toEqual(['last', 'middle', 'first', 'before', 'after']);
+  });
+
+  it('prioritizes workflow display order over reverse edges and continues after a failure', async () => {
+    mocks.generateVideo.mockRejectedValueOnce(new Error('workflow failed')).mockResolvedValue({ url: 'result.mp4' });
+    const nodes = [
+      createNode('ten', 'ai-video', { workflowId: 'wf', displayId: 10 }),
+      createNode('two', 'ai-video', { workflowId: 'wf', displayId: 2 }),
+    ];
+    await expect(batchExecuteNodes(['ten', 'two'], nodes, [{ id: 'reverse', source: 'ten', target: 'two' }], createContext()))
+      .resolves.toEqual({ ok: 1, fail: 1 });
+    expect(mocks.generateVideo.mock.calls.map(([request]) => request.nodeId)).toEqual(['two', 'ten']);
+  });
+
+  it('keeps unnumbered workflows last in stable order and skips ineligible nodes', async () => {
+    mocks.generateVideo.mockResolvedValue({ url: 'result.mp4' });
+    const nodes = [
+      createNode('old-b', 'ai-video', { workflowId: 'wf' }),
+      createNode('loading', 'ai-video', { workflowId: 'wf', displayId: 1, status: 'loading' }),
+      createNode('numbered', 'ai-video', { workflowId: 'wf', displayId: 2 }),
+      createNode('old-a', 'ai-video', { workflowId: 'wf' }),
+      createNode('empty', 'ai-video', { workflowId: 'wf', displayId: 3, prompt: '' }),
+    ];
+    await expect(batchExecuteNodes(nodes.map((node) => node.id), nodes, [], createContext()))
+      .resolves.toEqual({ ok: 3, fail: 0 });
+    expect(mocks.generateVideo.mock.calls.map(([request]) => request.nodeId)).toEqual(['numbered', 'old-b', 'old-a']);
+  });
+
   it('serializes connected nodes while starting isolated nodes concurrently', async () => {
     const pending = new Map([
       ['a', deferred<{ url: string; width: number; height: number }>()],
