@@ -160,6 +160,44 @@ afterEach(() => {
 });
 
 describe('video node demand loading', () => {
+  it.each(['poster', 'player'])('preserves a resize made before the %s metadata arrives', async (path) => {
+    const pending = deferred<unknown>();
+    driver.acquire.mockReturnValue(pending.promise);
+    selected = path === 'player';
+    render();
+    // 拖拽已更新 Store，但媒体回调仍来自上一轮渲染。
+    (named('ResizeHandle').props.onResize as (width: number, height: number) => void)(540, 960);
+    store.nodes[0].data = { ...store.nodes[0].data, ...store.updateNodeDataTransient.mock.calls[0][1] };
+    store.updateNodeDataTransient.mockClear();
+    if (path === 'poster') {
+      pending.resolve({ src: 'blob:cover', release: vi.fn(), width: 360, height: 640,
+        videoWidth: 832, videoHeight: 1472, duration: 5 });
+      await pending.promise;
+    } else {
+      compact!.videoWidth = 832;
+      compact!.videoHeight = 1472;
+      (find((element) => element.type === 'video').props.onLoadedMetadata as (event: unknown) => void)({ currentTarget: compact });
+    }
+    expect(store.updateNodeDataTransient).toHaveBeenCalledExactlyOnceWith('video', { videoWidth: 832, videoHeight: 1472 });
+  });
+
+  it.each(['poster', 'player'])('initializes missing node dimensions from %s metadata', async (path) => {
+    const pending = deferred<unknown>();
+    driver.acquire.mockReturnValue(pending.promise);
+    selected = path === 'player';
+    render();
+    if (path === 'poster') {
+      pending.resolve({ src: 'blob:cover', release: vi.fn(), width: 640, height: 360,
+        videoWidth: 1920, videoHeight: 1080, duration: 10 });
+      await pending.promise;
+    } else {
+      (find((element) => element.type === 'video').props.onLoadedMetadata as (event: unknown) => void)({ currentTarget: compact });
+    }
+    expect(store.updateNodeDataTransient).toHaveBeenCalledExactlyOnceWith('video', {
+      videoWidth: 1920, videoHeight: 1080, nodeWidth: 320, nodeHeight: 180,
+    });
+  });
+
   it('keeps idle nodes free of video players and ignores thumbnailUrl values that actually point at the video', () => {
     store.nodes[0].data.thumbnailUrl = 'asset://video.mp4';
     render();

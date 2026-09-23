@@ -279,7 +279,8 @@ function AIVideoNode({ id, data, selected }: { id: string; data: BaseNodeData; s
             || liveData.nodeWidth == null || liveData.nodeHeight == null)) {
           state.updateNodeDataTransient(id, {
             videoWidth: poster.videoWidth, videoHeight: poster.videoHeight,
-            ...computeVideoNodeDimensions(poster.videoWidth, poster.videoHeight),
+            ...(liveData.nodeWidth == null || liveData.nodeHeight == null
+              ? computeVideoNodeDimensions(poster.videoWidth, poster.videoHeight) : {}),
           });
         }
       }
@@ -357,14 +358,17 @@ function AIVideoNode({ id, data, selected }: { id: string; data: BaseNodeData; s
     const video = event.currentTarget;
     const videoWidth = video.videoWidth;
     const videoHeight = video.videoHeight;
+    const state = useAppStore.getState();
+    const liveData = getCanvasNodeById(state.nodes, id)?.data;
+    if (state.currentProjectId !== projectId || !liveData || liveData.videoUrl !== data.videoUrl) return;
     if (videoWidth > 0 && videoHeight > 0) {
-      const mediaDimensionsChanged = data.videoWidth !== videoWidth || data.videoHeight !== videoHeight;
-      const nodeDimensionsMissing = data.nodeWidth == null || data.nodeHeight == null;
+      const mediaDimensionsChanged = liveData.videoWidth !== videoWidth || liveData.videoHeight !== videoHeight;
+      const nodeDimensionsMissing = liveData.nodeWidth == null || liveData.nodeHeight == null;
       if (mediaDimensionsChanged || nodeDimensionsMissing) {
         updateNodeDataTransient(id, {
           videoWidth,
           videoHeight,
-          ...computeVideoNodeDimensions(videoWidth, videoHeight),
+          ...(nodeDimensionsMissing ? computeVideoNodeDimensions(videoWidth, videoHeight) : {}),
         });
       }
     }
@@ -383,12 +387,9 @@ function AIVideoNode({ id, data, selected }: { id: string; data: BaseNodeData; s
       return;
     }
   }, [
-    data.nodeHeight,
-    data.nodeWidth,
-    data.videoHeight,
     data.videoUrl,
-    data.videoWidth,
     id,
+    projectId,
     updateNodeDataTransient,
   ]);
 
