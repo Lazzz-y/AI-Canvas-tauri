@@ -34,6 +34,8 @@ import { useResourceVideoPreview } from '../hooks/useResourceVideoPreview';
 import { useT } from '../i18n';
 import CharacterAssetDialog from './CharacterAssetDialog';
 import CharacterReferenceGallery from './character/CharacterReferenceGallery';
+import CharacterDock from './character/CharacterDock';
+import { sortCharactersForLibrary } from '../services/characterOrder';
 import type { ReferenceStageBox } from './character/CharacterReferenceGallery';
 import {
   CHARACTER_VOICE_KIND_LABELS,
@@ -202,6 +204,7 @@ export default function CharacterLibraryPanel() {
     globalCharacters,
     globalCharactersLoading,
     loadGlobalCharacters,
+    reorderCharacters,
     copyCharacterToGlobal,
     copyGlobalCharacterToProject,
     deleteDramaAsset,
@@ -231,6 +234,7 @@ export default function CharacterLibraryPanel() {
       globalCharacters: state.globalCharacters,
       globalCharactersLoading: state.globalCharactersLoading,
       loadGlobalCharacters: state.loadGlobalCharacters,
+      reorderCharacters: state.reorderCharacters,
       copyCharacterToGlobal: state.copyCharacterToGlobal,
       copyGlobalCharacterToProject: state.copyGlobalCharacterToProject,
       deleteDramaAsset: state.deleteDramaAsset,
@@ -302,15 +306,14 @@ export default function CharacterLibraryPanel() {
   const sourceCharacters = scope === 'project' ? projectCharacters : globalCharacters;
   const characters = useMemo(() => {
     const query = search.trim().toLowerCase();
-    return [...sourceCharacters]
+    return sortCharactersForLibrary(sourceCharacters)
       .filter((character) => !query || [
         character.name,
         character.summary,
         character.identity,
         character.storyRole,
         character.visualNotes,
-      ].some((value) => value?.toLowerCase().includes(query)))
-      .sort((left, right) => right.updatedAt - left.updatedAt || left.name.localeCompare(right.name));
+      ].some((value) => value?.toLowerCase().includes(query)));
   }, [search, sourceCharacters]);
 
   const selectedCharacter = characters.find(
@@ -1004,23 +1007,22 @@ export default function CharacterLibraryPanel() {
             <span>{scope === 'project' ? t('本项目角色') : t('全局角色')}</span>
             <strong>{characters.length}</strong>
           </div>
-          <div className="character-library-strip-list" role="list">
-            {characters.map((character) => (
-              <button
-                key={character.id}
-                type="button"
-                role="listitem"
-                className={character.id === selectedCharacter?.id ? 'is-selected' : ''}
-                onClick={() => {
-                  setSelectedCharacterId(character.id);
-                  setSelectedReferenceId(null);
-                }}
-              >
-                <CharacterAvatar character={character} />
-                <span>{character.name}</span>
-              </button>
-            ))}
-          </div>
+          <CharacterDock
+            key={JSON.stringify([open, currentProjectId, scope, search,
+              characters.map(({ id, updatedAt }) => [id, updatedAt]).sort()])}
+            characters={characters}
+            selectedId={selectedCharacter?.id}
+            renderAvatar={(character) => <CharacterAvatar character={character} />}
+            onSelect={(id) => {
+              setSelectedCharacterId(id);
+              setSelectedReferenceId(null);
+            }}
+            onReorder={async (ids) => {
+              // 尚未点击过角色时，也保持当前预览，不随首项换位而跳到其他角色。
+              if (selectedCharacter) setSelectedCharacterId(selectedCharacter.id);
+              return reorderCharacters(scope, ids, currentProjectId);
+            }}
+          />
         </footer>
       </ModalOverlay>
 

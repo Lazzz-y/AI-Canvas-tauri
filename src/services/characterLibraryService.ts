@@ -8,6 +8,7 @@ import {
   getAssetIndexById,
   getAllGlobalCharacters,
   putGlobalCharacter,
+  putGlobalCharacterOrder,
 } from './indexedDbService';
 import type {
   CharacterAction,
@@ -17,6 +18,7 @@ import type {
   DramaCharacter,
 } from '../types/dramaAssets';
 import { normalizeDramaCharacter } from '../types/dramaAssets';
+import { sortCharactersForLibrary } from './characterOrder';
 import {
   getAssetUrlFromPath,
   getGlobalFilesDir,
@@ -282,10 +284,10 @@ async function persistGlobalMediaOfCharacter(character: DramaCharacter): Promise
 
 export async function loadGlobalCharacterCards(): Promise<DramaCharacter[]> {
   const characters = await getAllGlobalCharacters();
-  return characters
-    .map((character) => prepareGlobalCharacter(character))
-    .sort((left, right) => right.updatedAt - left.updatedAt || left.name.localeCompare(right.name));
+  return sortCharactersForLibrary(characters.map((character) => prepareGlobalCharacter(character)));
 }
+
+export const saveGlobalCharacterOrder = putGlobalCharacterOrder;
 
 export async function saveGlobalCharacterCard(character: DramaCharacter): Promise<DramaCharacter> {
   // 先落盘再剥离项目字段：复制到全局目录时还要用项目内共用的 filePath 作为来源

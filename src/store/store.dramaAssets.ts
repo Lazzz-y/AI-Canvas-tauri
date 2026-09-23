@@ -40,7 +40,11 @@ import {
   deleteGlobalCharacterCard,
   loadGlobalCharacterCards,
   saveGlobalCharacterCard,
+  saveGlobalCharacterOrder,
 } from '../services/characterLibraryService';
+import { reorderCharacterSubset, sortCharactersForLibrary } from '../services/characterOrder';
+
+const characterOrderSaves = new Set<string>();
 
 export type CharacterLibraryScope = 'project' | 'global';
 
@@ -142,6 +146,7 @@ export interface DramaAssetsSlice {
    */
   createImageNodeFromDramaAsset: (kind: DramaAssetKind, id: string) => string | null;
   loadGlobalCharacters: () => Promise<void>;
+  reorderCharacters: (scope: CharacterLibraryScope, ids: string[], projectId: string | null) => Promise<boolean>;
   saveCharacterCard: (
     scope: CharacterLibraryScope,
     character: DramaCharacter,
@@ -387,6 +392,7 @@ function cloneCharacter(character: DramaCharacter): DramaCharacter {
   return normalizeDramaCharacter({
     ...character,
     id: `character-${generateId()}`,
+    libraryOrder: undefined,
     createdAt: now,
     updatedAt: now,
     source: 'manual',
@@ -755,8 +761,53 @@ export const createDramaAssetsSlice: StateCreator<AppState, [], [], DramaAssetsS
     }
   },
 
+  reorderCharacters: async (scope, ids, projectId) => {
+    const state = get();
+    if (state.currentProjectId !== projectId || (scope === 'project' && !projectId)) return false;
+    const key = scope === 'global' ? 'global' : `project:${projectId}`;
+    if (characterOrderSaves.has(key)) return false;
+    const previous = scope === 'project' ? state.dramaAssets.characters : state.globalCharacters;
+    const next = reorderCharacterSubset(previous, ids);
+    if (!next) return false;
+    if (sortCharactersForLibrary(previous).every((item, index) => item.id === next[index].id)) return true;
+    characterOrderSaves.add(key);
+    const patchOrder = (characters: DramaCharacter[], source: DramaCharacter[]) => {
+      const ranks = new Map(source.map((item) => [item.id, item.libraryOrder]));
+      return characters.map((item) => ranks.has(item.id) ? { ...item, libraryOrder: ranks.get(item.id) } : item);
+    };
+    if (scope === 'project') {
+      set({ dramaAssets: { ...state.dramaAssets, characters: patchOrder(previous, next) } });
+    } else {
+      set({ globalCharacters: patchOrder(previous, next) });
+    }
+    try {
+      if (scope === 'project') {
+        if (await get().saveCurrentProjectSilent() !== projectId) throw new Error('角色顺序保存失败');
+      } else {
+        await saveGlobalCharacterOrder(next.map((item) => item.id));
+      }
+      return true;
+    } catch {
+      // 只撤销本次排序字段，保留保存期间的角色编辑；不回写其他项目。
+      if (scope === 'global') {
+        set((current) => ({ globalCharacters: patchOrder(current.globalCharacters, previous) }));
+      } else if (get().currentProjectId === projectId) {
+        set((current) => ({ dramaAssets: {
+          ...current.dramaAssets, characters: patchOrder(current.dramaAssets.characters, previous),
+        } }));
+      }
+      get().showToast?.('角色顺序保存失败，已恢复原顺序', 'error');
+      return false;
+    } finally {
+      characterOrderSaves.delete(key);
+    }
+  },
+
   saveCharacterCard: async (scope, character) => {
-    const normalized = normalizeDramaCharacter(character);
+    const characters = scope === 'project' ? get().dramaAssets.characters : get().globalCharacters;
+    const existing = characters.find((item) => item.id === character.id);
+    const normalized = normalizeDramaCharacter(existing
+      ? { ...character, libraryOrder: existing.libraryOrder } : character);
     if (scope === 'project') {
       const current = get().dramaAssets;
       const exists = current.characters.some((item) => item.id === normalized.id);
@@ -775,7 +826,8 @@ export const createDramaAssetsSlice: StateCreator<AppState, [], [], DramaAssetsS
       const persisted = await saveGlobalCharacterCard(normalized);
       set((state) => ({
         globalCharacters: state.globalCharacters.some((item) => item.id === persisted.id)
-          ? state.globalCharacters.map((item) => item.id === persisted.id ? persisted : item)
+          ? state.globalCharacters.map((item) => item.id === persisted.id
+            ? { ...persisted, libraryOrder: item.libraryOrder } : item)
           : [persisted, ...state.globalCharacters],
       }));
       return true;
@@ -922,7 +974,8 @@ export const createDramaAssetsSlice: StateCreator<AppState, [], [], DramaAssetsS
         const persisted = await saveGlobalCharacterCard(nextCharacter);
         set((state) => ({
           globalCharacters: state.globalCharacters.some((item) => item.id === persisted.id)
-            ? state.globalCharacters.map((item) => item.id === persisted.id ? persisted : item)
+            ? state.globalCharacters.map((item) => item.id === persisted.id
+              ? { ...persisted, libraryOrder: item.libraryOrder } : item)
             : [persisted, ...state.globalCharacters],
         }));
       } catch {

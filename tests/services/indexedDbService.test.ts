@@ -88,6 +88,22 @@ beforeEach(() => {
 });
 
 describe('indexedDbService schema', () => {
+  it('全局角色排序持久化只改顺序，旧编辑保存不会覆盖新顺序', async () => {
+    const service = await import('../../src/services/indexedDbService');
+    const a = { id: 'a', kind: 'character' as const, key: 'a', name: '角色 A', identity: '', summary: '', visualNotes: '',
+      importance: 'main' as const, confirmed: false, source: 'manual' as const, createdAt: 1, updatedAt: 2 };
+    const b = { ...a, id: 'b', name: '角色 B' };
+    await service.putGlobalCharacter(a);
+    await service.putGlobalCharacter(b);
+    await service.putGlobalCharacterOrder(['b', 'a']);
+    await service.putGlobalCharacter({ ...a, name: '编辑后的 A' });
+    expect(await service.getAllGlobalCharacters()).toEqual([
+      { ...a, name: '编辑后的 A', libraryOrder: 1 }, { ...b, libraryOrder: 0 },
+    ]);
+    await expect(service.putGlobalCharacterOrder(['a', 'missing'])).rejects.toThrow();
+    expect((await service.getAllGlobalCharacters()).map((item) => item.libraryOrder)).toEqual([1, 0]);
+    await expect(service.putGlobalCharacterOrder(['a', 'a'])).rejects.toThrow('重复');
+  });
   it('uses strict durability only for configuration and toolbar writes', async () => {
     const service = await import('../../src/services/indexedDbService');
     const { openDB } = await import('../../src/services/indexedDb/schema');
