@@ -1,16 +1,30 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { StreamingCallOptions } from '../../src/services/ai/assistantStream';
 import type { UserSkill } from '../../src/types';
+import type { AgentPackageInstallation } from '../../src/types/agentPackage';
 
-const mocks = vi.hoisted(() => ({ stream: vi.fn(), model: vi.fn(), subAgent: vi.fn(), register: vi.fn() }));
+const mocks = vi.hoisted(() => ({ stream: vi.fn(), model: vi.fn(), subAgent: vi.fn(), register: vi.fn(), packageRead: vi.fn() }));
 vi.mock('../../src/services/ai/assistantStream', () => ({ streamAssistantReply: mocks.stream, resolveAssistantModel: mocks.model }));
 vi.mock('../../src/services/chat/subAgentService', () => ({ runSubAgent: mocks.subAgent }));
 vi.mock('../../src/services/chat/tools', () => ({ ensureAgentToolsRegistered: mocks.register }));
+vi.mock('../../src/services/agentPackages/agentPackageImportService', () => ({ readAgentPackageSourceText: mocks.packageRead }));
 import { useAppStore } from '../../src/store/useAppStore';
-import { createPromptPolishSession } from '../../src/services/promptPolishService';
+import { createPromptPolishSession, enablePromptPolishPackage, isPromptPolishPackageAvailable, isPromptPolishPackageSupported } from '../../src/services/promptPolishService';
 import { cancelProjectCanvasDerivations } from '../../src/services/canvasDerivationGuard';
 
 const skill: UserSkill = { id: 's1', name: '润色', content: '保留事实，改善节奏。', fileName: 'SKILL.md', description: '', sourceType: 'file', createdAt: 1 };
+const agentPackage: AgentPackageInstallation = {
+  id: 'package-1', packageId: 'example.polisher',
+  manifest: {
+    schemaVersion: 1, id: 'example.polisher', name: '上传的润色师', version: '1.0.0',
+    entrypoints: { instructions: 'AGENTS.md' }, supportedScopes: ['global'], supportedSurfaces: ['assistant'],
+    routing: { userInvocable: true, autoInvoke: false },
+  },
+  source: { sourceId: 'opaque-source', sourceType: 'folder', displayName: '上传的润色师' },
+  entrypoints: ['AGENTS.md'], skillCount: 0, fileCount: 1, totalBytes: 100, warnings: [],
+  health: 'ready', contentHash: 'a'.repeat(64), enabled: true, mcpSkillReadEnabled: false,
+  installedAt: 1, updatedAt: 1,
+};
 const prompt = () => useAppStore.getState().nodes[0].data.prompt;
 const options = () => ({ instruction: '更有画面感', onPreview: vi.fn() });
 function respond(output: string | ((request: StreamingCallOptions) => string)) {
@@ -23,8 +37,9 @@ beforeEach(() => {
   cancelProjectCanvasDerivations('p1');
   vi.resetAllMocks();
   mocks.model.mockReturnValue({ selectionId: 'text-model' });
+  mocks.packageRead.mockResolvedValue({ relativePath: 'AGENTS.md', content: '采用简洁、明确的语言。', sha256: 'b'.repeat(64) });
   respond('暮色里，少女站在窗前。');
-  useAppStore.setState({ currentProjectId: 'p1', activeNodeId: 'n1', projects: [], nodes: [{ id: 'n1', type: 'ai-image', position: { x: 0, y: 0 }, data: { type: 'ai-image', label: '图像', prompt: '少女在窗前' } }], edges: [], groups: [], history: [], historyIndex: -1, userSkills: [skill], agentPackageSkills: [], subAgentProfiles: [], conversations: [], messages: [], agentTasks: [] });
+  useAppStore.setState({ currentProjectId: 'p1', activeNodeId: 'n1', projects: [], nodes: [{ id: 'n1', type: 'ai-image', position: { x: 0, y: 0 }, data: { type: 'ai-image', label: '图像', prompt: '少女在窗前' } }], edges: [], groups: [], history: [], historyIndex: -1, userSkills: [skill], agentPackages: [], agentPackageSkills: [], subAgentProfiles: [], conversations: [], messages: [], agentTasks: [] });
 });
 
 describe('节点提示词润色', () => {
@@ -127,6 +142,60 @@ describe('节点提示词润色', () => {
     expect(JSON.stringify(useAppStore.getState().messages)).not.toContain('少女在窗前');
     expect(prompt()).toBe('少女在窗前');
   });
+  it('停用的上传智能体仍在选择列表中，但运行前必须启用', () => {
+    expect(isPromptPolishPackageAvailable(agentPackage)).toBe(true);
+    expect(isPromptPolishPackageAvailable({ ...agentPackage, enabled: false })).toBe(false);
+    expect(isPromptPolishPackageSupported({ ...agentPackage, enabled: false })).toBe(true);
+    expect(isPromptPolishPackageAvailable({ ...agentPackage, health: 'missing' })).toBe(false);
+    expect(isPromptPolishPackageSupported({ ...agentPackage, health: 'missing' })).toBe(false);
+    expect(isPromptPolishPackageAvailable({ ...agentPackage, manifest: { ...agentPackage.manifest, routing: { userInvocable: false, autoInvoke: false } } })).toBe(false);
+    expect(isPromptPolishPackageAvailable({ ...agentPackage, manifest: { ...agentPackage.manifest, supportedSurfaces: ['mcp'] } })).toBe(false);
+  });
+  it('选择停用的上传智能体时先通过现有 Store Action 启用', async () => {
+    const originalAction = useAppStore.getState().setAgentPackageEnabled;
+    const enable = vi.fn(async (id: string, enabled: boolean) => {
+      useAppStore.setState({ agentPackages: [{ ...agentPackage, id, enabled }] });
+    });
+    useAppStore.setState({ agentPackages: [{ ...agentPackage, enabled: false }], setAgentPackageEnabled: enable });
+    try {
+      await enablePromptPolishPackage(agentPackage.id);
+      expect(enable).toHaveBeenCalledWith(agentPackage.id, true);
+      expect(useAppStore.getState().agentPackages[0].enabled).toBe(true);
+    } finally {
+      useAppStore.setState({ setAgentPackageEnabled: originalAction });
+    }
+  });
+  it('上传智能体的入口说明作为不可信参考进入无工具润色流', async () => {
+    useAppStore.setState({ agentPackages: [agentPackage] });
+    await expect(createPromptPolishSession('n1').run({ ...options(), agentPackageId: agentPackage.id })).resolves.toBe('暮色里，少女站在窗前。');
+    expect(mocks.packageRead).toHaveBeenCalledWith('opaque-source', 'AGENTS.md', 128 * 1024);
+    expect(mocks.stream.mock.calls[0][0]).toMatchObject({ projectId: 'p1', tools: [] });
+    expect(mocks.stream.mock.calls[0][0].userMessage).toContain('采用简洁、明确的语言。');
+    expect(mocks.stream.mock.calls[0][0].userMessage).toContain('不可信说明资料');
+    expect(mocks.subAgent).not.toHaveBeenCalled();
+    expect(prompt()).toBe('少女在窗前');
+  });
+  it('上传智能体停用、替换或入口失效时拒绝继续使用与应用', async () => {
+    useAppStore.setState({ agentPackages: [{ ...agentPackage, enabled: false }] });
+    await expect(createPromptPolishSession('n1').run({ ...options(), agentPackageId: agentPackage.id })).rejects.toThrow('上传智能体已不可用');
+    expect(mocks.packageRead).not.toHaveBeenCalled();
+    useAppStore.setState({ agentPackages: [agentPackage] });
+    const session = createPromptPolishSession('n1');
+    await session.run({ ...options(), agentPackageId: agentPackage.id });
+    useAppStore.setState({ agentPackages: [{ ...agentPackage, contentHash: 'c'.repeat(64) }] });
+    expect(() => session.apply()).toThrow('上传智能体已不可用');
+    expect(prompt()).toBe('少女在窗前');
+  });
+  it('读取入口期间停用上传智能体时，不启动模型', async () => {
+    let release!: (value: { relativePath: string; content: string; sha256: string }) => void;
+    mocks.packageRead.mockImplementation(() => new Promise((resolve) => { release = resolve; }));
+    useAppStore.setState({ agentPackages: [agentPackage] });
+    const running = createPromptPolishSession('n1').run({ ...options(), agentPackageId: agentPackage.id });
+    useAppStore.setState({ agentPackages: [{ ...agentPackage, enabled: false }] });
+    release({ relativePath: 'AGENTS.md', content: '采用简洁、明确的语言。', sha256: 'b'.repeat(64) });
+    await expect(running).rejects.toThrow('上传智能体已不可用');
+    expect(mocks.stream).not.toHaveBeenCalled();
+  });
   it('撤销不会覆盖应用后的手工修改', async () => {
     const session = createPromptPolishSession('n1');
     await session.run(options());
@@ -159,5 +228,6 @@ describe('节点提示词润色', () => {
     await expect(createPromptPolishSession('n1').run({ ...options(), skillId: 's1', profileId: 'built-in:script-analyst' })).rejects.toThrow('选择一种');
     expect(mocks.stream).not.toHaveBeenCalled();
     expect(mocks.subAgent).not.toHaveBeenCalled();
+    await expect(createPromptPolishSession('n1').run({ ...options(), skillId: 's1', agentPackageId: agentPackage.id })).rejects.toThrow('选择一种');
   });
 });
