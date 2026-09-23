@@ -176,7 +176,7 @@ function toWorkflowDefinition(spec: BuiltInWorkflowSpec, createdAt: number): Wor
 }
 
 /**
- * 升级早先播种的内置工作流：补可编辑图，并修正已经失效的内置模型引用。
+ * 升级早先播种的内置工作流：补可编辑图，修正旧模型引用和 H3 PDD 视频解码连线。
  * 只处理可明确识别的旧值，不覆盖用户改成其他有效模型的选择；没变化时返回 null。
  */
 export function withBuiltInEditableContent(
@@ -208,6 +208,33 @@ export function withBuiltInEditableContent(
       }
     } catch {
       // 用户内容不是有效 JSON 时保持原样，由既有工作流校验负责报告。
+    }
+  }
+
+  // 只迁移仍是旧版直连的 API 图。已有可编辑图由用户维护，避免 UI 图与 API 图分叉。
+  if (workflow.id === 'builtin-minimax-h3-pdd-r2v' && !workflow.editableContent) {
+    try {
+      const graph = JSON.parse(upgraded.fileContent) as Record<string, {
+        class_type?: string;
+        inputs?: Record<string, unknown>;
+      }>;
+      const videoDecode = graph['33'];
+      const samples = videoDecode?.inputs?.samples;
+      if (graph['16']?.class_type === 'SamplerCustomAdvanced'
+        && videoDecode?.class_type === 'VAEDecode'
+        && Array.isArray(samples) && samples[0] === '16' && samples[1] === 0
+        && !graph['900']) {
+        const currentGraph = JSON.parse(readWorkflowFile('minimax-h3-pdd-r2v.json')) as typeof graph;
+        const unloadNode = currentGraph['900'];
+        if (unloadNode?.class_type === 'FL_UnloadAllModels') {
+          graph['900'] = unloadNode;
+          videoDecode.inputs!.samples = ['900', 0];
+          upgraded = { ...upgraded, fileContent: JSON.stringify(graph) };
+          changed = true;
+        }
+      }
+    } catch {
+      // 不能辨认的用户工作流保持原样，不做自动修复。
     }
   }
 

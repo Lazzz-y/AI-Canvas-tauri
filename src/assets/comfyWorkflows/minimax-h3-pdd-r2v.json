@@ -280,7 +280,7 @@
   "33": {
     "inputs": {
       "samples": [
-        "16",
+        "900",
         0
       ],
       "vae": [
@@ -339,6 +339,18 @@
     },
     "_meta": {
       "title": "Float (Duration)"
+    }
+  },
+  "900": {
+    "inputs": {
+      "value": [
+        "16",
+        0
+      ]
+    },
+    "class_type": "FL_UnloadAllModels",
+    "_meta": {
+      "title": "采样后卸载模型（视频解码前）"
     }
   },
   "101": {
