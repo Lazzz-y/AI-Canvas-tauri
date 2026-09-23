@@ -7,8 +7,10 @@ import type { ApiProviderConfig } from '../../types';
 export function shouldListProviderConnection(
   config: Pick<ApiProviderConfig, 'apiKey' | 'catalogId'>,
   authType: ProviderAuthType,
+  runninghubWorkflowApiKey = '',
 ): boolean {
   return authType === 'oauth'
     || !!config.apiKey.trim()
-    || config.catalogId === 'custom-openai';
+    || config.catalogId === 'custom-openai'
+    || (config.catalogId === 'runninghub-model' && !!runninghubWorkflowApiKey.trim());
 }

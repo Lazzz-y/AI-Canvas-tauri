@@ -93,6 +93,20 @@ describe('RunningHub 云任务生命周期', () => {
     await generate(); const [url, init] = submitCalls()[0]; const body = JSON.parse(init.body as string);
     expect(url).toContain('/ai-app/run'); expect(body.webappId).toBe(manifest.remoteId); expect(body.workflowId).toBeUndefined(); expect(body.addMetadata).toBeUndefined();
   });
+  it('AI 应用提交兼容业务码 200，仍须取得有效任务 ID', async () => {
+    useAppStore.setState({ workflows: useAppStore.getState().workflows.map((wf) => ({ ...wf, runninghub: { ...manifest, kind: 'app' } })) });
+    const originalFetch = mocks.fetch.getMockImplementation()!;
+    mocks.fetch.mockImplementation(async (url: string, init?: RequestInit) =>
+      String(url).endsWith('/ai-app/run') ? json({ code: 200, data: { taskId } }) : originalFetch(url, init));
+    await expect(generate()).resolves.toHaveLength(1);
+    expect(pending()[0]).toMatchObject({ taskId, runninghubRecoveryState: 'save_pending' });
+
+    completeRunningHubNodeTask('n1');
+    mocks.fetch.mockImplementation(async (url: string, init?: RequestInit) =>
+      String(url).endsWith('/ai-app/run') ? json({ code: 200, data: {} }) : originalFetch(url, init));
+    await expect(generate()).rejects.toThrow('未返回有效任务 ID');
+    expect(pending()[0]).toMatchObject({ taskId: '', runninghubRecoveryState: 'submit_unknown' });
+  });
   it('排队后继续查询，网络中断保留 ID；恢复不会再次付费提交', async () => {
     state = 'QUEUED'; const running = generate();
     await vi.waitFor(() => expect(pending()[0]?.taskId).toBe(taskId));

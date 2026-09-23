@@ -5,11 +5,11 @@ import { assertMediaDataUrlSize } from '../../fileService';
 import { prepareReferenceImageUpload } from '../referenceImageUpload';
 
 export class RunningHubRequestError extends Error {
-  readonly code: number;
+  readonly code?: number;
   readonly httpStatus: number;
-  constructor(code: number, httpStatus: number) {
+  constructor(code: number | undefined, httpStatus: number) {
     const detail: Record<number, string> = { 401: '鉴权失败，请检查所选连接', 402: '余额不足', 403: '无权访问该资源', 429: '请求过于频繁', 805: '任务执行失败', 807: '任务不存在或不属于此密钥', 809: '上传文件过大', 814: '个人队列已满' };
-    super(`RunningHub ${detail[code] || detail[httpStatus] || '请求失败'}（${code || httpStatus}）`);
+    super(`RunningHub ${detail[code ?? -1] || detail[httpStatus] || '请求失败'}（${code === undefined ? `HTTP ${httpStatus}` : `业务码 ${code}，HTTP ${httpStatus}`}）`);
     this.code = code; this.httpStatus = httpStatus;
   }
 }
@@ -27,7 +27,7 @@ async function request(url: string, init: RequestInit): Promise<Response> {
   }
 }
 async function parseResponse(response: Response, successCodes: readonly number[] = [0]): Promise<Record<string, unknown>> {
-  if (!response.ok) throw new RunningHubRequestError(response.status, response.status);
+  if (!response.ok) throw new RunningHubRequestError(undefined, response.status);
   const text = await response.text();
   if (text.length > 1_500_000) throw new Error('RunningHub 响应超过允许大小');
   let parsed: unknown;
@@ -59,7 +59,8 @@ export async function runningHubRequest(
     ...(method === 'POST' ? { body: JSON.stringify({ ...body, apiKey: connection.apiKey }) } : {}),
     signal: requestSignal(signal),
   });
-  return parseResponse(response);
+  const submitting = path === '/task/openapi/create' || path === '/task/openapi/ai-app/run';
+  return parseResponse(response, submitting ? [0, 200] : [0]);
 }
 
 const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;

@@ -16,6 +16,21 @@ describe('API Key 设置连接列表', () => {
     }, 'api-key')).toBe(false);
   });
 
+  it('只配置工作流 Key 时显示 RunningHub 连接，不显示无关厂商', () => {
+    expect(shouldListProviderConnection({
+      apiKey: '',
+      catalogId: 'runninghub-model',
+    }, 'api-key', 'workflow-key')).toBe(true);
+    expect(shouldListProviderConnection({
+      apiKey: '',
+      catalogId: 'runninghub-model',
+    }, 'api-key')).toBe(false);
+    expect(shouldListProviderConnection({
+      apiKey: '',
+      catalogId: 'apimart',
+    }, 'api-key', 'workflow-key')).toBe(false);
+  });
+
   it('显示已有密钥或使用 OAuth 的连接', () => {
     expect(shouldListProviderConnection({
       apiKey: 'configured',

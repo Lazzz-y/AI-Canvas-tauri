@@ -144,7 +144,7 @@ export default function ApiKeySettings({ onClose }: { onClose: () => void }) {
       const definition = getProviderDefinition(id, providerConfig);
       if (!definition) continue;
       if (definition.kind === 'web-search' && id !== activeWebSearchProviderId) continue;
-      if (!shouldListProviderConnection(providerConfig, definition.authType)) continue;
+      if (!shouldListProviderConnection(providerConfig, definition.authType, config.providers.runninghub?.apiKey)) continue;
       items.push({ id, config: providerConfig });
     }
     if (config.providers.runninghub?.apiKey && !config.providers['runninghub-model']) {

@@ -309,6 +309,7 @@
   gap: 14px;
   width: 880px;
   max-width: calc(100vw - 32px);
+  height: calc(100vh - 64px);
   max-height: calc(100vh - 64px);
   background: none;
   border: none;
@@ -379,6 +380,7 @@
 @media (max-width: 900px) {
   .wf-panel {
     flex-direction: column;
+    height: auto;
     overflow-y: auto;
   }
   .wf-panel-import {
