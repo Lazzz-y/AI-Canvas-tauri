@@ -760,7 +760,7 @@ describe('内置 H3 PDD 自由参考', () => {
     expect(workflow.category).toBe('ai-video');
     expect(workflow.defaultNodes).toEqual({ prompt: '19', image: '101', video: '201' });
     expect(workflow.editableContent).toBeUndefined();
-    expect(Object.keys(graph)).toHaveLength(34);
+    expect(Object.keys(graph)).toHaveLength(35);
     expect(workflow.ioNodes).toHaveLength(16);
     for (const [type, count] of [['prompt', 1], ['image', 9], ['video', 3], ['audio', 3]] as const) {
       const ios = workflow.ioNodes!.filter((io) => io.type === type);
@@ -772,6 +772,43 @@ describe('内置 H3 PDD 自由参考', () => {
     expect(graph['24'].inputs.clip_name).toBe('qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors');
     expect(graph['22'].inputs.vae_name).toBe('minimax_h3_video_vae_fp16.safetensors');
     expect(graph['27'].inputs.vae_name).toBe('minimax_h3_audio_vae_fp32.safetensors');
+    expect(graph['900'].class_type).toBe('FL_UnloadAllModels');
+    expect(graph['900'].inputs.value).toEqual(['16', 0]);
+    expect(graph['33'].inputs.samples).toEqual(['900', 0]);
+    expect(graph['23'].inputs.samples).toEqual(['16', 0]);
+  });
+
+  it('只迁移旧版视频解码连线，保留提示词和分辨率且不会重复迁移', () => {
+    const workflow = install();
+    const oldGraph = JSON.parse(workflow.fileContent);
+    delete oldGraph['900'];
+    oldGraph['33'].inputs.samples = ['16', 0];
+    oldGraph['19'].inputs.prompt = '用户自己的提示词';
+    oldGraph['29'].inputs.megapixels = 0.39;
+
+    const upgraded = withBuiltInEditableContent({
+      ...workflow,
+      fileContent: JSON.stringify(oldGraph),
+    });
+    expect(upgraded).not.toBeNull();
+    const graph = JSON.parse(upgraded!.fileContent);
+    expect(graph['900'].class_type).toBe('FL_UnloadAllModels');
+    expect(graph['33'].inputs.samples).toEqual(['900', 0]);
+    expect(graph['23'].inputs.samples).toEqual(['16', 0]);
+    expect(graph['19'].inputs.prompt).toBe('用户自己的提示词');
+    expect(graph['29'].inputs.megapixels).toBe(0.39);
+    expect(withBuiltInEditableContent(upgraded!)).toBeNull();
+  });
+
+  it('已有可编辑图或自定义视频解码连线不被自动覆盖', () => {
+    const workflow = install();
+    const oldGraph = JSON.parse(workflow.fileContent);
+    delete oldGraph['900'];
+    oldGraph['33'].inputs.samples = ['16', 0];
+    const fileContent = JSON.stringify(oldGraph);
+    expect(withBuiltInEditableContent({ ...workflow, fileContent, editableContent: '{"nodes":[]}' })).toBeNull();
+    oldGraph['33'].inputs.samples = ['custom', 0];
+    expect(withBuiltInEditableContent({ ...workflow, fileContent: JSON.stringify(oldGraph) })).toBeNull();
   });
 
   async function submit(counts: number[], mode: 'explicit' | 'automatic' | 'sparse' = 'explicit') {

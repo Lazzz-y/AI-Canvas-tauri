@@ -219,6 +219,7 @@ function createNodesInputDisplay(input: CreateNodesInput): AgentToolDisplaySnaps
 
 function captureNodeAudit(node: Node<BaseNodeData>): NodeAuditSnapshot {
   const data = node.data;
+  const aspectRatio = data.type === 'ai-video' ? data.seedanceRatio : data.aspectRatio;
   return {
     label: data.label,
     prompt: displayPreview(data.prompt),
@@ -228,7 +229,7 @@ function captureNodeAudit(node: Node<BaseNodeData>): NodeAuditSnapshot {
     width: Math.round(Number(data.nodeWidth) || node.measured?.width || DEFAULT_NODE_WIDTH),
     height: Math.round(Number(data.nodeHeight) || node.measured?.height || DEFAULT_NODE_HEIGHT),
     model: typeof data.model === 'string' ? data.model : undefined,
-    aspectRatio: typeof data.aspectRatio === 'string' ? data.aspectRatio : undefined,
+    aspectRatio: typeof aspectRatio === 'string' ? aspectRatio : undefined,
     imageSize: typeof data.imageSize === 'string' ? data.imageSize : undefined,
     batchCount: typeof data.batchCount === 'number' ? data.batchCount : undefined,
     videoResolution: typeof data.seedanceResolution === 'string' ? data.seedanceResolution : undefined,
@@ -401,7 +402,7 @@ function describeNode(node: Node<BaseNodeData>): Record<string, unknown> {
     },
     parentId: node.parentId,
     model: data.model,
-    aspectRatio: data.aspectRatio,
+    aspectRatio: data.type === 'ai-video' ? data.seedanceRatio : data.aspectRatio,
     imageSize: data.imageSize,
     batchCount: data.batchCount,
     videoResolution: data.seedanceResolution,
@@ -720,7 +721,7 @@ function createCanvasNode(
       ...(body ? { output: body } : {}),
       ...(prompt ? { prompt } : {}),
       ...(input.aspectRatio && VISUAL_NODE_TYPES.has(type)
-        ? { aspectRatio: input.aspectRatio }
+        ? { aspectRatio: input.aspectRatio, ...(type === 'ai-video' ? { seedanceRatio: input.aspectRatio } : {}) }
         : {}),
       status: body ? 'success' : 'idle',
       nodeWidth: dimensions.width,
@@ -874,6 +875,7 @@ export function registerCanvasAgentTools(): Array<() => void> {
         '直接落进节点正文，建完就能看见、能被下游 @{nodeId:label} 引用，不需要再跑模型；',
         'prompt 是给模型的生成指令（“把这集拆成镜头表”），节点正文会留空，等用户点生成才有内容。',
         '你已经写出成品文字时一律放 content；放进 prompt 只会让节点显示空白，引用它也只能拿到空内容。',
+        '多图视频 prompt 须按 Picture 顺序写入对应图片节点的 @{nodeId:label} 引用；只有连线不能指定 Picture 顺序。视频 aspectRatio 同时设置实际生成比例。',
         '视觉节点要按画面内容给 aspectRatio，不要整批用同一个比例：',
         '人物立绘、定妆图用 3:4，场景板、镜头画面、分镜用 16:9，道具、图标、材质用 1:1，竖屏短视频用 9:16，宽银幕气氛图用 21:9；',
         '项目已经定了画幅（如剧本写明 16:9）时，镜头类节点跟随项目画幅，只有人物、道具这类单体参考图才另选比例。',
@@ -986,7 +988,7 @@ export function registerCanvasAgentTools(): Array<() => void> {
         'label 同步已有文件名显示别名，但不重命名磁盘文件或改变媒体路径。',
         '视频节点使用统一字段 videoResolution / videoDuration；内部会映射到对应厂商协议字段。',
         'content 改写节点正文，只能用于文本类节点（ai-text / ai-markdown / source-text / comment）。',
-        'prompt 里可写 @{nodeId:label} 引用其他节点输出、@drama{assetId:name} 引用资产库设定，生成时自动展开；ID 必须真实存在。',
+        'prompt 里可写 @{nodeId:label} 引用其他节点输出、@drama{assetId:name} 引用资产库设定，生成时自动展开；ID 必须真实存在。多图视频须按 Picture 顺序逐条写入图片节点 @ 引用，仅有连线不能指定 Picture 顺序。',
         'x/y 是绝对坐标，一次只能移动一个节点；dx/dy 是相对位移，可批量。',
         'model 必须是 app_get_state 返回的模型 ID，且类型要与节点匹配。',
         '不修改已生成的结果，也不会触发生成（生成用 canvas_run_nodes）。',
@@ -1080,6 +1082,15 @@ export function registerCanvasAgentTools(): Array<() => void> {
         // updateNodesDataBatch 自带一次 commitToHistory；只移动时才需要单独提交历史
         if (Object.keys(patch).length > 0) store.updateNodesDataBatch(targetIds, patch);
         else store.commitToHistory();
+        // 视频参数面板读取 seedanceRatio，画布框尺寸才读取 aspectRatio。
+        // 复用同一次历史快照，且不把视频参数写入混合目标中的图片节点。
+        if (input.aspectRatio !== undefined) {
+          for (const node of targets) {
+            if (node.data.type === 'ai-video') {
+              store.updateNodeDataTransient(node.id, { seedanceRatio: input.aspectRatio });
+            }
+          }
+        }
         // Media titles prefer fileName. Reuse the batch history entry and
         // change only the displayed alias, preserving media paths and bytes.
         if (input.label !== undefined) {

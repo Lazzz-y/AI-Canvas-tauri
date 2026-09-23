@@ -1,11 +1,13 @@
 import { useAppStore } from '../store/useAppStore';
 import type { ComfyNodeProgressStage } from '../store/store.ui';
+import { comfyFetch } from './comfyPolling';
 
 const SOCKET_READY_TIMEOUT_MS = 1_000;
 const SOCKET_CONNECT_TIMEOUT_MS = 5_000;
 const SOCKET_RECONNECT_DELAY_MS = 1_000;
 const MAX_SOCKET_RECONNECTS = 3;
 const MAX_EVENT_TEXT_LENGTH = 1_048_576;
+const QUEUE_POLL_INTERVAL_MS = 2_000;
 
 export interface ParsedComfyProgress {
   promptId?: string;
@@ -135,6 +137,21 @@ function buildSocketUrl(baseUrl: string, clientId: string): string {
   return url.toString();
 }
 
+function shouldPollLocalComfyQueue(baseUrl: string): boolean {
+  if (typeof window === 'undefined' || !('__TAURI__' in window)
+    || window.location?.hostname !== 'tauri.localhost') return false;
+  try {
+    const url = new URL(baseUrl);
+    return url.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
+function queueContainsPrompt(value: unknown, promptId: string): boolean {
+  return Array.isArray(value) && value.some((item) => Array.isArray(item) && item[1] === promptId);
+}
+
 /**
  * 为一次画布节点生成建立独立的 ComfyUI 进度通道。
  * 通道不可用时只退化为不确定进度，不影响 /prompt 与 /history 主流程。
@@ -162,6 +179,9 @@ export function createComfyProgressSession({
   let reconnectCount = 0;
   let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   let connectTimer: ReturnType<typeof setTimeout> | undefined;
+  let queueTimer: ReturnType<typeof setTimeout> | undefined;
+  let queueRequest: AbortController | undefined;
+  const useQueuePolling = shouldPollLocalComfyQueue(baseUrl);
   const earlyProgress = new Map<string, ParsedComfyProgress>();
   let settleReady = () => {};
   let readySettled = false;
@@ -184,6 +204,30 @@ export function createComfyProgressSession({
     ...parsed,
     promptId: boundPromptId,
   });
+
+  const pollQueue = async () => {
+    if (closed || !boundPromptId) return;
+    const promptId = boundPromptId;
+    const controller = new AbortController();
+    queueRequest = controller;
+    try {
+      const response = await comfyFetch(`${baseUrl.replace(/\/+$/, '')}/queue`, { signal: controller.signal });
+      if (response.ok) {
+        const queue: unknown = await response.json();
+        if (!closed && !controller.signal.aborted && promptId === boundPromptId && isRecord(queue)) {
+          if (queueContainsPrompt(queue.queue_running, promptId)) update({ stage: 'running' });
+          else if (queueContainsPrompt(queue.queue_pending, promptId)) update({ stage: 'queued' });
+        }
+      }
+    } catch {
+      // 队列查询失败时保留当前状态；主流程仍由 /history 判断结果。
+    } finally {
+      if (queueRequest === controller) queueRequest = undefined;
+      if (!closed && !controller.signal.aborted) {
+        queueTimer = globalThis.setTimeout(() => { void pollQueue(); }, QUEUE_POLL_INTERVAL_MS);
+      }
+    }
+  };
 
   const connect = () => {
     if (closed || typeof globalThis.WebSocket !== 'function') {
@@ -239,7 +283,8 @@ export function createComfyProgressSession({
       settleReady();
     }
   };
-  connect();
+  if (useQueuePolling) settleReady();
+  else connect();
 
   const close = () => {
     if (closed) return;
@@ -247,6 +292,8 @@ export function createComfyProgressSession({
     globalThis.clearTimeout(readyTimer);
     globalThis.clearTimeout(connectTimer);
     globalThis.clearTimeout(reconnectTimer);
+    globalThis.clearTimeout(queueTimer);
+    queueRequest?.abort();
     earlyProgress.clear();
     settleReady();
     signal?.removeEventListener('abort', close);
@@ -265,6 +312,7 @@ export function createComfyProgressSession({
       boundPromptId = promptId;
       applyProgress(earlyProgress.get(promptId) ?? { stage: 'queued' });
       earlyProgress.clear();
+      if (useQueuePolling) void pollQueue();
     },
     close,
   };
