@@ -33,6 +33,27 @@ afterEach(() => {
 });
 
 describe('model request transport boundary', () => {
+  it('keeps the gateway JSON preset when an older model still has a reference request mode', async () => {
+    useAppStore.setState((state) => ({ config: {
+      ...state.config,
+      providers: { ...state.config.providers, gateway: {
+        name: '图片网关', apiKey: 'fixture-key', baseUrl: 'https://gateway.example/v1',
+        catalogId: 'custom-openai',
+      } },
+      generalModels: [{ id: 'gateway-image', name: 'GPT Image 中转', modelId: 'gpt-image-2',
+        category: 'image', providerConfigId: 'gateway',
+        imageReferenceRequestMode: 'edits-multipart',
+        executionProfile: { preset: 'gpt-image-gateway-json' },
+      }],
+    } }));
+    transportMocks.corsSafeFetch.mockResolvedValue(jsonResponse({ data: [{ url: 'https://cdn.example/result.png' }] }));
+    await generateImagesBatch({ provider: 'general', model: 'general/gateway-image',
+      prompt: '按参考图创作', image_urls: ['https://cdn.example/reference.png'],
+    }, 1);
+    const [url, init] = transportMocks.corsSafeFetch.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('https://gateway.example/v1/images/generations');
+    expect(JSON.parse(String(init.body)).images).toEqual(['https://cdn.example/reference.png']);
+  });
   it.each([
     { provider: 'grsai', referenceCount: 2 },
     { provider: 'saved-grsai', referenceCount: 3 },

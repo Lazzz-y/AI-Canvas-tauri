@@ -19,6 +19,7 @@ import {
   buildChatApiRequest,
   parseChatApiResponse,
   resolveChatApiProtocol,
+  resolveNativeTextChatProtocol,
   type ChatApiMessage,
 } from './chatApiProtocol';
 import type { ChatApiProtocol } from '../../types';
@@ -90,7 +91,9 @@ export async function generateText(params: AIGenerateParams): Promise<string> {
   const messages: ChatApiMessage[] = [];
   messages.push({ role: 'user', content: resolvedContent });
 
-  if (generalModel?.executionProfile) {
+  const nativeTextProtocol = resolveNativeTextChatProtocol(generalModel?.executionProfile);
+  if (nativeTextProtocol) chatApiProtocol = nativeTextProtocol;
+  if (generalModel?.executionProfile && !nativeTextProtocol) {
     const protocol = resolveModelExecutionProfile(generalModel.executionProfile);
     if (!protocol) throw new Error(`通用模型 "${generalModel.name}" 未配置调用协议`);
     const result = await executeModelProtocol({

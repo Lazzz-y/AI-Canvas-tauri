@@ -480,6 +480,39 @@ describe('config hydration guard', () => {
     expect(model).not.toHaveProperty('anthropicUrl');
   });
 
+  it('keeps each image model protocol independent in a custom connection', () => {
+    useAppStore.getState().saveProviderConfig('image-gateway', {
+      name: '图片网关', apiKey: 'fixture-key', baseUrl: 'https://gateway.example/v1',
+      catalogId: 'custom-openai',
+      selectedModels: [
+        { id: 'image-a', name: '图片 A', category: 'image', provider: 'image-gateway',
+          executionProfile: { preset: 'gpt-image-gateway-json' } },
+        { id: 'image-b', name: '图片 B', category: 'image', provider: 'image-gateway',
+          executionProfile: { preset: 'openai-gpt-image' } },
+        { id: 'text-a', name: '文本 A', category: 'text', provider: 'image-gateway' },
+      ],
+    });
+    const models = useAppStore.getState().config.generalModels ?? [];
+    expect(models.find((model) => model.modelId === 'image-a')?.executionProfile?.preset)
+      .toBe('gpt-image-gateway-json');
+    expect(models.find((model) => model.modelId === 'image-b')?.executionProfile?.preset)
+      .toBe('openai-gpt-image');
+    expect(models.find((model) => model.modelId === 'text-a')?.executionProfile).toBeUndefined();
+    expect(useAppStore.getState().config.providers['image-gateway'].selectedModels?.[0]?.executionProfile?.preset)
+      .toBe('gpt-image-gateway-json');
+
+    useAppStore.getState().saveProviderConfig('image-gateway', {
+      ...useAppStore.getState().config.providers['image-gateway'],
+      selectedModels: useAppStore.getState().config.providers['image-gateway'].selectedModels?.map(
+        (model) => model.id === 'image-a' ? { ...model, executionProfile: undefined } : model,
+      ),
+    });
+    const resetModels = useAppStore.getState().config.generalModels ?? [];
+    expect(resetModels.find((model) => model.modelId === 'image-a')?.executionProfile).toBeUndefined();
+    expect(resetModels.find((model) => model.modelId === 'image-b')?.executionProfile?.preset)
+      .toBe('openai-gpt-image');
+  });
+
   it('syncs editable video capabilities into the unified model runtime', async () => {
     useAppStore.getState().saveProviderConfig('custom-video', {
       name: '视频连接',

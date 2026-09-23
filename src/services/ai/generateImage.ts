@@ -140,6 +140,9 @@ export async function generateImagesBatch(
   const builtInContract = params.workflowId ? undefined
     : resolveBuiltInImageRequestContract(providerDefinition, modelName, imageSize, aspectRatio);
   const executionProfile = builtInContract ? undefined : generalModel?.executionProfile;
+  const usesStandardImageRequest = !executionProfile
+    || executionProfile.preset === 'openai-image'
+    || executionProfile.preset === 'openai-gpt-image';
   const imageReferenceRequestMode = builtInContract?.kind === 'standard' ? builtInContract.imageReferenceRequestMode
     : builtInContract ? undefined
     : generalModel?.imageReferenceRequestMode
@@ -150,7 +153,7 @@ export async function generateImagesBatch(
     && (builtInContract?.kind === 'protocol' && builtInContract.referenceInput === 'data-url'
       || imageReferenceRequestMode === 'generation-json-image-data-urls');
   const usesImageMultipart = !params.workflowId
-    && executionProfile?.preset !== 'custom'
+    && usesStandardImageRequest
     && imageReferenceRequestMode === 'edits-multipart';
 
   const customProtocol = executionProfile?.preset === 'custom'
@@ -303,7 +306,7 @@ export async function generateImagesBatch(
       const dimensions = mapImageDimensions(imageSize, aspectRatio);
       const hasExplicitStandardRequestMode = allImageUrls.length > 0
         && imageReferenceRequestMode !== undefined
-        && executionProfile?.preset !== 'custom';
+        && usesStandardImageRequest;
       if (executionProfile && !hasExplicitStandardRequestMode) {
         const urls = await runConfiguredModelProtocol({
           model: gm,

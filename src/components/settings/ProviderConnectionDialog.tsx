@@ -52,6 +52,7 @@ import ProviderWebSearchPicker from './providerConnection/ProviderWebSearchPicke
 import VolcengineAssetLibrarySettings from '../volcengine/VolcengineAssetLibrarySettings';
 import {
   assertProviderModelsVideoCapabilities,
+  materializeLegacyImageProtocolDefault,
   mergeModels,
 } from './providerConnection/providerConnectionModels';
 import {
@@ -87,7 +88,11 @@ export default function ProviderConnectionDialog({
   const editing = !!connectionId && !!initialConfig;
   const initialDefinitionId = initialConfig?.catalogId || connectionId || '';
   const initialDefinition = getProviderDefinition(initialDefinitionId, initialConfig);
-  const initialSelectedModels = initialConfig?.selectedModels || [];
+  // Preserve settings saved by the short-lived connection-default UI as explicit
+  // model settings when this connection is edited and saved again.
+  const initialSelectedModels = materializeLegacyImageProtocolDefault(
+    initialConfig?.selectedModels || [], initialConfig,
+  );
   const initialCatalogModels = initialConfig?.catalogModels || [];
   const initialLocalModels = initialDefinition ? (fallbackModels[initialDefinition.id] || []) : [];
   const initialBaseUrl = initialConfig?.baseUrl || initialDefinition?.defaultBaseUrl || '';
@@ -483,7 +488,7 @@ export default function ProviderConnectionDialog({
 
   const updateImageReferenceRequestMode = (
     modelId: string,
-    imageReferenceRequestMode: ImageReferenceRequestMode,
+    imageReferenceRequestMode: ImageReferenceRequestMode | undefined,
   ) => {
     setModels((current) => current.map((model) =>
       model.id === modelId ? { ...model, imageReferenceRequestMode } : model,

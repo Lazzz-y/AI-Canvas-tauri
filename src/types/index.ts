@@ -505,6 +505,10 @@ export interface ApiProviderConfig {
   baseUrl?: string;
   /** 文本/对话请求协议；旧配置缺失时按 openai-compatible 处理。 */
   chatApiProtocol?: ChatApiProtocol;
+  /** @deprecated 仅用于读取此前连接级图片协议；编辑连接时复制到已选模型。 */
+  imageProtocolDefault?: ModelExecutionProfile;
+  /** @deprecated 仅用于读取此前连接级参考图模式。 */
+  imageReferenceRequestModeDefault?: ImageReferenceRequestMode;
   /** 内置目录定义 ID；自定义连接的配置 key 与目录定义 ID 不同。 */
   catalogId?: string;
   /** undefined 表示旧配置尚未选择；空数组表示用户明确未启用任何模型。 */

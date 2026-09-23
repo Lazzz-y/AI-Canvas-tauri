@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { LoaderCircle, Sparkles, X } from 'lucide-react';
 import { useAppStore } from '../../../store/useAppStore';
-import { createPromptPolishSession } from '../../../services/promptPolishService';
+import { createPromptPolishSession, enablePromptPolishPackage, isPromptPolishPackageSupported } from '../../../services/promptPolishService';
 import { isSkillUserInvocable } from '../../../services/skillPromptService';
 import { mergeSubAgentProfiles } from '../../../services/chat/subAgentProfileService';
 import { useT } from '../../../i18n';
@@ -13,11 +13,14 @@ export default function PromptPolishPanel({ nodeId, onClose }: { nodeId: string;
   const userSkills = useAppStore((state) => state.userSkills);
   const packageSkills = useAppStore((state) => state.agentPackageSkills);
   const customProfiles = useAppStore((state) => state.subAgentProfiles);
+  const agentPackages = useAppStore((state) => state.agentPackages);
   const profiles = mergeSubAgentProfiles(customProfiles);
+  const selectablePackages = agentPackages.filter(isPromptPolishPackageSupported);
   const skills = [...userSkills, ...packageSkills].filter(isSkillUserInvocable);
   const [instruction, setInstruction] = useState('');
   const [skillId, setSkillId] = useState('');
-  const [profileId, setProfileId] = useState('');
+  const [agentChoice, setAgentChoice] = useState('');
+  const [enablingPackageId, setEnablingPackageId] = useState<string | null>(null);
   const [preview, setPreview] = useState('');
   const [status, setStatus] = useState<'idle' | 'running' | 'ready' | 'applied'>('idle');
   const [error, setError] = useState('');
@@ -33,8 +36,28 @@ export default function PromptPolishPanel({ nodeId, onClose }: { nodeId: string;
     session.current = null;
     setStatus('idle');
   };
+  const selectAgent = async (value: string) => {
+    if (!value.startsWith('package:')) {
+      setAgentChoice(value);
+      if (value) setSkillId('');
+      return;
+    }
+    const installationId = value.slice('package:'.length);
+    setAgentChoice(value);
+    setSkillId('');
+    setEnablingPackageId(installationId);
+    setError('');
+    try {
+      await enablePromptPolishPackage(installationId);
+    } catch (reason) {
+      setAgentChoice('');
+      setError(reason instanceof Error ? reason.message : t('智能体状态保存失败'));
+    } finally {
+      setEnablingPackageId(null);
+    }
+  };
   const start = async () => {
-    if (status === 'running') return;
+    if (status === 'running' || enablingPackageId) return;
     session.current?.cancel();
     setError('');
     setPreview('');
@@ -49,7 +72,13 @@ export default function PromptPolishPanel({ nodeId, onClose }: { nodeId: string;
       return;
     }
     try {
-      await request.run({ instruction, skillId: skillId || undefined, profileId: profileId || undefined, onPreview: (text) => { if (session.current === request) setPreview(text); } });
+      await request.run({
+        instruction,
+        skillId: skillId || undefined,
+        profileId: agentChoice.startsWith('profile:') ? agentChoice.slice('profile:'.length) : undefined,
+        agentPackageId: agentChoice.startsWith('package:') ? agentChoice.slice('package:'.length) : undefined,
+        onPreview: (text) => { if (session.current === request) setPreview(text); },
+      });
       if (session.current === request) setStatus('ready');
     } catch (reason) {
       if (session.current !== request) return;
@@ -89,24 +118,29 @@ export default function PromptPolishPanel({ nodeId, onClose }: { nodeId: string;
       <textarea ref={input} id={`${id}-instruction`} className="ui-input min-h-24 w-full resize-none text-sm" placeholder={t('例如：保留主体，补充镜头和光线，让表达更自然…')} value={instruction} disabled={running} onChange={(event) => setInstruction(event.target.value)} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); void start(); } }} />
       <div className="grid shrink-0 grid-cols-2 gap-2">
         <label className="min-w-0 text-xs text-canvas-text-secondary"><span className="mb-1.5 block">Skill</span>
-          <Select fixedMenu className="w-full" value={skillId} disabled={running} onChange={(value) => { setSkillId(value); if (value) setProfileId(''); }}>
+          <Select fixedMenu className="w-full" value={skillId} disabled={running} onChange={(value) => { setSkillId(value); if (value) setAgentChoice(''); }}>
             <option value="">{t('不使用 Skill')}</option>
             {skills.map((skill) => <option key={skill.id} value={skill.id}>{skill.name}</option>)}
           </Select>
         </label>
         <label className="min-w-0 text-xs text-canvas-text-secondary"><span className="mb-1.5 block">{t('智能体')}</span>
-          <Select fixedMenu className="w-full" value={profileId} disabled={running} onChange={(value) => { setProfileId(value); if (value) setSkillId(''); }}>
+          <Select fixedMenu className="w-full" value={agentChoice} disabled={running || !!enablingPackageId} onChange={(value) => { void selectAgent(value); }}>
             <option value="">{t('默认助手')}</option>
-            {profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}
+            <optgroup label={t('子智能体')}>
+              {profiles.map((profile) => <option key={profile.id} value={`profile:${profile.id}`}>{profile.name}</option>)}
+            </optgroup>
+            {selectablePackages.length > 0 && <optgroup label={t('智能体中心')}>
+              {selectablePackages.map((installation) => <option key={installation.id} value={`package:${installation.id}`}>{installation.enabled ? installation.manifest.name : t('启用智能体 {name}', { name: installation.manifest.name })}</option>)}
+            </optgroup>}
           </Select>
         </label>
       </div>
       <div className="flex shrink-0 items-center justify-between gap-2">
-        <span className="text-[11px] text-canvas-text-muted">{t('使用助手文本模型')}</span>
-        <button type="button" className="ui-btn ui-btn--sm ui-btn--primary" onClick={running ? stop : () => { void start(); }}>{running ? t('停止') : preview ? t('重新润色') : t('开始润色')}</button>
+        <span className="text-[11px] text-canvas-text-muted" role={enablingPackageId ? 'status' : undefined}>{enablingPackageId ? t('启用智能体 {name}', { name: agentPackages.find((item) => item.id === enablingPackageId)?.manifest.name ?? '' }) : t('使用助手文本模型')}</span>
+        <button type="button" className="ui-btn ui-btn--sm ui-btn--primary" disabled={!!enablingPackageId} onClick={running ? stop : () => { void start(); }}>{running ? t('停止') : preview ? t('重新润色') : t('开始润色')}</button>
       </div>
       <div className="prompt-polish-result" aria-busy={running}>
-        {preview ? <div className="whitespace-pre-wrap break-words text-sm leading-relaxed text-canvas-text">{preview}</div> : <div className="flex h-full min-h-24 flex-col items-center justify-center gap-3 text-center text-xs text-canvas-text-muted">{running ? <LoaderCircle className="motion-safe:animate-spin" size={20} /> : <Sparkles size={22} strokeWidth={1.2} />}<span role="status">{running ? profileId ? t('智能体正在润色…') : t('正在润色…') : t('润色结果会显示在这里')}</span></div>}
+        {preview ? <div className="whitespace-pre-wrap break-words text-sm leading-relaxed text-canvas-text">{preview}</div> : <div className="flex h-full min-h-24 flex-col items-center justify-center gap-3 text-center text-xs text-canvas-text-muted">{running ? <LoaderCircle className="motion-safe:animate-spin" size={20} /> : <Sparkles size={22} strokeWidth={1.2} />}<span role="status">{running ? agentChoice ? t('智能体正在润色…') : t('正在润色…') : t('润色结果会显示在这里')}</span></div>}
       </div>
       {error && <p role="alert" className="text-xs leading-relaxed text-canvas-text-secondary">{error}</p>}
       <footer className="flex shrink-0 items-center justify-between gap-2">
