@@ -142,6 +142,11 @@ describe('RunningHub 云任务生命周期', () => {
     expect(mocks.fetch.mock.calls[0][1].headers.Authorization).toBe('Bearer test-secret');
     expect(mocks.fetch.mock.calls[0][1].body).toBeInstanceOf(FormData);
   });
+  it('上传兼容中文文档的业务码 0 和 fileName 字段', async () => {
+    mocks.fetch.mockResolvedValueOnce(json({ code: 0, data: { fileName: 'openapi/reference.png', download_url: 'https://cdn.test/upload.png' } }));
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('png', { headers: { 'Content-Type': 'image/png' } })));
+    await expect(uploadRunningHubMedia(connection, 'blob:reference', 'image')).resolves.toEqual({ filename: 'openapi/reference.png', url: 'https://cdn.test/upload.png' });
+  });
   it.each(['video', 'audio'] as const)('%s 素材使用相应 MIME 上传，错误类型拒绝', async (kind) => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(new Response('media', { headers: { 'Content-Type': `${kind}/${kind === 'video' ? 'mp4' : 'wav'}` } })).mockResolvedValueOnce(new Response('image', { headers: { 'Content-Type': 'image/png' } })));
     await expect(uploadRunningHubMedia(connection, 'blob:reference', kind)).resolves.toHaveProperty('filename');

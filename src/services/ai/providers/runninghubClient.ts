@@ -26,7 +26,7 @@ async function request(url: string, init: RequestInit): Promise<Response> {
     throw new Error('RunningHub 连接中断，请检查网络后继续查询；不要重复提交任务');
   }
 }
-async function parseResponse(response: Response, successCode = 0): Promise<Record<string, unknown>> {
+async function parseResponse(response: Response, successCodes: readonly number[] = [0]): Promise<Record<string, unknown>> {
   if (!response.ok) throw new RunningHubRequestError(response.status, response.status);
   const text = await response.text();
   if (text.length > 1_500_000) throw new Error('RunningHub 响应超过允许大小');
@@ -37,7 +37,7 @@ async function parseResponse(response: Response, successCode = 0): Promise<Recor
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('RunningHub 返回格式无效');
   const payload = parsed as Record<string, unknown>;
   if (typeof payload.code !== 'number') throw new Error('RunningHub 响应缺少状态码');
-  if (payload.code !== successCode) throw new RunningHubRequestError(payload.code, response.status);
+  if (!successCodes.includes(payload.code)) throw new RunningHubRequestError(payload.code, response.status);
   return payload;
 }
 
@@ -91,8 +91,9 @@ export async function uploadRunningHubMedia(
   form.append('file', blob, `reference.${extension}`);
   const uploaded = await parseResponse(await request(`${connection.baseUrl}/openapi/v2/media/upload/binary`, {
     method: 'POST', headers: { Authorization: `Bearer ${connection.apiKey}` }, body: form, signal: activeSignal,
-  }), 200);
+  }), [0, 200]);
   const data = uploaded.data as Record<string, unknown> | undefined;
-  if (!data || typeof data.filename !== 'string' || typeof data.download_url !== 'string' || !/^https?:\/\//.test(data.download_url)) throw new Error('RunningHub 上传未返回有效文件名和地址');
-  return { filename: data.filename, url: data.download_url };
+  const filename = data?.fileName ?? data?.filename;
+  if (typeof filename !== 'string' || !filename || typeof data?.download_url !== 'string' || !/^https?:\/\//.test(data.download_url)) throw new Error('RunningHub 上传未返回有效文件名和地址');
+  return { filename, url: data.download_url };
 }
