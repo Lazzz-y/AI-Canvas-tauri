@@ -183,6 +183,35 @@ describe('canvas agent tools', () => {
     expect(created[2].data.aspectRatio).toBeUndefined();
   });
 
+  it('sets the actual video ratio on creation and update, including mixed node batches', async () => {
+    const created = await getAgentTool('canvas_create_nodes')!.execute(context(), {
+      nodes: [{ type: 'ai-video', label: '竖屏镜头', prompt: '参考 @{n1:分镜图}', aspectRatio: '9:16' }],
+    });
+    expect(created.status).toBe('success');
+    const video = useAppStore.getState().nodes.at(-1)!;
+    expect(video.data).toMatchObject({ aspectRatio: '9:16', seedanceRatio: '9:16' });
+    expect(useAppStore.getState().edges.some((edge) => edge.source === 'n1' && edge.target === video.id)).toBe(true);
+
+    useAppStore.getState().updateNodeDataTransient(video.id, { seedanceRatio: '16:9' });
+    const queriedBefore = await getAgentTool('canvas_query')!.execute(context(), { nodeIds: [video.id], detail: true });
+    expect(JSON.parse(queriedBefore.modelContent).nodes[0].aspectRatio).toBe('16:9');
+    useAppStore.getState().updateNodeDataTransient(video.id, { seedanceRatio: undefined });
+    const legacy = await getAgentTool('canvas_query')!.execute(context(), { nodeIds: [video.id], detail: true });
+    expect(JSON.parse(legacy.modelContent).nodes[0].aspectRatio).toBeUndefined();
+
+    const updated = await getAgentTool('canvas_update_nodes')!.execute(context(), {
+      nodeIds: [video.id, 'n1'], aspectRatio: '9:16',
+    });
+    expect(updated.status).toBe('success');
+    const nodes = useAppStore.getState().nodes;
+    expect(nodes.find((item) => item.id === video.id)?.data).toMatchObject({
+      aspectRatio: '9:16', seedanceRatio: '9:16',
+    });
+    expect(nodes.find((item) => item.id === 'n1')?.data.seedanceRatio).toBeUndefined();
+    const queriedAfter = await getAgentTool('canvas_query')!.execute(context(), { nodeIds: [video.id], detail: true });
+    expect(JSON.parse(queriedAfter.modelContent).nodes[0].aspectRatio).toBe('9:16');
+  });
+
   it('puts finished text in the node body and generation instructions in the prompt', async () => {
     const script = '场景一：剧本正文\n场景二：更多正文';
     const result = await getAgentTool('canvas_create_nodes')!.execute(context(), {
