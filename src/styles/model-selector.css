@@ -67,7 +67,12 @@
   transform: translateY(-50%);
   width: 22px;
   height: 22px;
+  border: 0;
+  background: transparent;
   color: var(--brand-light);
+}
+.model-selector .model-workflow-edit:hover:not(:disabled) {
+  background: transparent;
 }
 
 /* Text Model Icon */
