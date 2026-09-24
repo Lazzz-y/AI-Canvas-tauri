@@ -19,6 +19,13 @@ type Dialog =
 
 const PAGE_SIZE = 20;
 
+function inferAssetType(url: string): 'Image' | 'Video' | 'Audio' {
+  const path = url.trim().split(/[?#]/, 1)[0].toLowerCase();
+  if (/\.(mp4|mov)$/.test(path)) return 'Video';
+  if (/\.(mp3|wav)$/.test(path)) return 'Audio';
+  return 'Image';
+}
+
 export default function VolcengineAssetLibraryPanel({ compact = false, onCountChange, onOpenProviderSettings }: { compact?: boolean; onCountChange?: (count: number) => void; onOpenProviderSettings?: () => void }) {
   const provider = useAppStore((state) => state.config.providers.volcengine || Object.values(state.config.providers).find((item) => item.catalogId === 'volcengine'));
   const [groups, setGroups] = useState<VolcengineAssetGroup[]>([]);
@@ -27,6 +34,7 @@ export default function VolcengineAssetLibraryPanel({ compact = false, onCountCh
   const [query, setQuery] = useState('');
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
+  const [dialogError, setDialogError] = useState('');
   const [accessKeyId, setAccessKeyId] = useState('');
   const [secretAccessKey, setSecretAccessKey] = useState('');
   const [loadedSecretFingerprint, setLoadedSecretFingerprint] = useState('');
@@ -34,7 +42,7 @@ export default function VolcengineAssetLibraryPanel({ compact = false, onCountCh
   const [formName, setFormName] = useState('');
   const [formDescription, setFormDescription] = useState('');
   const [formUrl, setFormUrl] = useState('');
-  const [formAssetType, setFormAssetType] = useState<'Image' | 'Video' | 'Audio'>('Image');
+  const [formGroupId, setFormGroupId] = useState('');
   const [deleteConfirmation, setDeleteConfirmation] = useState('');
   const [groupPage, setGroupPage] = useState(1);
   const [assetPage, setAssetPage] = useState(1);
@@ -66,19 +74,36 @@ export default function VolcengineAssetLibraryPanel({ compact = false, onCountCh
   useEffect(() => { let cancelled = false; void Promise.all([readAppSecret(accessKeySecretRef), readAppSecret(secretAccessKeySecretRef)]).then(([ak, sk]) => { if (!cancelled) { setAccessKeyId(ak || ''); setSecretAccessKey(sk || ''); setLoadedSecretFingerprint(secretFingerprint); } }); return () => { cancelled = true; }; }, [accessKeySecretRef, secretAccessKeySecretRef, secretFingerprint]);
   useEffect(() => { if (!enabled || !secretsLoaded || !configured) return; const timer = window.setTimeout(() => { void load(); }, 0); return () => window.clearTimeout(timer); }, [enabled, secretsLoaded, configured, load]);
   const openDialog = (next: Dialog) => {
-    setDialog(next); setDeleteConfirmation('');
+    setDialog(next); setDialogError(''); setDeleteConfirmation('');
     if (next?.kind === 'create-group') { setFormName(''); setFormDescription(''); }
     if (next?.kind === 'edit-group') { setFormName(next.group.name); setFormDescription(next.group.description || ''); }
-    if (next?.kind === 'create-asset') { setFormName('未命名素材'); setFormUrl(''); setFormAssetType('Image'); }
+    if (next?.kind === 'create-asset') { setFormName('未命名素材'); setFormUrl(''); setFormGroupId(selectedGroup); }
     if (next?.kind === 'edit-asset') setFormName(next.asset.name);
   };
-  const run = async (action: () => Promise<unknown>, success: string) => { setBusy(true); try { await action(); setMessage(success); setDialog(null); await load(); } catch (error) { setMessage(error instanceof Error ? error.message : '操作失败'); } finally { setBusy(false); } };
+  const run = async (action: () => Promise<unknown>, success: string) => {
+    setBusy(true);
+    setDialogError('');
+    setMessage('正在提交，请稍候...');
+    try {
+      await action();
+      // 先关闭弹窗，让用户明确看到提交已完成；列表刷新不阻塞弹窗状态。
+      setDialog(null);
+      setMessage(success);
+      void load();
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : '操作失败';
+      setDialogError(detail);
+      setMessage('提交失败，请检查弹窗中的错误信息');
+    } finally {
+      setBusy(false);
+    }
+  };
   const submitDialog = async () => {
     if (!dialog) return;
-    if (dialog.kind === 'create-group') { if (!formName.trim()) return setMessage('请输入素材组名称'); return run(() => createAssetGroup(options, { name: formName.trim(), description: formDescription.trim() }), '素材组已创建'); }
-    if (dialog.kind === 'edit-group') { if (!formName.trim()) return setMessage('请输入素材组名称'); return run(() => updateAssetGroup(options, dialog.group.id, { name: formName.trim(), description: formDescription.trim() }), '素材组已更新'); }
-    if (dialog.kind === 'create-asset') { if (!selectedGroup) return setMessage('请先选择素材组'); if (!formName.trim() || !formUrl.trim()) return setMessage('请填写素材名称和公共 URL'); return run(() => createAsset(options, { assetType: formAssetType, groupId: selectedGroup, name: formName.trim(), url: formUrl.trim() }), '素材上传任务已提交'); }
-    if (dialog.kind === 'edit-asset') { if (!formName.trim()) return setMessage('请输入素材名称'); return run(() => updateAsset(options, dialog.asset.id, { name: formName.trim() }), '素材已更新'); }
+    if (dialog.kind === 'create-group') { if (!formName.trim()) return setDialogError('请输入素材组名称'); return run(() => createAssetGroup(options, { name: formName.trim(), description: formDescription.trim() }), '素材组已创建'); }
+    if (dialog.kind === 'edit-group') { if (!formName.trim()) return setDialogError('请输入素材组名称'); return run(() => updateAssetGroup(options, dialog.group.id, { name: formName.trim(), description: formDescription.trim() }), '素材组已更新'); }
+    if (dialog.kind === 'create-asset') { if (!formGroupId) return setDialogError('请选择素材组'); if (!formName.trim() || !formUrl.trim()) return setDialogError('请填写素材名称和公共 URL'); return run(() => createAsset(options, { assetType: inferAssetType(formUrl), groupId: formGroupId, name: formName.trim(), url: formUrl.trim() }), '素材上传任务已提交'); }
+    if (dialog.kind === 'edit-asset') { if (!formName.trim()) return setDialogError('请输入素材名称'); return run(() => updateAsset(options, dialog.asset.id, { name: formName.trim() }), '素材已更新'); }
     if (dialog.kind === 'delete-asset') return run(() => deleteAsset(options, dialog.asset.id), '素材已删除');
     if (dialog.kind === 'delete-group' && deleteConfirmation.trim() === dialog.group.name.trim()) return run(async () => { await deleteAssetGroup(options, dialog.group.id); setSelectedGroup(''); setAssetPage(1); }, '素材组已删除');
   };
@@ -103,7 +128,7 @@ export default function VolcengineAssetLibraryPanel({ compact = false, onCountCh
     return [...result.entries()].map(([id, value]) => ({ id, ...value }));
   }, [assets, groups]);
   const pageControls = (page: number, pages: number, setPage: (value: number) => void, label: string) => <div className="mt-2 flex items-center justify-between text-xs text-canvas-text-muted"><span>{label} · 第 {page} / {pages} 页</span><span className="flex gap-1"><button type="button" className="ui-btn ui-btn--sm ui-btn--ghost" disabled={page <= 1 || busy} onClick={() => setPage(page - 1)}>上一页</button><button type="button" className="ui-btn ui-btn--sm ui-btn--ghost" disabled={page >= pages || busy} onClick={() => setPage(page + 1)}>下一页</button></span></div>;
-  return <section className={compact ? 'p-2' : 'ui-card mt-3 p-3'} aria-label="火山方舟虚拟人像库">
+  return <section className={`flex min-h-0 flex-1 flex-col ${compact ? 'p-2' : 'ui-card mt-3 p-3'}`} aria-label="火山方舟虚拟人像库">
     <div className="flex items-center gap-2"><Icon icon="mdi:account-box-multiple-outline" width="18" /><strong>火山方舟虚拟人像库</strong></div>
     {showConfigPrompt && (
       <div className="mt-3 rounded-lg border border-canvas-border bg-canvas-surface p-4"><div className="flex items-start gap-3"><Icon icon="mdi:cloud-alert-outline" width="22" className="mt-0.5 shrink-0 text-canvas-text-secondary" /><div className="min-w-0"><h3 className="text-sm font-medium text-canvas-text">还没有配置火山方舟虚拟人像库</h3><p className="mt-1 text-xs leading-5 text-canvas-text-muted">请在火山方舟编辑连接中填写 AK/SK，并启用虚拟人像库。配置完成后即可在这里查看和管理素材。</p><button type="button" className="ui-btn ui-btn--sm ui-btn--primary mt-3" onClick={() => provider ? onOpenProviderSettings?.() : useAppStore.getState().openApiKeySettings()}><Icon icon="mdi:cog-outline" width="15" />前往火山方舟配置<Icon icon="mdi:arrow-right" width="15" /></button></div></div></div>
@@ -112,11 +137,11 @@ export default function VolcengineAssetLibraryPanel({ compact = false, onCountCh
       <p className="mt-3 text-xs text-canvas-text-muted">正在读取火山方舟素材库配置...</p>
     )}
     {showLibrary && (
-      <div>
+      <div className="flex min-h-0 flex-1 flex-col">
       <div className="mt-2 flex flex-wrap gap-2"><Select className="min-w-0 flex-1" value={selectedGroup} onChange={(value) => { setSelectedGroup(value); setAssetPage(1); }} options={[{ value: '', label: '全部素材组' }, ...groups.map((group) => ({ value: group.id, label: group.name }))]} fixedMenu /><button type="button" className="ui-btn ui-btn--sm ui-btn--ghost" onClick={() => openDialog({ kind: 'create-group' })}>新建组</button><button type="button" className="ui-btn ui-btn--sm ui-btn--ghost" disabled={!selectedGroupItem} onClick={() => selectedGroupItem && openDialog({ kind: 'edit-group', group: selectedGroupItem })}>改名</button><button type="button" className="ui-btn ui-btn--sm ui-btn--ghost" disabled={!selectedGroup} onClick={() => void inspectGroup()}>详情</button><button type="button" className="ui-btn ui-btn--sm ui-btn--ghost" disabled={!selectedGroupItem} onClick={() => selectedGroupItem && openDialog({ kind: 'delete-group', group: selectedGroupItem })}>删除组</button><button type="button" className="ui-btn ui-btn--sm ui-btn--ghost" disabled={busy} onClick={() => void load()}><Icon icon="mdi:refresh" /></button></div>
       {pageControls(groupPage, groupPages, setGroupPage, '素材组')}
       <div className="mt-2 flex gap-2"><input className="ui-input min-w-0 flex-1" placeholder="按名称搜索素材" value={query} onChange={(event) => { setQuery(event.target.value); setAssetPage(1); }} /><button type="button" className="ui-btn ui-btn--sm ui-btn--primary" onClick={() => openDialog({ kind: 'create-asset' })}>上传素材</button></div>
-      <div className="mt-3 max-h-[28rem] space-y-4 overflow-auto">{groupedAssets.map((section) => <section key={section.id} aria-label={`素材组 ${section.name}`}><div className="mb-2 flex items-center gap-2"><Icon icon="mdi:folder-multiple-outline" width="15" /><h3 className="text-xs font-semibold text-canvas-text">{section.name}</h3><span className="text-[10px] text-canvas-text-muted">{section.items.length}</span></div><div className="grid grid-cols-2 gap-2 sm:grid-cols-3">{section.items.map((item) => {
+      <div className="mt-3 min-h-0 flex-1 space-y-4 overflow-auto">{groupedAssets.map((section) => <section key={section.id} aria-label={`素材组 ${section.name}`}><div className="mb-2 flex items-center gap-2"><Icon icon="mdi:folder-multiple-outline" width="15" /><h3 className="text-xs font-semibold text-canvas-text">{section.name}</h3><span className="text-[10px] text-canvas-text-muted">{section.items.length}</span></div><div className="grid grid-cols-2 gap-2 sm:grid-cols-3">{section.items.map((item) => {
         const mediaType = item.assetType?.toLowerCase();
         const isImage = mediaType === 'image' || (!mediaType && Boolean(item.thumbnailUrl));
         return <article key={item.id} className="group overflow-hidden rounded border border-canvas-border bg-canvas-surface">
@@ -131,12 +156,12 @@ export default function VolcengineAssetLibraryPanel({ compact = false, onCountCh
     )}
     {message && <p className="mt-2 text-xs text-canvas-text-muted">{message}</p>}
     <ModalOverlay isOpen={Boolean(dialog)} onClose={() => setDialog(null)} ariaLabel="虚拟人像库操作" className="w-[min(92vw,30rem)]" closeOnBackdrop={false}>
-      {dialog && <div className="flex flex-col"><div className="flex items-center justify-between border-b border-canvas-border px-5 py-4"><div><h2 className="ui-title">{dialog.kind === 'create-group' ? '新建素材组' : dialog.kind === 'edit-group' ? '编辑素材组' : dialog.kind === 'create-asset' ? '上传素材' : dialog.kind === 'edit-asset' ? '编辑素材' : dialog.kind === 'delete-group' ? '删除素材组' : '删除素材'}</h2><p className="mt-1 text-xs text-canvas-text-muted">{dialog.kind === 'delete-group' ? '删除后组内素材也会一并删除，且无法恢复。' : '请填写完整信息后提交。'}</p></div><button type="button" className="ui-icon-btn ui-icon-btn--sm" onClick={() => setDialog(null)} aria-label="关闭"><Icon icon="mdi:close" /></button></div><div className="ui-stack p-5">
+      {dialog && <div className="flex flex-col" aria-busy={busy}><div className="flex items-center justify-between border-b border-canvas-border px-5 py-4"><div><h2 className="ui-title">{dialog.kind === 'create-group' ? '新建素材组' : dialog.kind === 'edit-group' ? '编辑素材组' : dialog.kind === 'create-asset' ? '上传素材' : dialog.kind === 'edit-asset' ? '编辑素材' : dialog.kind === 'delete-group' ? '删除素材组' : '删除素材'}</h2><p className="mt-1 text-xs text-canvas-text-muted">{dialog.kind === 'delete-group' ? '删除后组内素材也会一并删除，且无法恢复。' : '请填写完整信息后提交。'}</p></div><button type="button" className="ui-icon-btn ui-icon-btn--sm" onClick={() => !busy && setDialog(null)} aria-label="关闭" disabled={busy}><Icon icon="mdi:close" /></button></div><div className="ui-stack p-5">
         {(dialog.kind === 'create-group' || dialog.kind === 'edit-group') && <><label className="ui-field"><span className="ui-label">素材组名称</span><input className="ui-input" value={formName} onChange={(event) => setFormName(event.target.value)} autoFocus /></label><label className="ui-field"><span className="ui-label">描述（可选）</span><textarea className="ui-textarea min-h-20 py-2" value={formDescription} onChange={(event) => setFormDescription(event.target.value)} /></label></>}
-        {(dialog.kind === 'create-asset' || dialog.kind === 'edit-asset') && <><label className="ui-field"><span className="ui-label">素材名称</span><input className="ui-input" value={formName} onChange={(event) => setFormName(event.target.value)} autoFocus /></label>{dialog.kind === 'create-asset' && <><label className="ui-field"><span className="ui-label">素材类型</span><Select<'Image' | 'Video' | 'Audio'> className="w-full" value={formAssetType} onChange={(value) => setFormAssetType(value)} options={[{ value: 'Image', label: '图片' }, { value: 'Video', label: '视频' }, { value: 'Audio', label: '音频' }]} fixedMenu /></label><label className="ui-field"><span className="ui-label">公共 URL</span><input className="ui-input" type="url" placeholder="https://..." value={formUrl} onChange={(event) => setFormUrl(event.target.value)} /></label><p className="ui-hint">素材将上传到当前选中的素材组。</p></>}</>}
+        {(dialog.kind === 'create-asset' || dialog.kind === 'edit-asset') && <><label className="ui-field"><span className="ui-label">素材名称</span><input className="ui-input" value={formName} onChange={(event) => setFormName(event.target.value)} autoFocus /></label>{dialog.kind === 'create-asset' && <><label className="ui-field"><span className="ui-label">素材组</span><Select className="w-full" value={formGroupId} onChange={(value) => setFormGroupId(value)} options={[{ value: '', label: '请选择素材组' }, ...groups.map((group) => ({ value: group.id, label: group.name }))]} fixedMenu /></label><label className="ui-field"><span className="ui-label">公共 URL</span><input className="ui-input" type="url" placeholder="https://..." value={formUrl} onChange={(event) => setFormUrl(event.target.value)} /></label><p className="ui-hint">素材类型会根据 URL 后缀自动识别；无法识别时按图片上传。</p></>}</>}
         {dialog.kind === 'delete-asset' && <div className="ui-alert ui-alert--warning"><Icon icon="mdi:alert-outline" width="18" /><span>确定删除“{dialog.asset.name}”？此操作不可恢复。</span></div>}
         {dialog.kind === 'delete-group' && <><div className="ui-alert ui-alert--danger"><Icon icon="mdi:alert-octagon-outline" width="18" /><span>将删除素材组“{dialog.group.name}”及组内全部素材。此操作不可恢复。</span></div><label className="ui-field"><span className="ui-label">输入素材组名称以确认</span><input className="ui-input" value={deleteConfirmation} onChange={(event) => setDeleteConfirmation(event.target.value)} placeholder={dialog.group.name} autoFocus /></label></>}
-      </div><div className="flex justify-end gap-2 border-t border-canvas-border px-5 py-4"><button type="button" className="ui-btn ui-btn--sm ui-btn--ghost" onClick={() => setDialog(null)}>取消</button><button type="button" className={`ui-btn ui-btn--sm ${dialog.kind === 'delete-group' || dialog.kind === 'delete-asset' ? 'ui-btn--danger' : 'ui-btn--primary'}`} disabled={busy || (dialog.kind === 'delete-group' && deleteConfirmation.trim() !== dialog.group.name.trim())} onClick={() => void submitDialog()}>{dialog.kind === 'delete-group' || dialog.kind === 'delete-asset' ? '确认删除' : '保存'}</button></div></div>}
+      </div>{busy && <div className="mx-5 mb-3 ui-alert" role="status"><Icon icon="mdi:loading" width="18" className="animate-spin" /><span>正在提交，请不要关闭窗口...</span></div>}{dialogError && <div className="mx-5 mb-3 ui-alert ui-alert--danger"><Icon icon="mdi:alert-circle-outline" width="18" /><span className="min-w-0 break-words">{dialogError}</span></div>}<div className="flex justify-end gap-2 border-t border-canvas-border px-5 py-4"><button type="button" className="ui-btn ui-btn--sm ui-btn--ghost" onClick={() => !busy && setDialog(null)} disabled={busy}>取消</button><button type="button" className={`ui-btn ui-btn--sm ${dialog.kind === 'delete-group' || dialog.kind === 'delete-asset' ? 'ui-btn--danger' : 'ui-btn--primary'}`} disabled={busy || (dialog.kind === 'delete-group' && deleteConfirmation.trim() !== dialog.group.name.trim())} onClick={() => void submitDialog()}>{busy ? '提交中...' : dialog.kind === 'delete-group' || dialog.kind === 'delete-asset' ? '确认删除' : '保存'}</button></div></div>}
     </ModalOverlay>
   </section>;
 }
